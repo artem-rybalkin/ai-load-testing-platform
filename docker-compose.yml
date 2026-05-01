@@ -1,0 +1,136 @@
+version: '3.9'
+
+services:
+  # ── Infrastructure ──────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: alt_user
+      POSTGRES_PASSWORD: alt_password
+      POSTGRES_DB: alt_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alt_user -d alt_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 15s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: alt_user
+      RABBITMQ_DEFAULT_PASS: alt_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      start_period: 60s
+
+  # ── Services ─────────────────────────────────────────────
+  api-service:
+    build:
+      context: .
+      dockerfile: services/api-service/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: services/ai-service/Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  worker-backend:
+    build:
+      context: .
+      dockerfile: services/worker-backend/Dockerfile
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-client:
+    build:
+      context: .
+      dockerfile: services/worker-client/Dockerfile
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: 3003
+      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  results-service:
+    build:
+      context: .
+      dockerfile: services/results-service/Dockerfile
+    ports:
+      - "3004:3004"
+      - "3005:3005"  # WebSocket port
+    environment:
+      PORT: 3004
+      WS_PORT: 3005
+      DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
