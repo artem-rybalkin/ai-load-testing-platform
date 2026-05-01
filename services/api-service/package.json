@@ -2,16 +2,19 @@
   "name": "@alt/api-service",
   "version": "1.0.0",
   "main": "dist/index.js",
-  "scripts": {
-    "dev": "ts-node src/index.ts",
-    "build": "tsc",
-    "lint": "eslint src"
-  },
   "dependencies": {
-    "fastify": "^5.8.5",
-    "@alt/shared": "*"
+    "@alt/shared": "*",
+    "amqplib": "^0.10.0",
+    "fastify": "^4.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0"
+    "@types/amqplib": "^0.10.0",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "lint": "eslint src"
   }
 }
