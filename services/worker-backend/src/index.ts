@@ -3,6 +3,7 @@ import amqplib from 'amqplib';
 import { TestRequest, TestResult, BackendMetrics } from '@alt/shared';
 
 const QUEUE = 'backend-tests';
+const RESULTS_QUEUE = 'test-results';
 
 const simulateBackendTest = async (test: TestRequest): Promise<BackendMetrics> => {
   console.log(`Running backend test for: ${test.targetUrl}`);
@@ -53,12 +54,18 @@ const start = async (): Promise<void> => {
 
       const result: TestResult = {
         testId: test.id,
+        targetUrl: test.targetUrl,
         status: 'completed',
         metrics,
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString()
       };
-
+      // Публікуємо результат в чергу результатів
+      channel.sendToQueue(
+        RESULTS_QUEUE,
+        Buffer.from(JSON.stringify(result)),
+        { persistent: true }
+      );
       console.log('Test completed:', JSON.stringify(result, null, 2));
       channel.ack(msg);
     } catch (err) {

@@ -1,13 +1,21 @@
 FROM node:20-alpine
+
 WORKDIR /app
+
 COPY package.json ./
 COPY tsconfig.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY services/results-service/package.json ./services/results-service/
+
 RUN npm install
+
 COPY packages/shared ./packages/shared
 COPY services/results-service ./services/results-service
+
 RUN npm run build --workspace=packages/shared
+
 WORKDIR /app/services/results-service
+
 EXPOSE 3004
-CMD ["node", "-e", "console.log('results-service placeholder running'); setInterval(()=>{},1000)"]
+
+CMD ["npx", "tsx", "src/index.ts"]
