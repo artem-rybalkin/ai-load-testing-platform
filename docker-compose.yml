@@ -73,6 +73,7 @@ services:
     environment:
       PORT: 3001
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
     depends_on:
       rabbitmq:
         condition: service_healthy

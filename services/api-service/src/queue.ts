@@ -3,6 +3,7 @@ import amqplib from 'amqplib';
 import { TestRequest } from '@alt/shared';
 
 export const QUEUES = {
+  AI_REQUESTS: 'ai-requests',
   BACKEND: 'backend-tests',
   CLIENT: 'client-tests'
 } as const;
@@ -20,6 +21,7 @@ export const connectQueue = async (): Promise<void> => {
       const connection = await amqplib.connect(url);
       channel = await connection.createChannel();
 
+      await channel.assertQueue(QUEUES.AI_REQUESTS, { durable: true });
       await channel.assertQueue(QUEUES.BACKEND, { durable: true });
       await channel.assertQueue(QUEUES.CLIENT, { durable: true });
 
@@ -36,9 +38,7 @@ export const connectQueue = async (): Promise<void> => {
 export const publishTest = (test: TestRequest): void => {
   if (!channel) throw new Error('Queue not connected');
 
-  const queue = test.type === 'backend' ? QUEUES.BACKEND : QUEUES.CLIENT;
   const message = Buffer.from(JSON.stringify(test));
-
-  channel.sendToQueue(queue, message, { persistent: true });
-  console.log(`Published test ${test.id} to queue: ${queue}`);
+  channel.sendToQueue(QUEUES.AI_REQUESTS, message, { persistent: true });
+  console.log(`Published test ${test.id} to AI queue`);
 };

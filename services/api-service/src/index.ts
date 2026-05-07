@@ -43,7 +43,6 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
 const start = async (): Promise<void> => {
   try {
     await connectQueue();
-
     const port = Number(process.env.PORT) || 3000;
     await app.listen({ port, host: '0.0.0.0' });
   } catch (err) {
