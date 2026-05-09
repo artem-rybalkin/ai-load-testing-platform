@@ -36,20 +36,55 @@ const saveScript = async (
 };
 
 const parseK6Output = (output: string): BackendMetrics => {
-  const getMetric = (name: string): number => {
-    const regex = new RegExp(`${name}[^\\d]+(\\d+(?:\\.\\d+)?)`);
+  const getAvg = (metric: string): number => {
+    const regex = new RegExp(`${metric}[^\\n]*avg=([\\d.]+)(ms|s|µs)?`);
+    const match = output.match(regex);
+    if (!match) return 0;
+    const val = parseFloat(match[1]);
+    const unit = match[2];
+    if (unit === 's') return Math.round(val * 1000);
+    if (unit === 'µs') return Math.round(val / 1000);
+    return Math.round(val);
+  };
+
+  const getPercentile = (metric: string, p: string): number => {
+    const regex = new RegExp(`${metric}[^\\n]*p\\(${p}\\)=([\\d.]+)(ms|s|µs)?`);
+    const match = output.match(regex);
+    if (!match) return 0;
+    const val = parseFloat(match[1]);
+    const unit = match[2];
+    if (unit === 's') return Math.round(val * 1000);
+    if (unit === 'µs') return Math.round(val / 1000);
+    return Math.round(val);
+  };
+
+  const getCount = (metric: string): number => {
+    const regex = new RegExp(`${metric}[^\\n]*?(\\d+)\\s+\\d+\\.\\d+\\/s`);
+    const match = output.match(regex);
+    return match ? parseInt(match[1]) : 0;
+  };
+
+  const getRate = (metric: string): number => {
+    const regex = new RegExp(`${metric}[^\\n]*?\\d+\\s+([\\d.]+)\\/s`);
     const match = output.match(regex);
     return match ? parseFloat(match[1]) : 0;
   };
 
+  const getFailRate = (): number => {
+    const match = output.match(/http_req_failed[^\n]*?([\d.]+)%/);
+    return match ? parseFloat(match[1]) : 0;
+  };
+
+  const total = getCount('http_reqs');
+
   return {
     type: 'backend',
-    requestsTotal: getMetric('http_reqs'),
-    requestsFailed: getMetric('http_req_failed'),
-    avgResponseTime: getMetric('http_req_duration.*avg'),
-    p95ResponseTime: getMetric('http_req_duration.*p\\(95\\)'),
-    p99ResponseTime: getMetric('http_req_duration.*p\\(99\\)'),
-    rps: getMetric('http_reqs.*rate')
+    requestsTotal: total,
+    requestsFailed: Math.round(total * getFailRate() / 100),
+    avgResponseTime: getAvg('http_req_duration'),
+    p95ResponseTime: getPercentile('http_req_duration', '95'),
+    p99ResponseTime: getPercentile('http_req_duration', '99'),
+    rps: getRate('http_reqs')
   };
 };
 
