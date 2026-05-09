@@ -37,27 +37,24 @@ export const startConsumer = async (): Promise<void> => {
 const enrichedResult = result as TestResult & { scriptId?: string; reusedScript?: boolean };
 
     try {
-await pool.query(
-  `INSERT INTO test_results (test_id, type, target_url, status, metrics, script_id, reused_script, started_at, completed_at)
-   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-   ON CONFLICT (test_id) DO UPDATE SET
-     status = EXCLUDED.status,
-     metrics = EXCLUDED.metrics,
-     script_id = EXCLUDED.script_id,
-     reused_script = EXCLUDED.reused_script,
-     completed_at = EXCLUDED.completed_at`,
-  [
-    result.testId,
-    result.metrics.type,
-    result.targetUrl,
-    result.status,
-    JSON.stringify(result.metrics),
-    enrichedResult.scriptId ?? null,
-    enrichedResult.reusedScript ?? false,
-    result.startedAt,
-    result.completedAt
-  ]
-);
+      await pool.query(
+        `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (test_id) DO UPDATE SET
+          status = EXCLUDED.status,
+          metrics = EXCLUDED.metrics,
+          target_url = COALESCE(EXCLUDED.target_url, test_results.target_url),
+          completed_at = EXCLUDED.completed_at`,
+        [
+          result.testId,
+          result.metrics.type,
+          result.targetUrl,
+          result.status,
+          JSON.stringify(result.metrics),
+          result.startedAt,
+          result.completedAt
+        ]
+      );
 
       console.log(`Result saved for test: ${result.testId}`);
       channel.ack(msg);

@@ -26,6 +26,39 @@ app.get('/results', async (_request, reply) => {
     return reply.code(500).send({ error: 'Failed to fetch results' });
   }
 });
+// Створити запис тесту зі статусом pending
+app.post<{ Body: { testId: string; type: string; targetUrl: string } }>(
+  '/results/pending',
+  async (request, reply) => {
+    try {
+      const { testId, type, targetUrl } = request.body;
+      await pool.query(
+        `INSERT INTO test_results (test_id, type, target_url, status)
+         VALUES ($1, $2, $3, 'pending')
+         ON CONFLICT (test_id) DO NOTHING`,
+        [testId, type, targetUrl]
+      );
+      return { success: true };
+    } catch (err) {
+      return reply.code(500).send({ error: 'Failed to create pending result' });
+    }
+  }
+);
+
+// Отримати активні тести
+app.get('/results/active', async (_request, reply) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT test_id, type, target_url, status, created_at
+       FROM test_results
+       WHERE status IN ('pending', 'running')
+       ORDER BY created_at DESC`
+    );
+    return { active: rows };
+  } catch (err) {
+    return reply.code(500).send({ error: 'Failed to fetch active tests' });
+  }
+});
 
 app.get<{ Params: { testId: string } }>(
   '/results/:testId',
