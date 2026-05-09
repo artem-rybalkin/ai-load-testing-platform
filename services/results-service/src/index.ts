@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 
 import { initDb, pool } from './db';
 import { startConsumer } from './consumer';
@@ -85,6 +86,10 @@ app.delete<{ Params: { id: string } }>(
 
 const start = async (): Promise<void> => {
   try {
+    await app.register(cors, {
+  origin: '*',
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS']
+});
     await initDb();
     await startConsumer();
     const port = Number(process.env.PORT) || 3004;
