@@ -4,11 +4,13 @@
   "main": "dist/index.js",
   "dependencies": {
     "@alt/shared": "*",
-    "amqplib": "^0.10.0"
+    "amqplib": "^0.10.0",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.0",
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.39",
+    "@types/pg": "^8.20.0",
     "tsx": "^4.0.0"
   },
   "scripts": {

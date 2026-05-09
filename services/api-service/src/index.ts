@@ -1,17 +1,16 @@
 import Fastify from 'fastify';
 
-import { TestRequest, TestType } from '@alt/shared';
+import { TestRequest, TestType, EnrichedTestRequest } from '@alt/shared';
 import { connectQueue, publishTest } from './queue';
+import { findExistingScript } from './scripts';
 
 const app = Fastify({ logger: true });
 
-app.get('/health', async (_request, _reply) => {
-  return {
-    status: 'ok',
-    service: 'api-service',
-    timestamp: new Date().toISOString()
-  };
-});
+app.get('/health', async (_request, _reply) => ({
+  status: 'ok',
+  service: 'api-service',
+  timestamp: new Date().toISOString()
+}));
 
 app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
   '/tests',
@@ -25,7 +24,7 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
       });
     }
 
-    const test: TestRequest = {
+    const test: EnrichedTestRequest = {
       id: crypto.randomUUID(),
       type,
       targetUrl,
@@ -34,9 +33,28 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
       createdAt: new Date().toISOString()
     };
 
-    publishTest(test);
+    // Перевіряємо чи є збережений скрипт
+    const existingScript = await findExistingScript(targetUrl, type);
 
-    return { success: true, test };
+    if (existingScript) {
+      console.log(`Reusing existing script for ${targetUrl} (used ${existingScript.usedCount} times)`);
+      test.generatedScript = existingScript.script;
+      test.scriptId = existingScript.id;
+      test.reusedScript = true;
+
+      // Пропускаємо ai-service, йдемо прямо до worker
+      publishTest(test, true);
+      return {
+        success: true,
+        test,
+        scriptReused: true,
+        scriptUsedCount: existingScript.usedCount
+      };
+    }
+
+    // Новий URL — генеруємо через AI
+    publishTest(test, false);
+    return { success: true, test, scriptReused: false };
   }
 );
 

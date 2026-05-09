@@ -7,8 +7,8 @@ const QUEUE = 'test-results';
 
 export const startConsumer = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL || 'amqp://alt_user:alt_password@localhost:5672';
-  const maxRetries = 10;
-  const delay = 5000;
+  const maxRetries = 20;
+  const delay = 10000;
 
   let connection;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

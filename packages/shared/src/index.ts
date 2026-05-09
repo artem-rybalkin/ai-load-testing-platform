@@ -50,3 +50,18 @@ export interface ClientMetrics {
   ttfb: number;
   fcp: number;
 }
+export interface TestScript {
+  id: string;
+  targetUrl: string;
+  testType: TestType;
+  script: string;
+  usedCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EnrichedTestRequest extends TestRequest {
+  generatedScript?: string;
+  scriptId?: string;
+  reusedScript?: boolean;
+}

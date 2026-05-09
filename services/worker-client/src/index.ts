@@ -49,8 +49,8 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
     const perfMetrics = await client.send('Performance.getMetrics');
     const metrics = perfMetrics.metrics;
 
-    const getValue = (name: string): number =>
-      metrics.find(m => m.name === name)?.value ?? 0;
+   const getValue = (name: string): number =>
+  metrics.find((m: { name: string; value: number }) => m.name === name)?.value ?? 0;
 
     // Збираємо Web Vitals через JavaScript
     const webVitals = await page.evaluate(() => {

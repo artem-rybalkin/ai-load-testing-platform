@@ -1,6 +1,6 @@
 import amqplib from 'amqplib';
 
-import { TestRequest } from '@alt/shared';
+import { EnrichedTestRequest, TestRequest } from '@alt/shared';
 
 export const QUEUES = {
   AI_REQUESTS: 'ai-requests',
@@ -12,8 +12,8 @@ let channel: amqplib.Channel | null = null;
 
 export const connectQueue = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL || 'amqp://alt_user:alt_password@localhost:5672';
-  const maxRetries = 10;
-  const delay = 5000;
+  const maxRetries = 20;
+  const delay = 10000;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -35,10 +35,16 @@ export const connectQueue = async (): Promise<void> => {
   }
 };
 
-export const publishTest = (test: TestRequest): void => {
+export const publishTest = (test: EnrichedTestRequest, skipAI: boolean): void => {
   if (!channel) throw new Error('Queue not connected');
 
   const message = Buffer.from(JSON.stringify(test));
-  channel.sendToQueue(QUEUES.AI_REQUESTS, message, { persistent: true });
-  console.log(`Published test ${test.id} to AI queue`);
+  if (skipAI) {
+    const targetQueue = test.type === 'backend' ? QUEUES.BACKEND : QUEUES.CLIENT;
+    channel.sendToQueue(targetQueue, message, { persistent: true });
+    console.log(`Test ${test.id} routed directly to ${targetQueue} (script reused)`);
+  } else {
+    channel.sendToQueue(QUEUES.AI_REQUESTS, message, { persistent: true });
+    console.log(`Test ${test.id} sent to AI for script generation`);
+  }
 };

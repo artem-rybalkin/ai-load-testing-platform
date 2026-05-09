@@ -6,6 +6,18 @@ export const pool = new Pool({
 
 export const initDb = async (): Promise<void> => {
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS test_scripts (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      target_url   TEXT NOT NULL,
+      test_type    VARCHAR(20) NOT NULL,
+      script       TEXT NOT NULL,
+      used_count   INTEGER DEFAULT 1,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(target_url, test_type)
+    )
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS test_results (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       test_id     UUID NOT NULL UNIQUE,

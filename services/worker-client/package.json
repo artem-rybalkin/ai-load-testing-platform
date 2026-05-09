@@ -5,7 +5,7 @@
   "dependencies": {
     "@alt/shared": "*",
     "amqplib": "^0.10.0",
-    "puppeteer": "^22.0.0"
+    "puppeteer": "^22.15.0"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.0",
