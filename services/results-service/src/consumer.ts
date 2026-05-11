@@ -1,7 +1,8 @@
 import amqplib from 'amqplib';
 
-import { TestResult } from '@alt/shared';
+import { TestResult, BackendMetrics, ClientMetrics } from '@alt/shared';
 import { pool } from './db';
+import { analyzeResult } from './analyzer';
 
 const QUEUE = 'test-results';
 
@@ -34,17 +35,41 @@ export const startConsumer = async (): Promise<void> => {
 
     const result: TestResult = JSON.parse(msg.content.toString());
     console.log(`Saving result for test: ${result.testId}`);
-const enrichedResult = result as TestResult & { scriptId?: string; reusedScript?: boolean };
 
     try {
+      // Знаходимо попередній тест для цього URL
+      const { rows: prevRows } = await pool.query(
+        `SELECT metrics FROM test_results
+         WHERE target_url = $1
+           AND type = $2
+           AND status = 'completed'
+           AND test_id != $3
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [result.targetUrl, result.metrics.type, result.testId]
+      );
+
+      const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
+
+      // Аналізуємо результат
+      const analysis = analyzeResult(
+        result.metrics as BackendMetrics | ClientMetrics,
+        previousMetrics as BackendMetrics | ClientMetrics | null
+      );
+
+      console.log(`Analysis: ${analysis.perfStatus} — ${analysis.summary}`);
+
+      // Зберігаємо результат з аналізом
       await pool.query(
-        `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (test_id) DO UPDATE SET
-          status = EXCLUDED.status,
-          metrics = EXCLUDED.metrics,
-          target_url = COALESCE(EXCLUDED.target_url, test_results.target_url),
-          completed_at = EXCLUDED.completed_at`,
+        `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (test_id) DO UPDATE SET
+           status       = EXCLUDED.status,
+           metrics      = EXCLUDED.metrics,
+           target_url   = COALESCE(EXCLUDED.target_url, test_results.target_url),
+           completed_at = EXCLUDED.completed_at,
+           perf_status  = EXCLUDED.perf_status,
+           analysis     = EXCLUDED.analysis`,
         [
           result.testId,
           result.metrics.type,
@@ -52,11 +77,13 @@ const enrichedResult = result as TestResult & { scriptId?: string; reusedScript?
           result.status,
           JSON.stringify(result.metrics),
           result.startedAt,
-          result.completedAt
+          result.completedAt,
+          analysis.perfStatus,
+          JSON.stringify(analysis)
         ]
       );
 
-      console.log(`Result saved for test: ${result.testId}`);
+      console.log(`Result saved with analysis: ${analysis.perfStatus}`);
       channel.ack(msg);
     } catch (err) {
       console.error('Failed to save result:', err);
