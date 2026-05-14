@@ -58,6 +58,7 @@ services:
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       REDIS_URL: redis://redis:6379
       DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
+      RESULTS_URL: http://results-service:3004
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -77,6 +78,7 @@ services:
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       REDIS_URL: redis://redis:6379
       DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
+      RESULTS_URL: http://results-service:3004
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -135,7 +137,19 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-
+  ui:
+    build:
+      context: .
+      dockerfile: services/ui/Dockerfile
+    ports:
+      - "3006:3006"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3000
+      NEXT_PUBLIC_RESULTS_URL: http://localhost:3004
+      TURBOPACK: "0"
+    depends_on:
+      - api-service
+      - results-service
 volumes:
   postgres_data:
   redis_data:

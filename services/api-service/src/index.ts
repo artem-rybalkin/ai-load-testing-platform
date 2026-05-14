@@ -1,10 +1,13 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 
-import { TestRequest, TestType, EnrichedTestRequest } from '@alt/shared';
+import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions } from '@alt/shared';
 import { connectQueue, publishTest } from './queue';
 import { findExistingScript } from './scripts';
 
 const app = Fastify({ logger: true });
+
+
 
 app.get('/health', async (_request, _reply) => ({
   status: 'ok',
@@ -33,23 +36,27 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
       createdAt: new Date().toISOString()
     };
 
+    // Завжди створюємо pending запис одразу — щоб ActiveTests хедер показував тест
+    await fetch(
+      `${process.env.RESULTS_URL || 'http://results-service:3004'}/results/pending`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testId: test.id, type: test.type, targetUrl: test.targetUrl })
+      }
+    );
+
     // Перевіряємо чи є збережений скрипт
-    const existingScript = await findExistingScript(targetUrl, type);
+    const backendOpts = type === 'backend' ? (options as BackendTestOptions) : undefined;
+    const existingScript = await findExistingScript(targetUrl, type, backendOpts);
 
     if (existingScript) {
       console.log(`Reusing existing script for ${targetUrl} (used ${existingScript.usedCount} times)`);
       test.generatedScript = existingScript.script;
       test.scriptId = existingScript.id;
       test.reusedScript = true;
-
-      // Пропускаємо ai-service, йдемо прямо до worker
       publishTest(test, true);
-      return {
-        success: true,
-        test,
-        scriptReused: true,
-        scriptUsedCount: existingScript.usedCount
-      };
+      return { success: true, test, scriptReused: true, scriptUsedCount: existingScript.usedCount };
     }
 
     // Новий URL — генеруємо через AI
@@ -60,6 +67,12 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
 
 const start = async (): Promise<void> => {
   try {
+
+    await app.register(cors, {
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+});
+
     await connectQueue();
     const port = Number(process.env.PORT) || 3000;
     await app.listen({ port, host: '0.0.0.0' });

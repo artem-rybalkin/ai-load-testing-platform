@@ -1,17 +1,17 @@
 import amqplib from 'amqplib';
-import { execFile } from 'child_process';
+import { spawn } from 'child_process';
 import { writeFile, unlink, readFile } from 'fs/promises';
-import { promisify } from 'util';
 import { Pool } from 'pg';
 import * as os from 'os';
 import * as path from 'path';
 
-import { EnrichedTestRequest, TestResult, BackendMetrics } from '@alt/shared';
-
-const execFileAsync = promisify(execFile);
+import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint } from '@alt/shared';
+import { parseK6Output, aggregateWindow } from './parser';
 
 const QUEUE = 'backend-tests';
 const RESULTS_QUEUE = 'test-results';
+const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
+const LIVE_INTERVAL_MS = 5000;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://alt_user:alt_password@localhost:5432/alt_db'
@@ -35,95 +35,75 @@ const saveScript = async (
   return rows[0].id;
 };
 
-const parseK6Output = (output: string): BackendMetrics => {
-  const getAvg = (metric: string): number => {
-    const regex = new RegExp(`${metric}[^\\n]*avg=([\\d.]+)(ms|s|µs)?`);
-    const match = output.match(regex);
-    if (!match) return 0;
-    const val = parseFloat(match[1]);
-    const unit = match[2];
-    if (unit === 's') return Math.round(val * 1000);
-    if (unit === 'µs') return Math.round(val / 1000);
-    return Math.round(val);
-  };
-
-  const getPercentile = (metric: string, p: string): number => {
-    const regex = new RegExp(`${metric}[^\\n]*p\\(${p}\\)=([\\d.]+)(ms|s|µs)?`);
-    const match = output.match(regex);
-    if (!match) return 0;
-    const val = parseFloat(match[1]);
-    const unit = match[2];
-    if (unit === 's') return Math.round(val * 1000);
-    if (unit === 'µs') return Math.round(val / 1000);
-    return Math.round(val);
-  };
-
-  const getCount = (metric: string): number => {
-    const regex = new RegExp(`${metric}[^\\n]*?(\\d+)\\s+\\d+\\.\\d+\\/s`);
-    const match = output.match(regex);
-    return match ? parseInt(match[1]) : 0;
-  };
-
-  const getRate = (metric: string): number => {
-    const regex = new RegExp(`${metric}[^\\n]*?\\d+\\s+([\\d.]+)\\/s`);
-    const match = output.match(regex);
-    return match ? parseFloat(match[1]) : 0;
-  };
-
-  const getFailRate = (): number => {
-    const match = output.match(/http_req_failed[^\n]*?([\d.]+)%/);
-    return match ? parseFloat(match[1]) : 0;
-  };
-
-  const total = getCount('http_reqs');
-
-  return {
-    type: 'backend',
-    requestsTotal: total,
-    requestsFailed: Math.round(total * getFailRate() / 100),
-    avgResponseTime: getAvg('http_req_duration'),
-    p95ResponseTime: getPercentile('http_req_duration', '95'),
-    p99ResponseTime: getPercentile('http_req_duration', '99'),
-    rps: getRate('http_reqs')
-  };
+const postLiveMetric = async (testId: string, point: LiveMetricPoint): Promise<void> => {
+  try {
+    await fetch(`${RESULTS_URL}/results/${testId}/live`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(point)
+    });
+  } catch {
+    // best-effort — don't fail the test if live posting fails
+  }
 };
 
-const runK6Test = async (test: EnrichedTestRequest): Promise<BackendMetrics> => {
-  if (!test.generatedScript) {
-    throw new Error('No script provided for k6 test');
-  }
+const runK6Test = async (testId: string, script: string): Promise<BackendMetrics> => {
+  const scriptPath = path.join(os.tmpdir(), `k6-${testId}.js`);
+  const jsonPath = `/tmp/k6-live-${testId}.json`;
 
-  const scriptPath = path.join(os.tmpdir(), `k6-${test.id}.js`);
+  await writeFile(scriptPath, script);
 
-  try {
-    await writeFile(scriptPath, test.generatedScript);
-    console.log(`Running k6 test for: ${test.targetUrl}`);
+  return new Promise((resolve, reject) => {
+    const k6 = spawn('k6', ['run', '--out', `json=${jsonPath}`, scriptPath]);
 
-    let output = '';
-    try {
-      const { stdout, stderr } = await execFileAsync('k6', [
-        'run',
-        '--out', 'json=/tmp/k6-results.json',
-        scriptPath
-      ], { timeout: 120000 });
-      output = stdout + stderr;
-    } catch (err: unknown) {
-      // k6 повертає non-zero exit code коли threshold перевищено
-      // це нормальна поведінка — парсимо результати з output
-      const execErr = err as { stdout?: string; stderr?: string; message?: string };
-      if (execErr.stdout || execErr.stderr) {
-        output = (execErr.stdout || '') + (execErr.stderr || '');
-        console.log('k6 finished with threshold violations — parsing results anyway');
-      } else {
-        throw err;
-      }
-    }
+    let stdout = '';
+    let stderr = '';
+    let processedLines = 0;
 
-    console.log('k6 output snippet:', output.slice(0, 300));
-    return parseK6Output(output);
-  } finally {
-    await unlink(scriptPath).catch(() => {});
-  }
+    k6.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    k6.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    const readAndPost = async () => {
+      try {
+        const content = await readFile(jsonPath, 'utf-8');
+        const lines = content.split('\n').filter(l => l.trim());
+        const newLines = lines.slice(processedLines);
+        processedLines = lines.length;
+
+        const agg = aggregateWindow(newLines);
+        if (agg) {
+          await postLiveMetric(testId, { timestamp: new Date().toISOString(), ...agg });
+        }
+      } catch { /* file may not exist yet */ }
+    };
+
+    const interval = setInterval(readAndPost, LIVE_INTERVAL_MS);
+
+    k6.on('close', async () => {
+      clearInterval(interval);
+      await readAndPost();
+      await unlink(scriptPath).catch(() => {});
+      await unlink(jsonPath).catch(() => {});
+
+      const output = stdout + stderr;
+      console.log('k6 full output:', output);
+      resolve(parseK6Output(output));
+    });
+
+    k6.on('error', async (err) => {
+      clearInterval(interval);
+      await unlink(scriptPath).catch(() => {});
+      await unlink(jsonPath).catch(() => {});
+      reject(err);
+    });
+  });
+};
+
+const updateStatus = async (testId: string, status: string): Promise<void> => {
+  await pool.query(
+    `UPDATE test_results SET status = $1 WHERE test_id = $2`,
+    [status, testId]
+  );
 };
 
 const start = async (): Promise<void> => {
@@ -158,7 +138,9 @@ const start = async (): Promise<void> => {
     console.log(`Received test: ${test.id} — ${test.targetUrl}`);
 
     try {
-      const metrics = await runK6Test(test);
+      await updateStatus(test.id, 'running');
+
+      const metrics = await runK6Test(test.id, test.generatedScript!);
 
       const scriptId = await saveScript(
         test.targetUrl,
@@ -185,6 +167,7 @@ const start = async (): Promise<void> => {
       channel.ack(msg);
     } catch (err) {
       console.error('Test failed:', err);
+      await updateStatus(test.id, 'failed').catch(() => {});
       channel.nack(msg, false, false);
     }
   });

@@ -1,0 +1,73 @@
+# Dev overlay: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# shared-watcher запускає tsc --watch для packages/shared.
+# Коли shared/src змінюється → dist/ перебудовується → tsx watch у сервісах
+# підхоплює зміну через symlink node_modules/@alt/shared і перезапускається.
+
+services:
+  shared-watcher:
+    build:
+      context: .
+      dockerfile: packages/shared/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    working_dir: /app
+
+
+  api-service:
+    build:
+      context: .
+      dockerfile: services/api-service/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx tsx watch src/index.ts
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: services/ai-service/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx tsx watch src/index.ts
+
+  results-service:
+    build:
+      context: .
+      dockerfile: services/results-service/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx tsx watch src/index.ts
+
+  worker-backend:
+    build:
+      context: .
+      dockerfile: services/worker-backend/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx tsx watch src/index.ts
+
+  worker-client:
+    build:
+      context: .
+      dockerfile: services/worker-client/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx tsx watch src/index.ts
+
+  ui:
+    build:
+      context: .
+      dockerfile: services/ui/Dockerfile.dev
+    volumes:
+      - ./services/ui:/app/services/ui
+      - /app/services/ui/node_modules
+      - /app/services/ui/.next
+    environment:
+      NODE_ENV: development
+    command: npx next dev -p 3006

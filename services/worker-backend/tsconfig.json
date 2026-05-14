@@ -4,7 +4,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "types": ["node"],
-        "typeRoots": [
+    "typeRoots": [
       "../../node_modules/@types",
       "node_modules/@types"
     ]

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(npm install *)",
+      "Bash(npm test *)",
+      "Bash(npx vitest *)",
+      "Bash(docker info *)",
+      "Bash(node -e \"const {PostgreSqlContainer} = require\\('@testcontainers/postgresql'\\); console.log\\('ok'\\)\")",
+      "Bash(node -e \"const {PostgreSqlContainer} = require\\('@testcontainers/postgresql'\\); new PostgreSqlContainer\\(\\)\")",
+      "Bash(node -e \"const pkg = require\\('c:/Users/Artem/ai-load-testing-platform/node_modules/@testcontainers/postgresql/package.json'\\); console.log\\(pkg.version\\)\")",
+      "Bash(node -e \"const {PostgreSqlContainer} = require\\('@testcontainers/postgresql'\\); new PostgreSqlContainer\\('postgres:16-alpine'\\)\")"
+    ]
+  }
+}

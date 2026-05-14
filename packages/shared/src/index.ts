@@ -11,10 +11,14 @@ export interface TestRequest {
   createdAt: string;
 }
 
+export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak';
+
 export interface BackendTestOptions {
   vus: number;
   duration: string;
   rampUp?: string;
+  profile?: LoadProfile;
+  peakVus?: number;
 }
 
 export interface ClientTestOptions {
@@ -30,6 +34,19 @@ export interface TestResult {
   metrics: BackendMetrics | ClientMetrics;
   startedAt: string;
   completedAt?: string;
+  perfStatus?: 'passed' | 'degraded' | 'failed';
+  analysis?: {
+    perfStatus: string;
+    diffs: Array<{
+      metric: string;
+      current: number;
+      previous: number;
+      diffPercent: number;
+      status: 'better' | 'same' | 'worse';
+    }>;
+    summary: string;
+    thresholdViolations: string[];
+  };
 }
 
 export interface BackendMetrics {
@@ -42,6 +59,13 @@ export interface BackendMetrics {
   rps: number;
 }
 
+export interface LighthouseScore {
+  performance: number;    // 0-100
+  accessibility: number;  // 0-100
+  bestPractices: number;  // 0-100
+  seo: number;            // 0-100
+}
+
 export interface ClientMetrics {
   type: 'client';
   lcp: number;
@@ -49,6 +73,7 @@ export interface ClientMetrics {
   cls: number;
   ttfb: number;
   fcp: number;
+  lighthouseScore?: LighthouseScore;
 }
 export interface TestScript {
   id: string;
@@ -64,4 +89,12 @@ export interface EnrichedTestRequest extends TestRequest {
   generatedScript?: string;
   scriptId?: string;
   reusedScript?: boolean;
+}
+
+export interface LiveMetricPoint {
+  timestamp: string;
+  vus: number;
+  rps: number;
+  avgResponseTime: number;
+  errorRate: number;
 }

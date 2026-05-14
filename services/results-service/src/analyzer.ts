@@ -1,4 +1,4 @@
-import { BackendMetrics, ClientMetrics } from '@alt/shared';
+import { BackendMetrics, ClientMetrics, LighthouseScore } from '@alt/shared';
 
 export type PerfStatus = 'passed' | 'degraded' | 'failed';
 
@@ -30,6 +30,8 @@ const CLIENT_THRESHOLDS = {
   ttfb: 800,    // TTFB < 800ms
   cls:  0.1,    // CLS < 0.1
 };
+
+const LIGHTHOUSE_THRESHOLD_PERFORMANCE = 50; // score 0-100
 
 const getDiffStatus = (diffPercent: number, metric: string): 'better' | 'same' | 'worse' => {
   const threshold = 10; // 10% зміна вважається значущою
@@ -124,9 +126,18 @@ const analyzeClient = (
     thresholdViolations.push(`CLS ${current.cls.toFixed(3)} exceeds threshold ${CLIENT_THRESHOLDS.cls}`);
   }
 
-  // Порівняння з попереднім
+  // Lighthouse threshold
+  if (current.lighthouseScore !== undefined) {
+    if (current.lighthouseScore.performance < LIGHTHOUSE_THRESHOLD_PERFORMANCE) {
+      thresholdViolations.push(
+        `Lighthouse performance score ${current.lighthouseScore.performance}/100 is below threshold (${LIGHTHOUSE_THRESHOLD_PERFORMANCE})`
+      );
+    }
+  }
+
+  // Порівняння з попереднім — Web Vitals
   if (previous) {
-    const metrics: Array<{ key: keyof ClientMetrics; label: string }> = [
+    const webVitalKeys: Array<{ key: keyof Omit<ClientMetrics, 'type' | 'lighthouseScore'>; label: string }> = [
       { key: 'lcp',  label: 'LCP' },
       { key: 'fcp',  label: 'FCP' },
       { key: 'ttfb', label: 'TTFB' },
@@ -134,7 +145,7 @@ const analyzeClient = (
       { key: 'cls',  label: 'CLS' },
     ];
 
-    for (const { key, label } of metrics) {
+    for (const { key, label } of webVitalKeys) {
       const curr = current[key] as number;
       const prev = previous[key] as number;
       if (!prev) continue;
@@ -147,6 +158,31 @@ const analyzeClient = (
         diffPercent: Math.round(rawDiff * 10) / 10,
         status: getDiffStatus(rawDiff, key)
       });
+    }
+
+    // Lighthouse score diffs (higher = better, so invert sign for getDiffStatus)
+    if (current.lighthouseScore && previous.lighthouseScore) {
+      const lhKeys: Array<{ key: keyof LighthouseScore; label: string }> = [
+        { key: 'performance',   label: 'Lighthouse performance' },
+        { key: 'accessibility', label: 'Lighthouse accessibility' },
+        { key: 'bestPractices', label: 'Lighthouse best practices' },
+        { key: 'seo',           label: 'Lighthouse SEO' },
+      ];
+
+      for (const { key, label } of lhKeys) {
+        const curr = current.lighthouseScore[key];
+        const prev = previous.lighthouseScore[key];
+        if (!prev) continue;
+
+        const rawDiff = ((curr - prev) / prev) * 100;
+        diffs.push({
+          metric: label,
+          current: curr,
+          previous: prev,
+          diffPercent: Math.round(rawDiff * 10) / 10,
+          status: getDiffStatus(-rawDiff, key), // invert: higher score = better
+        });
+      }
     }
   }
 

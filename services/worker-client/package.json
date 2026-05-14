@@ -5,6 +5,7 @@
   "dependencies": {
     "@alt/shared": "*",
     "amqplib": "^0.10.0",
+    "lighthouse": "^12.2.0",
     "puppeteer": "^22.15.0"
   },
   "devDependencies": {

@@ -253,7 +253,7 @@ npm run lint
 
 ## Current Status & Next Tasks
 
-### Completed (Phase 1 + 1б partial)
+### Completed (Phase 1 + 1б + 1г)
 - ✅ Full microservices architecture with RabbitMQ
 - ✅ Gemini AI script generation + script reuse
 - ✅ Real k6 backend testing with metrics parsing
@@ -262,14 +262,112 @@ npm run lint
 - ✅ Performance analyzer (thresholds + regression detection)
 - ✅ Next.js UI with test form, results dashboard, charts
 - ✅ Active tests tracking in header
+- ✅ Real-time charts during backend test (live_metrics table, polling, RealtimeChart)
+- ✅ Load profiles: load / spike / capacity / soak (UI selector + Gemini prompt)
+- ✅ Script param injection: cached script reused, options block replaced per request
+- ✅ Dev hot-reload: docker-compose.dev.yml + tsx watch + shared-watcher
+- ✅ Full test suite: 54 tests (unit + integration via Testcontainers)
+- ✅ Lighthouse integration: score gauges in UI, threshold in analyzer, reuses Puppeteer Chrome
 
-### Next Up (Phase 1б)
-- `u7` — Real-time charts during backend test (VUs, response time, errors)
-  → Need: k6 streaming metrics output + polling endpoint in results-service
-- `u8` — Lighthouse integration for client tests
-  → Need: add lighthouse npm package to worker-client, run after Puppeteer
-- `r1/r2` — PDF report generation and storage
-- Phase 2 — Cloud deployment (compare AWS vs GCP vs Azure first)
+### Backlog — Phase 2 (Reliability & Correctness)
+
+#### Critical — production-breaking
+- [ ] `r1` — Dead-letter queue + max retry count (x-death header, nack → DLQ after 3 attempts)
+- [ ] `r2` — Test cancellation API (`POST /tests/:testId/cancel`, kill k6 PID, update status)
+- [ ] `r3` — Concurrent workers (remove prefetch=1 bottleneck, configurable parallelism)
+- [ ] `r4` — k6 execution timeout (kill after max duration + grace, prevent hanging)
+- [ ] `r5` — Stale test cleanup (cron: mark tests 'failed' if running > threshold with no heartbeat)
+
+#### Functional — core performance-testing value
+- [ ] `f1` — Baseline management (`POST /results/:testId/baseline`, compare always vs baseline not prev)
+- [ ] `f2` — Configurable SLO thresholds per test request (`{ thresholds: { p95: 500, errorRate: 0.5 } }`)
+- [ ] `f3` — p50 + error breakdown by status code (extend parseK6Output + BackendMetrics type)
+- [ ] `f4` — Script dry-run validation (`k6 run --dry-run` before enqueue, reject invalid AI output)
+- [ ] `f5` — Manual run comparison (`GET /results/compare?a=<id>&b=<id>`, diff view in UI)
+- [ ] `f6` — Trend chart per URL (sparklines over all runs for same URL, `/results?url=...`)
+- [ ] `f7` — Notifications / webhooks (`POST /webhooks`, trigger on perf_status=failed/degraded)
+- [x] `u8` — Lighthouse integration
+  → `LighthouseScore` type in `@alt/shared`; worker-client runs Lighthouse after Puppeteer sessions
+     reusing the same Chrome via port; `performance < 50` → analyzer marks failed; score gauges in ClientChart.tsx
+
+#### Reliability & Ops
+- [ ] `o1` — Deep health checks (pool.query('SELECT 1') + RabbitMQ ping, return 503 if deps down)
+- [ ] `o2` — Docker restart policy (`restart: unless-stopped` on all services)
+- [ ] `o3` — PostgreSQL indexes (target_url+type+status on test_results, test_id on live_metrics)
+- [ ] `o4` — Structured logging with Pino (JSON output, testId/requestId in every line)
+
+#### Strategic
+- [ ] `s1` — Horizontal worker scaling (docker compose scale worker-backend=N, verify queue handles it)
+- [ ] `s2` — Scheduled tests (`POST /schedules`, cron expression, auto-run + report)
+- [ ] `s3` — Test template library (save URL+description+params+SLO as reusable test plan)
+- [ ] `r6` — PDF report generation and storage
+
+### Phase 2 — Cloud Deployment
+- Compare AWS vs GCP vs Azure first
+
+### Phase 1г — Testing
+Stack: **vitest** (unit), **@testcontainers/postgresql** (integration)
+Setup: `vitest.config.ts` at root, test files in `services/*/src/__tests__/`
+
+#### Unit tests
+
+**`t1` — `parseK6Output` (worker-backend)**
+Pure function, regex + unit conversion. Cases:
+- [x] Full k6 output → correct metrics (requestsTotal, rps, avg, p95, p99)
+- [x] Units: µs / s / ms → always milliseconds
+- [x] Non-zero exit (threshold violation) → parses anyway
+- [x] Empty output → zeroes, no crash
+- [x] p95 and p99 with same avg
+
+**`t2` — `analyzeResult` (results-service/analyzer)**
+Business logic with clear boundaries. Cases:
+- [x] p95 > 1000ms → status: 'failed', violation in list
+- [x] avg > 500ms → status: 'failed'
+- [x] error rate > 1% → status: 'failed'
+- [x] 25% slower than previous → status: 'degraded'
+- [x] 15% slower than previous → status: 'passed' (below 20% threshold)
+- [x] No previous result → threshold-only check, no diffs
+- [x] Client-side: LCP > 2500ms → failed; CLS > 0.1 → failed; TTFB > 800ms → failed
+
+**`t3` — `replaceK6Options` (api-service/options)**
+Brace-balancing string manipulation. Cases:
+- [x] Simple options with vus/duration → replaced
+- [x] Nested options with stages array → replaced correctly
+- [x] Script without `export const options` → returned unchanged
+- [x] Options with nested thresholds object → correct
+- [x] Trailing semicolon after closing brace → not duplicated
+
+**`t4` — `aggregateWindow` (worker-backend)**
+k6 JSON stream aggregation. Cases:
+- [x] Empty array → null
+- [x] Only Metric lines (not Point) → null
+- [x] Mix of vus + duration + failed → correct avg, max VUs, error rate %
+- [x] Malformed JSON line → skipped, rest processed
+- [x] rps = http_reqs count / 5 (window size)
+
+**`t5` — `buildK6Options` (api-service/options)**
+Profile stages generation. Cases:
+- [x] profile: 'spike' → 6 stages, peak = peakVus
+- [x] profile: 'capacity' → 2 stages, ramp to peak
+- [x] profile: 'load' → 3 stages, plateau at vus
+- [x] peakVus not set → default = vus * 10
+- [x] Output is valid JSON
+
+#### Integration tests (real PostgreSQL via Testcontainers)
+
+**`t6` — results-service API endpoints**
+- [x] `POST /results/pending` → record in DB with status 'pending'
+- [x] `GET /results/active` → only pending/running rows
+- [x] `GET /results/:testId` → 404 if not found
+- [x] `POST /results/:testId/live` → point saved
+- [x] `GET /results/:testId/live` → returned in chronological order
+- [x] `DELETE /scripts/:id` → record deleted
+
+**`t7` — `findExistingScript` + DB**
+- [x] URL not found → null
+- [x] URL found → used_count incremented
+- [x] URL found + backend options → options block in script replaced
+- [x] URL found + client-side type → script returned unchanged
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned for future: caching, rate limiting, pub/sub)

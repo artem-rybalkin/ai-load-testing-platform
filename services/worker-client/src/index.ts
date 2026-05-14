@@ -4,17 +4,22 @@ declare global {
     hadRecentInput: boolean;
   }
 
-  interface ExtendedPerformanceEventTiming  extends PerformanceEventTiming  {
+  interface ExtendedPerformanceEventTiming extends PerformanceEventTiming {
     processingStart: number;
   }
 }
+
 import amqplib from 'amqplib';
 import puppeteer from 'puppeteer';
+import lighthouse from 'lighthouse';
 
-import { TestRequest, TestResult, ClientMetrics } from '@alt/shared';
+import { TestRequest, TestResult, ClientMetrics, LighthouseScore } from '@alt/shared';
 
 const QUEUE = 'client-tests';
 const RESULTS_QUEUE = 'test-results';
+
+// Web Vitals without the optional lighthouse field (for per-session accumulation)
+type WebVitalsSnapshot = Omit<ClientMetrics, 'type' | 'lighthouseScore'>;
 
 const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
   console.log(`Launching browser for: ${test.targetUrl}`);
@@ -25,34 +30,26 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-gpu'
-    ]
+      '--disable-gpu',
+    ],
   });
 
-  const metricsAccumulator: ClientMetrics[] = [];
+  const snapshots: WebVitalsSnapshot[] = [];
   const options = test.options as { sessions: number; duration: string };
   const sessions = options.sessions || 1;
 
+  // ── Puppeteer sessions: collect Web Vitals ───────────────────────────────
   for (let i = 0; i < sessions; i++) {
     console.log(`Running session ${i + 1}/${sessions}`);
     const page = await browser.newPage();
 
-    // Збираємо Web Vitals через CDP (Chrome DevTools Protocol)
-    const client = await page.createCDPSession();
-    await client.send('Performance.enable');
+    const cdp = await page.createCDPSession();
+    await cdp.send('Performance.enable');
 
     const startTime = Date.now();
     await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
     const ttfb = Date.now() - startTime;
 
-    // Отримуємо Performance метрики
-    const perfMetrics = await client.send('Performance.getMetrics');
-    const metrics = perfMetrics.metrics;
-
-   const getValue = (name: string): number =>
-  metrics.find((m: { name: string; value: number }) => m.name === name)?.value ?? 0;
-
-    // Збираємо Web Vitals через JavaScript
     const webVitals = await page.evaluate(() => {
       return new Promise<{ lcp: number; fid: number; cls: number; fcp: number }>((resolve) => {
         let lcp = 0;
@@ -66,11 +63,11 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
         }).observe({ type: 'largest-contentful-paint', buffered: true });
 
         new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    const e = entry as ExtendedPerformanceEventTiming;
-    fid = e.processingStart - e.startTime;
-  }
-    }).observe({ type: 'first-input', buffered: true });
+          for (const entry of list.getEntries()) {
+            const e = entry as ExtendedPerformanceEventTiming;
+            fid = e.processingStart - e.startTime;
+          }
+        }).observe({ type: 'first-input', buffered: true });
 
         new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
@@ -81,45 +78,67 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
 
         new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
-            if (entry.name === 'first-contentful-paint') {
-              fcp = entry.startTime;
-            }
+            if (entry.name === 'first-contentful-paint') fcp = entry.startTime;
           }
         }).observe({ type: 'paint', buffered: true });
 
-        // Даємо час на збір метрик
         setTimeout(() => resolve({ lcp, fid, cls, fcp }), 3000);
       });
     });
 
-    metricsAccumulator.push({
-      type: 'client',
-      lcp: webVitals.lcp,
-      fid: webVitals.fid,
-      cls: webVitals.cls,
-      ttfb,
-      fcp: webVitals.fcp
+    snapshots.push({ lcp: webVitals.lcp, fid: webVitals.fid, cls: webVitals.cls, ttfb, fcp: webVitals.fcp });
+    await page.close();
+    console.log(`Session ${i + 1} metrics:`, snapshots[i]);
+  }
+
+  // ── Lighthouse audit — reuses the same Chrome instance via CDP port ──────
+  let lighthouseScore: LighthouseScore | undefined;
+  try {
+    // Close all remaining pages so Lighthouse gets a clean state
+    const openPages = await browser.pages();
+    await Promise.all(openPages.map((p) => p.close()));
+
+    const wsEndpoint = browser.wsEndpoint();
+    const port = parseInt(new URL(wsEndpoint).port, 10);
+
+    console.log(`Running Lighthouse on ${test.targetUrl} (port ${port})…`);
+    const lhResult = await lighthouse(test.targetUrl, {
+      port,
+      output: 'json' as const,
+      logLevel: 'silent' as const,
+      onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
     });
 
-    await page.close();
-    console.log(`Session ${i + 1} metrics:`, metricsAccumulator[i]);
+    if (lhResult?.lhr?.categories) {
+      const cats = lhResult.lhr.categories;
+      lighthouseScore = {
+        performance:   Math.round((cats['performance']?.score   ?? 0) * 100),
+        accessibility: Math.round((cats['accessibility']?.score ?? 0) * 100),
+        bestPractices: Math.round((cats['best-practices']?.score ?? 0) * 100),
+        seo:           Math.round((cats['seo']?.score           ?? 0) * 100),
+      };
+      console.log('Lighthouse scores:', lighthouseScore);
+    }
+  } catch (err) {
+    console.error('Lighthouse audit failed (non-fatal):', (err as Error).message);
   }
 
   await browser.close();
 
-  // Усереднюємо метрики по всіх сесіях
-  const avg = (key: keyof Omit<ClientMetrics, 'type'>): number => {
-    const sum = metricsAccumulator.reduce((s, m) => s + m[key], 0);
-    return Math.round((sum / metricsAccumulator.length) * 100) / 100;
+  // ── Average Web Vitals across sessions ───────────────────────────────────
+  const avg = (key: keyof WebVitalsSnapshot): number => {
+    const sum = snapshots.reduce((s, m) => s + m[key], 0);
+    return Math.round((sum / snapshots.length) * 100) / 100;
   };
 
   return {
     type: 'client',
-    lcp: avg('lcp'),
-    fid: avg('fid'),
-    cls: avg('cls'),
+    lcp:  avg('lcp'),
+    fid:  avg('fid'),
+    cls:  avg('cls'),
     ttfb: avg('ttfb'),
-    fcp: avg('fcp')
+    fcp:  avg('fcp'),
+    lighthouseScore,
   };
 };
 
@@ -137,7 +156,7 @@ const start = async (): Promise<void> => {
     } catch (err) {
       console.error(`Connection failed (attempt ${attempt}):`, (err as Error).message);
       if (attempt === maxRetries) throw err;
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
@@ -163,15 +182,10 @@ const start = async (): Promise<void> => {
         status: 'completed',
         metrics,
         startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString()
+        completedAt: new Date().toISOString(),
       };
 
-      channel.sendToQueue(
-        RESULTS_QUEUE,
-        Buffer.from(JSON.stringify(result)),
-        { persistent: true }
-      );
-
+      channel.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify(result)), { persistent: true });
       console.log('Client test completed:', JSON.stringify(metrics, null, 2));
       channel.ack(msg);
     } catch (err) {

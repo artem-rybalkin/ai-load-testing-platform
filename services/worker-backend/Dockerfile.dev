@@ -1,0 +1,13 @@
+FROM node:20-alpine
+RUN apk add --no-cache curl bash
+RUN wget -qO /tmp/k6.tar.gz https://github.com/grafana/k6/releases/download/v0.54.0/k6-v0.54.0-linux-amd64.tar.gz && \
+    tar -xzf /tmp/k6.tar.gz -C /tmp && \
+    mv /tmp/k6-v0.54.0-linux-amd64/k6 /usr/local/bin/k6 && \
+    rm -rf /tmp/k6*
+WORKDIR /app
+COPY package.json tsconfig.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY services/worker-backend/package.json ./services/worker-backend/
+RUN npm install
+WORKDIR /app/services/worker-backend
+CMD ["npx", "tsx", "watch", "src/index.ts"]

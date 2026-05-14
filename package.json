@@ -11,20 +11,29 @@
     "build": "npm run build --workspaces --if-present",
     "lint": "eslint services/*/src/**/*.ts packages/*/src/**/*.ts",
     "build:shared": "npm run build --workspace=packages/shared",
-    "dev": "npm run build:shared && npm run dev --workspaces --if-present"
+    "dev": "npm run build:shared && npm run dev --workspaces --if-present",
+    "dev:docker": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
+    "dev:docker:build": "docker compose -f docker-compose.yml -f docker-compose.dev.yml build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^11.14.0",
     "@types/amqplib": "^0.10.8",
     "@types/node": "^25.6.0",
     "@typescript-eslint/eslint-plugin": "^8.59.1",
     "@typescript-eslint/parser": "^8.59.1",
+    "@vitest/coverage-v8": "^4.1.6",
     "eslint": "^9.39.4",
     "eslint-plugin-import": "^2.32.0",
+    "testcontainers": "^11.14.0",
     "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   },
   "dependencies": {
     "amqplib": "^1.0.3"
