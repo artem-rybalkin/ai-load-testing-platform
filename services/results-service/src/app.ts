@@ -1,17 +1,35 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { Pool } from 'pg';
+import PDFDocument from 'pdfkit';
+import { isConsumerConnected } from './consumer';
+import { reloadSchedule, removeSchedule } from './scheduler';
 
-export const buildApp = async (pool: Pool): Promise<FastifyInstance> => {
-  const app = Fastify({ logger: false });
+export const buildApp = async (
+  pool: Pool,
+  opts: { logger?: boolean } = {}
+): Promise<FastifyInstance> => {
+  const app = Fastify({ logger: opts.logger ?? false });
 
-  await app.register(cors, { origin: '*', methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
+  await app.register(cors, { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] });
 
-  app.get('/health', async () => ({
-    status: 'ok',
-    service: 'results-service',
-    timestamp: new Date().toISOString()
-  }));
+  app.get('/health', async (_request, reply) => {
+    const checks: Record<string, string> = {};
+    let healthy = true;
+
+    try { await pool.query('SELECT 1'); checks.database = 'ok'; }
+    catch { checks.database = 'error'; healthy = false; }
+
+    checks.queue = isConsumerConnected() ? 'ok' : 'disconnected';
+    if (!isConsumerConnected()) healthy = false;
+
+    return reply.code(healthy ? 200 : 503).send({
+      status: healthy ? 'ok' : 'degraded',
+      service: 'results-service',
+      checks,
+      timestamp: new Date().toISOString(),
+    });
+  });
 
   app.get('/results', async (_request, reply) => {
     try {
@@ -146,6 +164,333 @@ export const buildApp = async (pool: Pool): Promise<FastifyInstance> => {
       const { id } = request.params;
       await pool.query('DELETE FROM test_scripts WHERE id = $1', [id]);
       return reply.code(204).send();
+    }
+  );
+
+  // ── r2: Test cancellation ─────────────────────────────────────────────────
+  app.post<{ Params: { testId: string } }>(
+    '/results/:testId/cancel',
+    async (request, reply) => {
+      const { testId } = request.params;
+      const { rowCount } = await pool.query(
+        `UPDATE test_results SET status = 'cancelled'
+         WHERE test_id = $1 AND status IN ('pending', 'running')`,
+        [testId]
+      );
+      if (!rowCount) return reply.code(404).send({ error: 'Test not found or already finished' });
+      return { success: true, testId };
+    }
+  );
+
+  // ── f1: Baseline management ───────────────────────────────────────────────
+  app.post<{ Params: { testId: string } }>(
+    '/results/:testId/baseline',
+    async (request, reply) => {
+      const { testId } = request.params;
+      const { rows } = await pool.query(
+        `SELECT target_url, type FROM test_results WHERE test_id = $1 AND status = 'completed'`,
+        [testId]
+      );
+      if (rows.length === 0) return reply.code(404).send({ error: 'Completed result not found' });
+      const { target_url, type } = rows[0];
+      await pool.query(
+        `UPDATE test_results SET is_baseline = FALSE WHERE target_url = $1 AND type = $2`,
+        [target_url, type]
+      );
+      await pool.query(`UPDATE test_results SET is_baseline = TRUE WHERE test_id = $1`, [testId]);
+      return { success: true, testId };
+    }
+  );
+
+  app.delete<{ Params: { testId: string } }>(
+    '/results/:testId/baseline',
+    async (request, reply) => {
+      await pool.query(`UPDATE test_results SET is_baseline = FALSE WHERE test_id = $1`, [request.params.testId]);
+      return reply.code(204).send();
+    }
+  );
+
+  // ── f5: Manual run comparison ─────────────────────────────────────────────
+  app.get<{ Querystring: { a: string; b: string } }>(
+    '/results/compare',
+    async (request, reply) => {
+      const { a, b } = request.query;
+      if (!a || !b) return reply.code(400).send({ error: 'Query params a and b are required' });
+      const { rows } = await pool.query(
+        `SELECT r.*, s.script FROM test_results r
+         LEFT JOIN test_scripts s ON r.script_id = s.id
+         WHERE r.test_id = ANY($1)`,
+        [[a, b]]
+      );
+      if (rows.length < 2) return reply.code(404).send({ error: 'One or both results not found' });
+      const [resultA, resultB] = rows[0].test_id === a ? [rows[0], rows[1]] : [rows[1], rows[0]];
+      return { resultA, resultB };
+    }
+  );
+
+  // ── f6: Trend chart per URL ───────────────────────────────────────────────
+  app.get<{ Querystring: { url: string; limit?: string } }>(
+    '/results/trend',
+    async (request, reply) => {
+      const { url, limit } = request.query;
+      if (!url) return reply.code(400).send({ error: 'Query param url is required' });
+      const n = Math.min(parseInt(limit ?? '20', 10), 100);
+      const { rows } = await pool.query(
+        `SELECT test_id, type, status, metrics, perf_status, created_at
+         FROM test_results
+         WHERE target_url = $1 AND status = 'completed'
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [url, n]
+      );
+      return { url, trend: rows.reverse() };
+    }
+  );
+
+  // ── f7: Webhook CRUD ──────────────────────────────────────────────────────
+  app.post<{ Body: { url: string; events?: string[]; secret?: string } }>(
+    '/webhooks',
+    async (request, reply) => {
+      const { url, events = ['failed', 'degraded'], secret } = request.body;
+      if (!url) return reply.code(400).send({ error: 'url is required' });
+      const { rows } = await pool.query(
+        `INSERT INTO webhooks (url, events, secret) VALUES ($1, $2, $3) RETURNING *`,
+        [url, events, secret ?? null]
+      );
+      return reply.code(201).send({ webhook: rows[0] });
+    }
+  );
+
+  app.get('/webhooks', async () => {
+    const { rows } = await pool.query(`SELECT id, url, events, created_at FROM webhooks ORDER BY created_at DESC`);
+    return { webhooks: rows };
+  });
+
+  app.delete<{ Params: { id: string } }>(
+    '/webhooks/:id',
+    async (request, reply) => {
+      await pool.query(`DELETE FROM webhooks WHERE id = $1`, [request.params.id]);
+      return reply.code(204).send();
+    }
+  );
+
+  // ── s2: Scheduled tests ───────────────────────────────────────────────────
+  app.get('/schedules', async () => {
+    const { rows } = await pool.query(`SELECT * FROM schedules ORDER BY created_at DESC`);
+    return { schedules: rows };
+  });
+
+  app.post<{ Body: { name: string; cron: string; type: string; targetUrl: string; description?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown>; enabled?: boolean } }>(
+    '/schedules',
+    async (request, reply) => {
+      const { name, cron, type, targetUrl, description, options, thresholds, enabled = true } = request.body;
+      if (!name || !cron || !type || !targetUrl || !options) return reply.code(400).send({ error: 'name, cron, type, targetUrl, options are required' });
+      const { rows } = await pool.query(
+        `INSERT INTO schedules (name, cron, type, target_url, description, options, thresholds, enabled)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [name, cron, type, targetUrl, description ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, enabled]
+      );
+      await reloadSchedule(pool, rows[0].id);
+      return reply.code(201).send({ schedule: rows[0] });
+    }
+  );
+
+  app.put<{ Params: { id: string }; Body: Partial<{ name: string; cron: string; enabled: boolean; options: Record<string, unknown>; thresholds: Record<string, unknown> }> }>(
+    '/schedules/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      const updates = request.body;
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      let i = 1;
+      if (updates.name     !== undefined) { sets.push(`name = $${i++}`);    vals.push(updates.name); }
+      if (updates.cron     !== undefined) { sets.push(`cron = $${i++}`);    vals.push(updates.cron); }
+      if (updates.enabled  !== undefined) { sets.push(`enabled = $${i++}`); vals.push(updates.enabled); }
+      if (updates.options  !== undefined) { sets.push(`options = $${i++}`); vals.push(JSON.stringify(updates.options)); }
+      if (updates.thresholds !== undefined) { sets.push(`thresholds = $${i++}`); vals.push(JSON.stringify(updates.thresholds)); }
+      if (sets.length === 0) return reply.code(400).send({ error: 'No fields to update' });
+      vals.push(id);
+      const { rows } = await pool.query(`UPDATE schedules SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`, vals);
+      if (rows.length === 0) return reply.code(404).send({ error: 'Schedule not found' });
+      await reloadSchedule(pool, id);
+      return { schedule: rows[0] };
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/schedules/:id',
+    async (request, reply) => {
+      removeSchedule(request.params.id);
+      await pool.query(`DELETE FROM schedules WHERE id = $1`, [request.params.id]);
+      return reply.code(204).send();
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/schedules/:id/run',
+    async (request, reply) => {
+      const { rows } = await pool.query(`SELECT * FROM schedules WHERE id = $1`, [request.params.id]);
+      if (rows.length === 0) return reply.code(404).send({ error: 'Schedule not found' });
+      const s = rows[0];
+      const apiUrl = process.env.API_URL || 'http://api-service:3000';
+      const res = await fetch(`${apiUrl}/tests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: s.type, targetUrl: s.target_url, description: s.description ?? `Scheduled: ${s.name}`, options: s.options, thresholds: s.thresholds ?? undefined }),
+      });
+      const body = await res.json();
+      await pool.query(`UPDATE schedules SET last_run_at = NOW() WHERE id = $1`, [s.id]);
+      return reply.code(res.status).send(body);
+    }
+  );
+
+  // ── s3: Test templates ────────────────────────────────────────────────────
+  app.get('/templates', async () => {
+    const { rows } = await pool.query(`SELECT * FROM test_templates ORDER BY used_count DESC, created_at DESC`);
+    return { templates: rows };
+  });
+
+  app.post<{ Body: { name: string; description?: string; type: string; targetUrl?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown> } }>(
+    '/templates',
+    async (request, reply) => {
+      const { name, description, type, targetUrl, options, thresholds } = request.body;
+      if (!name || !type || !options) return reply.code(400).send({ error: 'name, type, options are required' });
+      const { rows } = await pool.query(
+        `INSERT INTO test_templates (name, description, type, target_url, options, thresholds)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [name, description ?? null, type, targetUrl ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null]
+      );
+      return reply.code(201).send({ template: rows[0] });
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/templates/:id',
+    async (request, reply) => {
+      const { rows } = await pool.query(`SELECT * FROM test_templates WHERE id = $1`, [request.params.id]);
+      if (rows.length === 0) return reply.code(404).send({ error: 'Template not found' });
+      await pool.query(`UPDATE test_templates SET used_count = used_count + 1 WHERE id = $1`, [request.params.id]);
+      return { template: rows[0] };
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/templates/:id',
+    async (request, reply) => {
+      await pool.query(`DELETE FROM test_templates WHERE id = $1`, [request.params.id]);
+      return reply.code(204).send();
+    }
+  );
+
+  // ── r6: PDF report ────────────────────────────────────────────────────────
+  app.get<{ Params: { testId: string } }>(
+    '/results/:testId/report.pdf',
+    async (request, reply) => {
+      const { testId } = request.params;
+      const { rows } = await pool.query(
+        `SELECT r.*, s.script FROM test_results r LEFT JOIN test_scripts s ON r.script_id = s.id WHERE r.test_id = $1`,
+        [testId]
+      );
+      if (rows.length === 0) return reply.code(404).send({ error: 'Result not found' });
+
+      const result = rows[0];
+      const doc = new PDFDocument({ margin: 50, size: 'A4' });
+      const chunks: Buffer[] = [];
+      doc.on('data', (c: Buffer) => chunks.push(c));
+
+      // Header
+      doc.fontSize(20).font('Helvetica-Bold').text('Load Test Report', { align: 'center' });
+      doc.moveDown(0.5);
+      doc.fontSize(10).font('Helvetica').fillColor('#666')
+        .text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
+      doc.moveDown(1);
+
+      // Summary box
+      doc.fontSize(12).font('Helvetica-Bold').fillColor('#111').text('Test Summary');
+      doc.moveDown(0.3);
+      const summary = [
+        ['Test ID',    result.test_id],
+        ['URL',        result.target_url],
+        ['Type',       result.type],
+        ['Status',     result.status],
+        ['Perf status', result.perf_status ?? '—'],
+        ['Started',    result.started_at ? new Date(result.started_at).toLocaleString() : '—'],
+        ['Completed',  result.completed_at ? new Date(result.completed_at).toLocaleString() : '—'],
+      ];
+      doc.fontSize(10).font('Helvetica');
+      for (const [k, v] of summary) {
+        doc.text(`${k}: `, { continued: true }).font('Helvetica-Bold').text(String(v ?? '—')).font('Helvetica');
+      }
+
+      // Metrics
+      if (result.metrics) {
+        doc.moveDown(1);
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('#111').text('Metrics');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica');
+        const m = result.metrics;
+        const metricRows: [string, unknown][] = m.type === 'backend'
+          ? [
+              ['Total requests',  m.requestsTotal],
+              ['Failed requests', m.requestsFailed],
+              ['Requests/sec',    m.rps?.toFixed(2)],
+              ['Avg response',    `${Math.round(m.avgResponseTime)}ms`],
+              ['p50 response',    `${Math.round(m.p50ResponseTime ?? 0)}ms`],
+              ['p95 response',    `${Math.round(m.p95ResponseTime)}ms`],
+              ['p99 response',    `${Math.round(m.p99ResponseTime)}ms`],
+            ]
+          : [
+              ['LCP',  `${Math.round(m.lcp)}ms`],
+              ['FCP',  `${Math.round(m.fcp)}ms`],
+              ['TTFB', `${Math.round(m.ttfb)}ms`],
+              ['FID',  `${Math.round(m.fid)}ms`],
+              ['CLS',  m.cls?.toFixed(3)],
+            ];
+        for (const [k, v] of metricRows) {
+          doc.text(`${k}: `, { continued: true }).font('Helvetica-Bold').text(String(v ?? '—')).font('Helvetica');
+        }
+        if (m.type === 'client' && m.lighthouseScore) {
+          doc.moveDown(0.5).font('Helvetica-Bold').text('Lighthouse Scores').font('Helvetica');
+          const lh = m.lighthouseScore;
+          for (const [k, v] of [['Performance', lh.performance], ['Accessibility', lh.accessibility], ['Best Practices', lh.bestPractices], ['SEO', lh.seo]] as [string, number][]) {
+            doc.text(`${k}: `, { continued: true }).font('Helvetica-Bold').text(`${v}/100`).font('Helvetica');
+          }
+        }
+      }
+
+      // Analysis
+      if (result.analysis) {
+        const a = result.analysis;
+        doc.moveDown(1);
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('#111').text('Performance Analysis');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(`Status: `, { continued: true })
+          .font('Helvetica-Bold')
+          .fillColor(a.perfStatus === 'passed' ? '#16a34a' : a.perfStatus === 'degraded' ? '#d97706' : '#dc2626')
+          .text(a.perfStatus)
+          .fillColor('#111').font('Helvetica');
+        doc.text(`Summary: ${a.summary}`);
+        if (a.thresholdViolations?.length) {
+          doc.moveDown(0.5).font('Helvetica-Bold').text('Threshold violations:').font('Helvetica');
+          for (const v of a.thresholdViolations) doc.text(`  • ${v}`);
+        }
+        if (a.diffs?.length) {
+          doc.moveDown(0.5).font('Helvetica-Bold').text('Metric diffs vs baseline/previous:').font('Helvetica');
+          for (const d of a.diffs) {
+            const sign = d.diffPercent > 0 ? '+' : '';
+            doc.text(`  ${d.metric}: ${d.current} (${sign}${d.diffPercent}%) — ${d.status}`);
+          }
+        }
+      }
+
+      doc.end();
+
+      await new Promise<void>(resolve => doc.on('end', resolve));
+      const pdf = Buffer.concat(chunks);
+      return reply
+        .header('Content-Type', 'application/pdf')
+        .header('Content-Disposition', `attachment; filename="report-${testId.slice(0, 8)}.pdf"`)
+        .send(pdf);
     }
   );
 

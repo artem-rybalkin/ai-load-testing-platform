@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseK6Output, aggregateWindow } from '../parser';
+import { parseK6Output, aggregateWindow, parseK6StatusCodes } from '../parser';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -187,5 +187,46 @@ describe('aggregateWindow', () => {
     const result = aggregateWindow(lines);
 
     expect(result!.errorRate).toBe(0);
+  });
+});
+
+// ─── parseK6StatusCodes ───────────────────────────────────────────────────────
+
+describe('parseK6StatusCodes', () => {
+  const makeHttpReqPoint = (status: string) =>
+    JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, time: new Date().toISOString(), tags: { status } } });
+
+  it('counts requests by status code', () => {
+    const json = [
+      makeHttpReqPoint('200'),
+      makeHttpReqPoint('200'),
+      makeHttpReqPoint('500'),
+    ].join('\n');
+
+    const result = parseK6StatusCodes(json);
+
+    expect(result['200']).toBe(2);
+    expect(result['500']).toBe(1);
+  });
+
+  it('returns empty object for empty input', () => {
+    expect(parseK6StatusCodes('')).toEqual({});
+  });
+
+  it('skips non-http_reqs metrics and malformed lines', () => {
+    const json = [
+      makeJsonPoint('vus', 5),
+      'not json',
+      makeHttpReqPoint('404'),
+    ].join('\n');
+
+    const result = parseK6StatusCodes(json);
+
+    expect(Object.keys(result)).toEqual(['404']);
+  });
+
+  it('ignores points without status tag', () => {
+    const noStatus = JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, tags: {} } });
+    expect(parseK6StatusCodes(noStatus)).toEqual({});
   });
 });

@@ -39,10 +39,25 @@ export const parseK6Output = (output: string): BackendMetrics => {
     requestsTotal: total,
     requestsFailed: Math.round(total * getFailRate() / 100),
     avgResponseTime: getAvg('http_req_duration'),
+    p50ResponseTime: getPercentile('http_req_duration', '50'),
     p95ResponseTime: getPercentile('http_req_duration', '95'),
     p99ResponseTime: getPercentile('http_req_duration', '99'),
     rps: getRate('http_reqs'),
   };
+};
+
+export const parseK6StatusCodes = (jsonContent: string): Record<string, number> => {
+  const counts: Record<string, number> = {};
+  for (const line of jsonContent.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type !== 'Point' || obj.metric !== 'http_reqs') continue;
+      const status: string = obj.data?.tags?.status;
+      if (status) counts[status] = (counts[status] ?? 0) + 1;
+    } catch { /* skip malformed */ }
+  }
+  return counts;
 };
 
 interface K6JsonPoint {

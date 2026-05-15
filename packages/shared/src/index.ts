@@ -1,6 +1,16 @@
 export type TestType = 'backend' | 'client-side';
 
-export type TestStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type TestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface SLOThresholds {
+  p95?: number;       // ms — default 1000
+  avg?: number;       // ms — default 500
+  errorRate?: number; // % — default 1
+  lcp?: number;       // ms — default 2500
+  fcp?: number;       // ms — default 1800
+  ttfb?: number;      // ms — default 800
+  cls?: number;       // score — default 0.1
+}
 
 export interface TestRequest {
   id: string;
@@ -8,6 +18,7 @@ export interface TestRequest {
   targetUrl: string;
   description: string;
   options: BackendTestOptions | ClientTestOptions;
+  thresholds?: SLOThresholds;
   createdAt: string;
 }
 
@@ -32,6 +43,7 @@ export interface TestResult {
   targetUrl: string;
   status: TestStatus;
   metrics: BackendMetrics | ClientMetrics;
+  thresholds?: SLOThresholds;
   startedAt: string;
   completedAt?: string;
   perfStatus?: 'passed' | 'degraded' | 'failed';
@@ -54,9 +66,11 @@ export interface BackendMetrics {
   requestsTotal: number;
   requestsFailed: number;
   avgResponseTime: number;
+  p50ResponseTime: number;
   p95ResponseTime: number;
   p99ResponseTime: number;
   rps: number;
+  statusCodes?: Record<string, number>;
 }
 
 export interface LighthouseScore {

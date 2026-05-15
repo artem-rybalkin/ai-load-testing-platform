@@ -3,10 +3,13 @@
 import { useEffect, useState } from 'react';
 import { getResults, TestResult } from '@/lib/api';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function ResultsPage() {
   const [results, setResults] = useState<TestResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<string[]>([]);
+  const router = useRouter();
 
   useEffect(() => {
     const fetch = async () => {
@@ -18,6 +21,12 @@ export default function ResultsPage() {
     const interval = setInterval(fetch, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const toggleSelect = (testId: string) => {
+    setSelected(prev =>
+      prev.includes(testId) ? prev.filter(id => id !== testId) : prev.length < 2 ? [...prev, testId] : [prev[1], testId]
+    );
+  };
 
   const formatDate = (d: string) => new Date(d).toLocaleString();
 
@@ -33,9 +42,22 @@ export default function ResultsPage() {
 
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-gray-900">All results</h1>
-          <Link href="/" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-            + New test
-          </Link>
+          <div className="flex items-center gap-3">
+            {selected.length === 2 && (
+              <button
+                onClick={() => router.push(`/results/compare?a=${selected[0]}&b=${selected[1]}`)}
+                className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600"
+              >
+                Compare selected ({selected.length}/2)
+              </button>
+            )}
+            {selected.length === 1 && (
+              <span className="text-sm text-gray-500">Select one more to compare</span>
+            )}
+            <Link href="/" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+              + New test
+            </Link>
+          </div>
         </div>
 
         {loading ? (
@@ -50,6 +72,7 @@ export default function ResultsPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
+                  <th className="px-4 py-3 w-8"></th>
                   <th className="text-left px-4 py-3 text-gray-600 font-medium">URL</th>
                   <th className="text-left px-4 py-3 text-gray-600 font-medium">Type</th>
                   <th className="text-left px-4 py-3 text-gray-600 font-medium">Status</th>
@@ -61,8 +84,21 @@ export default function ResultsPage() {
               </thead>
               <tbody>
                 {results.map((r, i) => (
-                  <tr key={r.id} className={`border-b border-gray-100 hover:bg-gray-50 ${i % 2 === 0 ? '' : 'bg-gray-50/50'}`}>
-                    <td className="px-4 py-3 text-gray-900 font-medium max-w-xs truncate">{r.target_url}</td>
+                  <tr key={r.id} className={`border-b border-gray-100 hover:bg-gray-50 ${i % 2 === 0 ? '' : 'bg-gray-50/50'} ${selected.includes(r.test_id) ? 'bg-amber-50' : ''}`}>
+                    <td className="px-4 py-3">
+                      {r.status === 'completed' && (
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(r.test_id)}
+                          onChange={() => toggleSelect(r.test_id)}
+                          className="rounded border-gray-300 text-amber-500 focus:ring-amber-400"
+                        />
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-gray-900 font-medium max-w-xs truncate">
+                      {r.is_baseline && <span className="mr-1 text-amber-500 text-xs font-semibold">[B]</span>}
+                      {r.target_url}
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                         r.type === 'backend' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'

@@ -1,14 +1,20 @@
 import amqplib from 'amqplib';
 
-import { EnrichedTestRequest, TestRequest } from '@alt/shared';
+import { EnrichedTestRequest } from '@alt/shared';
+import { log } from './logger';
 
 export const QUEUES = {
   AI_REQUESTS: 'ai-requests',
   BACKEND: 'backend-tests',
-  CLIENT: 'client-tests'
+  CLIENT:  'client-tests',
 } as const;
 
+// Fanout exchange — every worker replica gets every cancel message
+const CANCEL_EXCHANGE = 'cancel-fanout';
+
 let channel: amqplib.Channel | null = null;
+
+export const isQueueConnected = (): boolean => channel !== null;
 
 export const connectQueue = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL || 'amqp://alt_user:alt_password@localhost:5672';
@@ -17,22 +23,30 @@ export const connectQueue = async (): Promise<void> => {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`Connecting to RabbitMQ (attempt ${attempt}/${maxRetries})...`);
+      log.info({ attempt, maxRetries }, 'Connecting to RabbitMQ');
       const connection = await amqplib.connect(url);
       channel = await connection.createChannel();
 
-      await channel.assertQueue(QUEUES.AI_REQUESTS, { durable: true });
-      await channel.assertQueue(QUEUES.BACKEND, { durable: true });
-      await channel.assertQueue(QUEUES.CLIENT, { durable: true });
+      await channel.assertQueue(QUEUES.AI_REQUESTS,  { durable: true });
+      await channel.assertQueue(QUEUES.BACKEND,      { durable: true });
+      await channel.assertQueue(QUEUES.CLIENT,       { durable: true });
+      await channel.assertExchange(CANCEL_EXCHANGE,  'fanout', { durable: true });
 
-      console.log('Connected to RabbitMQ');
+      log.info('Connected to RabbitMQ');
       return;
     } catch (err) {
-      console.error(`RabbitMQ connection failed (attempt ${attempt}):`, (err as Error).message);
+      log.error({ attempt, err: (err as Error).message }, 'RabbitMQ connection failed');
       if (attempt === maxRetries) throw err;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
+};
+
+export const publishCancel = (testId: string): void => {
+  if (!channel) throw new Error('Queue not connected');
+  // Publish to fanout exchange — all worker replicas receive this
+  channel.publish(CANCEL_EXCHANGE, '', Buffer.from(JSON.stringify({ testId })));
+  log.info({ testId }, 'Cancel signal published to fanout exchange');
 };
 
 export const publishTest = (test: EnrichedTestRequest, skipAI: boolean): void => {
@@ -42,9 +56,9 @@ export const publishTest = (test: EnrichedTestRequest, skipAI: boolean): void =>
   if (skipAI) {
     const targetQueue = test.type === 'backend' ? QUEUES.BACKEND : QUEUES.CLIENT;
     channel.sendToQueue(targetQueue, message, { persistent: true });
-    console.log(`Test ${test.id} routed directly to ${targetQueue} (script reused)`);
+    log.info({ testId: test.id, queue: targetQueue }, 'Test routed directly to worker (script reused)');
   } else {
     channel.sendToQueue(QUEUES.AI_REQUESTS, message, { persistent: true });
-    console.log(`Test ${test.id} sent to AI for script generation`);
+    log.info({ testId: test.id }, 'Test sent to AI for script generation');
   }
 };

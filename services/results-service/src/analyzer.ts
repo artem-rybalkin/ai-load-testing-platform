@@ -1,4 +1,4 @@
-import { BackendMetrics, ClientMetrics, LighthouseScore } from '@alt/shared';
+import { BackendMetrics, ClientMetrics, LighthouseScore, SLOThresholds } from '@alt/shared';
 
 export type PerfStatus = 'passed' | 'degraded' | 'failed';
 
@@ -33,33 +33,37 @@ const CLIENT_THRESHOLDS = {
 
 const LIGHTHOUSE_THRESHOLD_PERFORMANCE = 50; // score 0-100
 
-const getDiffStatus = (diffPercent: number, metric: string): 'better' | 'same' | 'worse' => {
-  const threshold = 10; // 10% зміна вважається значущою
-  // Для CLS менше = краще
-  if (Math.abs(diffPercent) < threshold) return 'same';
+const getDiffStatus = (diffPercent: number): 'better' | 'same' | 'worse' => {
+  if (Math.abs(diffPercent) < 10) return 'same';
   return diffPercent < 0 ? 'better' : 'worse';
 };
 
 const analyzeBackend = (
   current: BackendMetrics,
-  previous: BackendMetrics | null
+  previous: BackendMetrics | null,
+  thresholds?: SLOThresholds
 ): AnalysisResult => {
+  const t = {
+    p95ResponseTime: thresholds?.p95  ?? BACKEND_THRESHOLDS.p95ResponseTime,
+    avgResponseTime: thresholds?.avg  ?? BACKEND_THRESHOLDS.avgResponseTime,
+    errorRate:       thresholds?.errorRate ?? BACKEND_THRESHOLDS.errorRate,
+  };
+
   const thresholdViolations: string[] = [];
   const diffs: MetricDiff[] = [];
 
-  // Перевіряємо threshold violations
   const currentErrorRate = current.requestsTotal > 0
     ? (current.requestsFailed / current.requestsTotal) * 100
     : 0;
 
-  if (current.p95ResponseTime > BACKEND_THRESHOLDS.p95ResponseTime) {
-    thresholdViolations.push(`p95 response time ${Math.round(current.p95ResponseTime)}ms exceeds threshold ${BACKEND_THRESHOLDS.p95ResponseTime}ms`);
+  if (current.p95ResponseTime > t.p95ResponseTime) {
+    thresholdViolations.push(`p95 response time ${Math.round(current.p95ResponseTime)}ms exceeds threshold ${t.p95ResponseTime}ms`);
   }
-  if (current.avgResponseTime > BACKEND_THRESHOLDS.avgResponseTime) {
-    thresholdViolations.push(`avg response time ${Math.round(current.avgResponseTime)}ms exceeds threshold ${BACKEND_THRESHOLDS.avgResponseTime}ms`);
+  if (current.avgResponseTime > t.avgResponseTime) {
+    thresholdViolations.push(`avg response time ${Math.round(current.avgResponseTime)}ms exceeds threshold ${t.avgResponseTime}ms`);
   }
-  if (currentErrorRate > BACKEND_THRESHOLDS.errorRate) {
-    thresholdViolations.push(`error rate ${currentErrorRate.toFixed(2)}% exceeds threshold ${BACKEND_THRESHOLDS.errorRate}%`);
+  if (currentErrorRate > t.errorRate) {
+    thresholdViolations.push(`error rate ${currentErrorRate.toFixed(2)}% exceeds threshold ${t.errorRate}%`);
   }
 
   // Порівнюємо з попереднім тестом
@@ -85,7 +89,7 @@ const analyzeBackend = (
         current: Math.round(curr * 10) / 10,
         previous: Math.round(prev * 10) / 10,
         diffPercent: Math.round(rawDiff * 10) / 10,
-        status: getDiffStatus(diffPercent, key)
+        status: getDiffStatus(diffPercent)
       });
     }
   }
@@ -107,23 +111,30 @@ const analyzeBackend = (
 
 const analyzeClient = (
   current: ClientMetrics,
-  previous: ClientMetrics | null
+  previous: ClientMetrics | null,
+  thresholds?: SLOThresholds
 ): AnalysisResult => {
+  const t = {
+    lcp:  thresholds?.lcp  ?? CLIENT_THRESHOLDS.lcp,
+    fcp:  thresholds?.fcp  ?? CLIENT_THRESHOLDS.fcp,
+    ttfb: thresholds?.ttfb ?? CLIENT_THRESHOLDS.ttfb,
+    cls:  thresholds?.cls  ?? CLIENT_THRESHOLDS.cls,
+  };
+
   const thresholdViolations: string[] = [];
   const diffs: MetricDiff[] = [];
 
-  // Threshold violations
-  if (current.lcp > CLIENT_THRESHOLDS.lcp) {
-    thresholdViolations.push(`LCP ${Math.round(current.lcp)}ms exceeds threshold ${CLIENT_THRESHOLDS.lcp}ms`);
+  if (current.lcp > t.lcp) {
+    thresholdViolations.push(`LCP ${Math.round(current.lcp)}ms exceeds threshold ${t.lcp}ms`);
   }
-  if (current.fcp > CLIENT_THRESHOLDS.fcp) {
-    thresholdViolations.push(`FCP ${Math.round(current.fcp)}ms exceeds threshold ${CLIENT_THRESHOLDS.fcp}ms`);
+  if (current.fcp > t.fcp) {
+    thresholdViolations.push(`FCP ${Math.round(current.fcp)}ms exceeds threshold ${t.fcp}ms`);
   }
-  if (current.ttfb > CLIENT_THRESHOLDS.ttfb) {
-    thresholdViolations.push(`TTFB ${Math.round(current.ttfb)}ms exceeds threshold ${CLIENT_THRESHOLDS.ttfb}ms`);
+  if (current.ttfb > t.ttfb) {
+    thresholdViolations.push(`TTFB ${Math.round(current.ttfb)}ms exceeds threshold ${t.ttfb}ms`);
   }
-  if (current.cls > CLIENT_THRESHOLDS.cls) {
-    thresholdViolations.push(`CLS ${current.cls.toFixed(3)} exceeds threshold ${CLIENT_THRESHOLDS.cls}`);
+  if (current.cls > t.cls) {
+    thresholdViolations.push(`CLS ${current.cls.toFixed(3)} exceeds threshold ${t.cls}`);
   }
 
   // Lighthouse threshold
@@ -156,7 +167,7 @@ const analyzeClient = (
         current: key === 'cls' ? Math.round(curr * 1000) / 1000 : Math.round(curr),
         previous: key === 'cls' ? Math.round(prev * 1000) / 1000 : Math.round(prev),
         diffPercent: Math.round(rawDiff * 10) / 10,
-        status: getDiffStatus(rawDiff, key)
+        status: getDiffStatus(rawDiff)
       });
     }
 
@@ -180,7 +191,7 @@ const analyzeClient = (
           current: curr,
           previous: prev,
           diffPercent: Math.round(rawDiff * 10) / 10,
-          status: getDiffStatus(-rawDiff, key), // invert: higher score = better
+          status: getDiffStatus(-rawDiff), // invert: higher score = better
         });
       }
     }
@@ -201,16 +212,19 @@ const analyzeClient = (
 
 export const analyzeResult = (
   currentMetrics: BackendMetrics | ClientMetrics,
-  previousMetrics: BackendMetrics | ClientMetrics | null
+  previousMetrics: BackendMetrics | ClientMetrics | null,
+  thresholds?: SLOThresholds
 ): AnalysisResult => {
   if (currentMetrics.type === 'backend') {
     return analyzeBackend(
       currentMetrics as BackendMetrics,
-      previousMetrics as BackendMetrics | null
+      previousMetrics as BackendMetrics | null,
+      thresholds
     );
   }
   return analyzeClient(
     currentMetrics as ClientMetrics,
-    previousMetrics as ClientMetrics | null
+    previousMetrics as ClientMetrics | null,
+    thresholds
   );
 };

@@ -1,13 +1,16 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { createTest } from '@/lib/api';
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { createTest, getTemplates, createTemplate, Template } from '@/lib/api';
 
 export default function Home() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [form, setForm] = useState({
     type: 'backend' as 'backend' | 'client-side',
     targetUrl: '',
@@ -19,6 +22,64 @@ export default function Home() {
     collectWebVitals: true,
     profile: 'load' as 'load' | 'spike' | 'capacity' | 'soak'
   });
+
+  useEffect(() => {
+    getTemplates().then(d => setTemplates(d.templates ?? [])).catch(() => {});
+    const type = searchParams.get('type') as 'backend' | 'client-side' | null;
+    const targetUrl = searchParams.get('targetUrl');
+    const description = searchParams.get('description');
+    const vus = searchParams.get('vus');
+    const sessions = searchParams.get('sessions');
+    const duration = searchParams.get('duration');
+    if (type || targetUrl) {
+      setForm(f => ({
+        ...f,
+        ...(type ? { type } : {}),
+        ...(targetUrl ? { targetUrl } : {}),
+        ...(description ? { description } : {}),
+        ...(vus ? { vus: Number(vus) } : {}),
+        ...(sessions ? { sessions: Number(sessions) } : {}),
+        ...(duration ? { duration } : {}),
+      }));
+    }
+  }, [searchParams]);
+
+  const handleLoadTemplate = (id: string) => {
+    const t = templates.find(t => t.id === id);
+    if (!t) return;
+    const opts = t.options as Record<string, unknown>;
+    setForm(f => ({
+      ...f,
+      type: t.type,
+      ...(t.target_url ? { targetUrl: t.target_url } : {}),
+      ...(t.description ? { description: t.description } : {}),
+      ...(opts.vus ? { vus: Number(opts.vus) } : {}),
+      ...(opts.sessions ? { sessions: Number(opts.sessions) } : {}),
+      ...(opts.duration ? { duration: String(opts.duration) } : {}),
+    }));
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!form.description && !form.targetUrl) { setError('Add a description or URL before saving as template'); return; }
+    setSavingTemplate(true);
+    try {
+      const options = form.type === 'backend'
+        ? { vus: form.vus, duration: form.duration }
+        : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals };
+      await createTemplate({
+        name: form.description || form.targetUrl,
+        description: null,
+        type: form.type,
+        target_url: form.targetUrl || null,
+        options,
+        thresholds: null,
+      });
+      const data = await getTemplates();
+      setTemplates(data.templates ?? []);
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!form.targetUrl) { setError('URL is required'); return; }
@@ -55,6 +116,21 @@ export default function Home() {
           <h1 className="text-3xl font-bold text-gray-900">AI Load Testing Platform</h1>
           <p className="text-gray-500 mt-1">AI-powered performance testing for backend APIs and browser</p>
         </div>
+
+        {templates.length > 0 && (
+          <div className="mb-4">
+            <select
+              onChange={e => handleLoadTemplate(e.target.value)}
+              defaultValue=""
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+            >
+              <option value="" disabled>Load from template…</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name} ({t.type})</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-5">
 
@@ -196,6 +272,14 @@ export default function Home() {
             className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading ? 'Creating test...' : 'Run test'}
+          </button>
+          <button
+            type="button"
+            onClick={handleSaveTemplate}
+            disabled={savingTemplate}
+            className="w-full py-2 border border-gray-300 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+          >
+            {savingTemplate ? 'Saving…' : 'Save as template'}
           </button>
         </div>
 

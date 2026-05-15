@@ -28,6 +28,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex gap-4">
               <a href="/" className="text-sm text-gray-600 hover:text-gray-900">New test</a>
               <a href="/results" className="text-sm text-gray-600 hover:text-gray-900">Results</a>
+              <a href="/schedules" className="text-sm text-gray-600 hover:text-gray-900">Schedules</a>
+              <a href="/templates" className="text-sm text-gray-600 hover:text-gray-900">Templates</a>
+              <a href="/webhooks" className="text-sm text-gray-600 hover:text-gray-900">Webhooks</a>
             </div>
           </div>
         </nav>

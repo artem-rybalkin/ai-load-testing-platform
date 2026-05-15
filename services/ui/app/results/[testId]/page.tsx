@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { getResult, getLiveMetrics, LiveMetricPoint, TestResult } from '@/lib/api';
+import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, LiveMetricPoint, TestResult, TrendPoint } from '@/lib/api';
 import Link from 'next/link';
 import BackendChart from '@/app/components/BackendChart';
 import ClientChart from '@/app/components/ClientChart';
 import AnalysisPanel from '@/app/components/AnalysisPanel';
 import RealtimeChart from '@/app/components/RealtimeChart';
+import TrendChart from '@/app/components/TrendChart';
 
 
 const MetricCard = ({ label, value, unit }: { label: string; value: number | string; unit?: string }) => (
@@ -21,10 +22,11 @@ const MetricCard = ({ label, value, unit }: { label: string; value: number | str
 
 const StatusBadge = ({ status }: { status: string }) => {
   const colors: Record<string, string> = {
-    completed: 'bg-green-100 text-green-700',
-    running:   'bg-blue-100 text-blue-700',
-    pending:   'bg-yellow-100 text-yellow-700',
-    failed:    'bg-red-100 text-red-700'
+    completed:  'bg-green-100 text-green-700',
+    running:    'bg-blue-100 text-blue-700',
+    pending:    'bg-yellow-100 text-yellow-700',
+    failed:     'bg-red-100 text-red-700',
+    cancelled:  'bg-gray-100 text-gray-600',
   };
   return (
     <span className={`px-3 py-1 rounded-full text-xs font-medium ${colors[status] || 'bg-gray-100 text-gray-700'}`}>
@@ -38,12 +40,47 @@ export default function ResultPage() {
   const [result, setResult] = useState<TestResult | null>(null);
   const [livePoints, setLivePoints] = useState<LiveMetricPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [baselineBusy, setBaselineBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    try {
+      await cancelTest(testId);
+      const data = await getResult(testId);
+      if (data.result) setResult(data.result);
+    } finally {
+      setCancelling(false);
+    }
+  };
+  const [trend, setTrend] = useState<TrendPoint[]>([]);
+
+  const handleBaseline = async () => {
+    if (!result) return;
+    setBaselineBusy(true);
+    try {
+      if (result.is_baseline) {
+        await clearBaseline(testId);
+      } else {
+        await setBaseline(testId);
+      }
+      const data = await getResult(testId);
+      if (data.result) setResult(data.result);
+    } finally {
+      setBaselineBusy(false);
+    }
+  };
 
   useEffect(() => {
     const fetchResult = async () => {
       try {
         const data = await getResult(testId);
-        if (data.result) setResult(data.result);
+        if (data.result) {
+          setResult(data.result);
+          if (data.result.status === 'completed') {
+            getTrend(data.result.target_url).then(d => setTrend(d.trend ?? [])).catch(() => {});
+          }
+        }
       } catch {
         console.error('Failed to fetch result');
       } finally {
@@ -125,10 +162,49 @@ if (!result) return (
                   script reused
                 </span>
               )}
+              {result.is_baseline && (
+                <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
+                  baseline
+                </span>
+              )}
             </div>
             <p className="text-gray-500 text-sm">{result.target_url}</p>
           </div>
-          <Link href="/results" className="text-sm text-blue-600 hover:underline">← All results</Link>
+          <div className="flex items-center gap-3">
+            {(result.status === 'pending' || result.status === 'running') && (
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-red-300 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+              >
+                {cancelling ? 'Cancelling…' : 'Cancel test'}
+              </button>
+            )}
+            {result.status === 'completed' && (
+              <>
+                <button
+                  onClick={handleBaseline}
+                  disabled={baselineBusy}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${
+                    result.is_baseline
+                      ? 'border-amber-300 text-amber-700 hover:bg-amber-50'
+                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {result.is_baseline ? 'Clear baseline' : 'Set as baseline'}
+                </button>
+                <a
+                  href={`${process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-300 text-gray-600 hover:bg-gray-50"
+                >
+                  Download PDF
+                </a>
+              </>
+            )}
+            <Link href="/results" className="text-sm text-blue-600 hover:underline">← All results</Link>
+          </div>
         </div>
 
         {isBackend && livePoints.length > 0 && (
@@ -156,13 +232,27 @@ if (!result) return (
           <div className="space-y-6">
             {isBackend ? (
                 <>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <MetricCard label="Total requests" value={m.requestsTotal} />
                 <MetricCard label="Failed requests" value={m.requestsFailed} />
                 <MetricCard label="Requests/sec" value={m.rps?.toFixed(1) ?? 0} />
                 <MetricCard label="Avg response time" value={Math.round(m.avgResponseTime)} unit="ms" />
+                <MetricCard label="p50 response time" value={Math.round(m.p50ResponseTime ?? 0)} unit="ms" />
                 <MetricCard label="p95 response time" value={Math.round(m.p95ResponseTime)} unit="ms" />
                 <MetricCard label="p99 response time" value={Math.round(m.p99ResponseTime)} unit="ms" />
+                {m.statusCodes && Object.keys(m.statusCodes as unknown as Record<string,number>).length > 0 && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <p className="text-xs text-gray-500 mb-1">Status codes</p>
+                    <div className="space-y-0.5">
+                      {Object.entries(m.statusCodes as unknown as Record<string,number>).sort().map(([code, count]) => (
+                        <p key={code} className="text-sm font-semibold text-gray-900">
+                          <span className={`mr-1 ${code.startsWith('2') ? 'text-green-600' : code.startsWith('4') || code.startsWith('5') ? 'text-red-600' : 'text-gray-600'}`}>{code}</span>
+                          <span className="text-gray-500 font-normal text-xs">×{count}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
                       <BackendChart metrics={m as any} />
       </>
@@ -170,8 +260,20 @@ if (!result) return (
       <ClientChart metrics={m as any} />
     )}
             {result.analysis && (
-        <AnalysisPanel analysis={result.analysis as any} />
-        )}
+              <AnalysisPanel analysis={result.analysis as any} />
+            )}
+            {trend.length > 1 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <h2 className="text-sm font-medium text-gray-700 mb-3">
+                  Trend for this URL <span className="text-gray-400 font-normal">({trend.length} runs)</span>
+                </h2>
+                <TrendChart
+                  trend={trend}
+                  metricKey={result.type === 'backend' ? 'p95ResponseTime' : 'lcp'}
+                  label={result.type === 'backend' ? 'p95 (ms)' : 'LCP (ms)'}
+                />
+              </div>
+            )}
             {result.script && (
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <h2 className="text-sm font-medium text-gray-700 mb-3">Generated script</h2>

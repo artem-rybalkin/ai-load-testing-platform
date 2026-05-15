@@ -2,10 +2,13 @@ import { Pool } from 'pg';
 
 import { TestType, TestScript, BackendTestOptions } from '@alt/shared';
 import { buildK6Options, replaceK6Options } from './options';
+import { log } from './logger';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://alt_user:alt_password@localhost:5432/alt_db'
 });
+
+export const checkDbHealth = (): Promise<void> => pool.query('SELECT 1').then(() => undefined);
 
 export const findExistingScript = async (
   targetUrl: string,
@@ -30,7 +33,7 @@ export const findExistingScript = async (
   if (testType === 'backend' && options) {
     const newOptions = buildK6Options(options);
     script = replaceK6Options(script, newOptions);
-    console.log(`Injected new options (profile=${options.profile ?? 'load'}, vus=${options.vus}, duration=${options.duration}) into cached script`);
+    log.info({ profile: options.profile ?? 'load', vus: options.vus, duration: options.duration }, 'Injected new options into cached script');
   }
 
   return {

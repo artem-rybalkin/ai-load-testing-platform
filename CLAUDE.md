@@ -272,35 +272,42 @@ npm run lint
 ### Backlog — Phase 2 (Reliability & Correctness)
 
 #### Critical — production-breaking
-- [ ] `r1` — Dead-letter queue + max retry count (x-death header, nack → DLQ after 3 attempts)
-- [ ] `r2` — Test cancellation API (`POST /tests/:testId/cancel`, kill k6 PID, update status)
-- [ ] `r3` — Concurrent workers (remove prefetch=1 bottleneck, configurable parallelism)
-- [ ] `r4` — k6 execution timeout (kill after max duration + grace, prevent hanging)
-- [ ] `r5` — Stale test cleanup (cron: mark tests 'failed' if running > threshold with no heartbeat)
+- [x] `r1` — Dead-letter queue + max retry count (`x-retry-count` header; republish up to 3×; route to `<queue>.dlq` on exhaustion; all 4 consumers updated)
+- [x] `r2` — Test cancellation (`POST /tests/:testId/cancel` → api-service; publishes to `cancel-tests` queue; workers kill k6 PID / close Puppeteer browser; status → `cancelled`; Cancel button in UI)
+- [x] `r3` — Concurrent workers (`WORKER_CONCURRENCY` env var replaces hardcoded `prefetch(1)`; backend=1, client=2, ai=3 defaults in docker-compose; scale with `docker compose up --scale worker-backend=N`)
+- [x] `r4` — k6/Puppeteer execution timeout (`K6_MAX_DURATION_MS=600000`; `PUPPETEER_MAX_DURATION_MS=300000`; SIGTERM after timeout + SIGKILL after grace period)
+- [x] `r5` — Stale test cleanup (`setInterval` every 60s in results-service; `running > 15 min` → failed; `pending > 30 min` → failed; configurable via `STALE_RUNNING_MINUTES` / `STALE_PENDING_MINUTES`)
 
 #### Functional — core performance-testing value
-- [ ] `f1` — Baseline management (`POST /results/:testId/baseline`, compare always vs baseline not prev)
-- [ ] `f2` — Configurable SLO thresholds per test request (`{ thresholds: { p95: 500, errorRate: 0.5 } }`)
-- [ ] `f3` — p50 + error breakdown by status code (extend parseK6Output + BackendMetrics type)
-- [ ] `f4` — Script dry-run validation (`k6 run --dry-run` before enqueue, reject invalid AI output)
-- [ ] `f5` — Manual run comparison (`GET /results/compare?a=<id>&b=<id>`, diff view in UI)
-- [ ] `f6` — Trend chart per URL (sparklines over all runs for same URL, `/results?url=...`)
-- [ ] `f7` — Notifications / webhooks (`POST /webhooks`, trigger on perf_status=failed/degraded)
+- [x] `f1` — Baseline management (`POST /results/:testId/baseline`, compare always vs baseline not prev)
+  → `is_baseline` column on `test_results`; consumer orders `is_baseline DESC, created_at DESC`; UI badge + Set/Clear button on result page
+- [x] `f2` — Configurable SLO thresholds per test request (`{ thresholds: { p95: 500, errorRate: 0.5 } }`)
+  → `SLOThresholds` type in shared; flows `TestRequest → workers → TestResult → analyzeResult`; overrides defaults per-run
+- [x] `f3` — p50 + error breakdown by status code (extend parseK6Output + BackendMetrics type)
+  → `p50ResponseTime` from text regex; `statusCodes: Record<string,number>` from k6 JSON tags; shown in result page
+- [x] `f4` — Script dry-run validation (`k6 inspect` before run, reject invalid AI output)
+  → `validateScript(path)` spawns `k6 inspect`; throws on non-zero exit; worker nacks the message
+- [x] `f5` — Manual run comparison (`GET /results/compare?a=<id>&b=<id>`, diff view in UI)
+  → checkboxes in results list; compare bar appears at 2 selected; `/results/compare?a=&b=` page with Δ table
+- [x] `f6` — Trend chart per URL (`GET /results/trend?url=...`, TrendChart component)
+  → `TrendChart.tsx` (Recharts LineChart); shows p95/LCP trend on result detail page when ≥2 runs exist
+- [x] `f7` — Notifications / webhooks (`POST /webhooks`, trigger on perf_status=failed/degraded)
+  → `webhooks` table; CRUD at `/webhooks`; consumer fires matching webhooks after save; `/webhooks` management page
 - [x] `u8` — Lighthouse integration
   → `LighthouseScore` type in `@alt/shared`; worker-client runs Lighthouse after Puppeteer sessions
      reusing the same Chrome via port; `performance < 50` → analyzer marks failed; score gauges in ClientChart.tsx
 
 #### Reliability & Ops
-- [ ] `o1` — Deep health checks (pool.query('SELECT 1') + RabbitMQ ping, return 503 if deps down)
-- [ ] `o2` — Docker restart policy (`restart: unless-stopped` on all services)
-- [ ] `o3` — PostgreSQL indexes (target_url+type+status on test_results, test_id on live_metrics)
-- [ ] `o4` — Structured logging with Pino (JSON output, testId/requestId in every line)
+- [x] `o1` — Deep health checks (pool.query('SELECT 1') + RabbitMQ ping, return 503 if deps down)
+- [x] `o2` — Docker restart policy (`restart: unless-stopped` on all services)
+- [x] `o3` — PostgreSQL indexes (target_url+type+status on test_results, test_id on live_metrics)
+- [x] `o4` — Structured logging with Pino (JSON output, testId/requestId in every line)
 
 #### Strategic
-- [ ] `s1` — Horizontal worker scaling (docker compose scale worker-backend=N, verify queue handles it)
-- [ ] `s2` — Scheduled tests (`POST /schedules`, cron expression, auto-run + report)
-- [ ] `s3` — Test template library (save URL+description+params+SLO as reusable test plan)
-- [ ] `r6` — PDF report generation and storage
+- [x] `s1` — Horizontal worker scaling (WORKER_CONCURRENCY env var, cancel-fanout exchange for multi-replica cancel)
+- [x] `s2` — Scheduled tests (`POST /schedules`, cron expression, auto-run + report, node-cron scheduler)
+- [x] `s3` — Test template library (save URL+description+params as reusable test plan, load from template on home page)
+- [x] `r6` — PDF report generation (`GET /results/:testId/report.pdf`, pdfkit, Download PDF button in UI)
 
 ### Phase 2 — Cloud Deployment
 - Compare AWS vs GCP vs Azure first

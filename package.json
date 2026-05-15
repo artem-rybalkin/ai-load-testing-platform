@@ -36,6 +36,7 @@
     "vitest": "^4.1.6"
   },
   "dependencies": {
-    "amqplib": "^1.0.3"
+    "amqplib": "^1.0.3",
+    "pino": "^10.3.1"
   }
 }

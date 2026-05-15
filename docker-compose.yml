@@ -1,9 +1,9 @@
 
-
 services:
   # ── Infrastructure ──────────────────────────────────────
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: alt_user
       POSTGRES_PASSWORD: alt_password
@@ -20,6 +20,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -32,6 +33,7 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: alt_user
       RABBITMQ_DEFAULT_PASS: alt_password
@@ -51,6 +53,7 @@ services:
     build:
       context: .
       dockerfile: services/api-service/Dockerfile
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
@@ -71,6 +74,7 @@ services:
     build:
       context: .
       dockerfile: services/worker-backend/Dockerfile
+    restart: unless-stopped
     ports:
       - "3002:3002"
     environment:
@@ -79,6 +83,8 @@ services:
       REDIS_URL: redis://redis:6379
       DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
       RESULTS_URL: http://results-service:3004
+      WORKER_CONCURRENCY: 1          # increase for parallel k6 runs per replica
+      K6_MAX_DURATION_MS: 600000     # 10 minutes hard timeout
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -91,12 +97,14 @@ services:
     build:
       context: .
       dockerfile: services/ai-service/Dockerfile
+    restart: unless-stopped
     ports:
       - "3001:3001"
     environment:
       PORT: 3001
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      WORKER_CONCURRENCY: 3          # AI calls are I/O-bound, parallelise
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -105,12 +113,15 @@ services:
     build:
       context: .
       dockerfile: services/worker-client/Dockerfile
+    restart: unless-stopped
     ports:
       - "3003:3003"
     environment:
       PORT: 3003
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       REDIS_URL: redis://redis:6379
+      WORKER_CONCURRENCY: 2          # Puppeteer is I/O-bound, safe to run 2 per replica
+      PUPPETEER_MAX_DURATION_MS: 300000  # 5 minutes
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -121,6 +132,7 @@ services:
     build:
       context: .
       dockerfile: services/results-service/Dockerfile
+    restart: unless-stopped
     ports:
       - "3004:3004"
       - "3005:3005"  # WebSocket port
@@ -130,6 +142,8 @@ services:
       DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      STALE_RUNNING_MINUTES: 15      # mark running tests failed after 15 min
+      STALE_PENDING_MINUTES: 30      # mark pending tests failed after 30 min
     depends_on:
       postgres:
         condition: service_healthy
@@ -137,10 +151,12 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+
   ui:
     build:
       context: .
       dockerfile: services/ui/Dockerfile
+    restart: unless-stopped
     ports:
       - "3006:3006"
     environment:
@@ -150,6 +166,7 @@ services:
     depends_on:
       - api-service
       - results-service
+
 volumes:
   postgres_data:
   redis_data:

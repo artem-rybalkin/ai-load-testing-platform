@@ -1,10 +1,34 @@
 import amqplib from 'amqplib';
+import { Pool } from 'pg';
 
 import { TestResult, BackendMetrics, ClientMetrics } from '@alt/shared';
 import { pool } from './db';
 import { analyzeResult } from './analyzer';
+import { log } from './logger';
 
-const QUEUE = 'test-results';
+const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string): Promise<void> => {
+  const { rows } = await p.query(
+    `SELECT url, secret FROM webhooks WHERE $1 = ANY(events)`,
+    [perfStatus]
+  );
+  await Promise.allSettled(rows.map(({ url, secret }: { url: string; secret: string | null }) =>
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(secret ? { 'X-Webhook-Secret': secret } : {})
+      },
+      body: JSON.stringify({ perfStatus, testId: result.testId, targetUrl: result.targetUrl, timestamp: new Date().toISOString() })
+    })
+  ));
+};
+
+const QUEUE       = 'test-results';
+const DLQ         = `${QUEUE}.dlq`;
+const MAX_RETRIES = 3;
+
+let consumerConnected = false;
+export const isConsumerConnected = (): boolean => consumerConnected;
 
 export const startConsumer = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL || 'amqp://alt_user:alt_password@localhost:5672';
@@ -14,11 +38,12 @@ export const startConsumer = async (): Promise<void> => {
   let connection;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`Connecting to RabbitMQ (attempt ${attempt}/${maxRetries})...`);
+      log.info({ attempt, maxRetries }, 'Connecting to RabbitMQ');
       connection = await amqplib.connect(url);
+      consumerConnected = true;
       break;
     } catch (err) {
-      console.error(`Connection failed (attempt ${attempt}):`, (err as Error).message);
+      log.error({ attempt, err: (err as Error).message }, 'RabbitMQ connection failed');
       if (attempt === maxRetries) throw err;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -26,40 +51,40 @@ export const startConsumer = async (): Promise<void> => {
 
   const channel = await connection!.createChannel();
   await channel.assertQueue(QUEUE, { durable: true });
+  await channel.assertQueue(DLQ,   { durable: true });
   channel.prefetch(1);
 
-  console.log('Results-service listening on queue:', QUEUE);
+  log.info({ queue: QUEUE }, 'Results-service consumer listening');
 
   channel.consume(QUEUE, async (msg) => {
     if (!msg) return;
 
     const result: TestResult = JSON.parse(msg.content.toString());
-    console.log(`Saving result for test: ${result.testId}`);
+    const testLog = log.child({ testId: result.testId });
+    testLog.info('Saving result');
 
     try {
-      // Знаходимо попередній тест для цього URL
       const { rows: prevRows } = await pool.query(
         `SELECT metrics FROM test_results
          WHERE target_url = $1
            AND type = $2
            AND status = 'completed'
            AND test_id != $3
-         ORDER BY created_at DESC
+         ORDER BY is_baseline DESC, created_at DESC
          LIMIT 1`,
         [result.targetUrl, result.metrics.type, result.testId]
       );
 
       const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
 
-      // Аналізуємо результат
       const analysis = analyzeResult(
         result.metrics as BackendMetrics | ClientMetrics,
-        previousMetrics as BackendMetrics | ClientMetrics | null
+        previousMetrics as BackendMetrics | ClientMetrics | null,
+        result.thresholds
       );
 
-      console.log(`Analysis: ${analysis.perfStatus} — ${analysis.summary}`);
+      testLog.info({ perfStatus: analysis.perfStatus, summary: analysis.summary }, 'Analysis complete');
 
-      // Зберігаємо результат з аналізом
       await pool.query(
         `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -83,11 +108,27 @@ export const startConsumer = async (): Promise<void> => {
         ]
       );
 
-      console.log(`Result saved with analysis: ${analysis.perfStatus}`);
+      testLog.info({ perfStatus: analysis.perfStatus }, 'Result saved');
+
+      if (analysis.perfStatus === 'failed' || analysis.perfStatus === 'degraded') {
+        fireWebhooks(pool, result, analysis.perfStatus).catch(() => {});
+      }
+
       channel.ack(msg);
     } catch (err) {
-      console.error('Failed to save result:', err);
-      channel.nack(msg, false, false);
+      log.error({ testId: result.testId, err: (err as Error).message }, 'Failed to save result');
+      const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
+      if (retryCount < MAX_RETRIES) {
+        log.warn({ testId: result.testId, retryCount: retryCount + 1 }, 'Retrying result save');
+        channel.publish('', QUEUE, msg.content, {
+          persistent: true,
+          headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 }
+        });
+      } else {
+        log.error({ testId: result.testId }, 'Max retries exceeded, routing to DLQ');
+        channel.sendToQueue(DLQ, msg.content, { persistent: true });
+      }
+      channel.ack(msg);
     }
   });
 };

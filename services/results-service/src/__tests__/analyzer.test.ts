@@ -9,6 +9,7 @@ const backend = (overrides: Partial<BackendMetrics> = {}): BackendMetrics => ({
   requestsTotal: 100,
   requestsFailed: 0,
   avgResponseTime: 200,
+  p50ResponseTime: 180,
   p95ResponseTime: 400,
   p99ResponseTime: 500,
   rps: 10,
@@ -202,5 +203,35 @@ describe('analyzeResult — client-side thresholds', () => {
     const result = analyzeResult(client(), null);
 
     expect(result.diffs).toHaveLength(0);
+  });
+});
+
+// ─── Custom SLO thresholds ────────────────────────────────────────────────────
+
+describe('analyzeResult — custom SLO thresholds', () => {
+  it('uses custom p95 threshold instead of default 1000ms', () => {
+    const curr = backend({ p95ResponseTime: 600 }); // passes default (1000ms) but fails custom (500ms)
+
+    const result = analyzeResult(curr, null, { p95: 500 });
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations[0]).toMatch(/500ms/);
+  });
+
+  it('passes with tighter thresholds when metrics are good enough', () => {
+    const curr = backend({ p95ResponseTime: 300, avgResponseTime: 150 });
+
+    const result = analyzeResult(curr, null, { p95: 400, avg: 200 });
+
+    expect(result.perfStatus).toBe('passed');
+  });
+
+  it('uses custom LCP threshold for client tests', () => {
+    const curr = client({ lcp: 1800 }); // passes default (2500ms) but fails custom (1500ms)
+
+    const result = analyzeResult(curr, null, { lcp: 1500 });
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations[0]).toMatch(/LCP/);
   });
 });

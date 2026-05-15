@@ -1,24 +1,34 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 
-import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions } from '@alt/shared';
-import { connectQueue, publishTest } from './queue';
-import { findExistingScript } from './scripts';
+import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, SLOThresholds } from '@alt/shared';
+import { connectQueue, publishTest, publishCancel, isQueueConnected } from './queue';
+import { findExistingScript, checkDbHealth } from './scripts';
 
 const app = Fastify({ logger: true });
 
+app.get('/health', async (_request, reply) => {
+  const checks: Record<string, string> = {};
+  let healthy = true;
 
+  try { await checkDbHealth(); checks.database = 'ok'; }
+  catch { checks.database = 'error'; healthy = false; }
 
-app.get('/health', async (_request, _reply) => ({
-  status: 'ok',
-  service: 'api-service',
-  timestamp: new Date().toISOString()
-}));
+  checks.queue = isQueueConnected() ? 'ok' : 'disconnected';
+  if (!isQueueConnected()) healthy = false;
+
+  return reply.code(healthy ? 200 : 503).send({
+    status: healthy ? 'ok' : 'degraded',
+    service: 'api-service',
+    checks,
+    timestamp: new Date().toISOString(),
+  });
+});
 
 app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
   '/tests',
   async (request, reply) => {
-    const { type, targetUrl, description, options } = request.body;
+    const { type, targetUrl, description, options, thresholds } = request.body;
 
     const validTypes: TestType[] = ['backend', 'client-side'];
     if (!validTypes.includes(type)) {
@@ -33,6 +43,7 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
       targetUrl,
       description,
       options,
+      thresholds,
       createdAt: new Date().toISOString()
     };
 
@@ -51,7 +62,7 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
     const existingScript = await findExistingScript(targetUrl, type, backendOpts);
 
     if (existingScript) {
-      console.log(`Reusing existing script for ${targetUrl} (used ${existingScript.usedCount} times)`);
+      request.log.info({ targetUrl, usedCount: existingScript.usedCount }, 'Reusing cached script');
       test.generatedScript = existingScript.script;
       test.scriptId = existingScript.id;
       test.reusedScript = true;
@@ -62,6 +73,23 @@ app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
     // Новий URL — генеруємо через AI
     publishTest(test, false);
     return { success: true, test, scriptReused: false };
+  }
+);
+
+app.post<{ Params: { testId: string } }>(
+  '/tests/:testId/cancel',
+  async (request, reply) => {
+    const { testId } = request.params;
+    const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+
+    const res = await fetch(`${resultsUrl}/results/${testId}/cancel`, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return reply.code(res.status).send(body);
+    }
+
+    publishCancel(testId);
+    return { success: true, testId };
   }
 );
 
