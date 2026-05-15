@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { compareResults, TestResult } from '@/lib/api';
 import Link from 'next/link';
@@ -49,7 +49,7 @@ const clientMetrics = [
   { key: 'cls',  label: 'CLS',  unit: '' },
 ];
 
-export default function ComparePage() {
+function CompareContent() {
   const params = useSearchParams();
   const a = params.get('a') ?? '';
   const b = params.get('b') ?? '';
@@ -122,5 +122,13 @@ export default function ComparePage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function ComparePage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-gray-500">Loading...</p></main>}>
+      <CompareContent />
+    </Suspense>
   );
 }

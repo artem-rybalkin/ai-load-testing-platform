@@ -1,10 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { createTest, getTemplates, createTemplate, Template } from '@/lib/api';
+import { createTest, getTemplates, createTemplate, Template, FlowStep } from '@/lib/api';
+import FlowBuilder from '@/app/components/FlowBuilder';
 
-export default function Home() {
+interface EnvVar { key: string; value: string }
+
+function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
@@ -12,7 +15,7 @@ export default function Home() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [form, setForm] = useState({
-    type: 'backend' as 'backend' | 'client-side',
+    type: 'backend' as 'backend' | 'client-side' | 'flow',
     targetUrl: '',
     description: '',
     vus: 5,
@@ -22,6 +25,8 @@ export default function Home() {
     collectWebVitals: true,
     profile: 'load' as 'load' | 'spike' | 'capacity' | 'soak'
   });
+  const [flowSteps, setFlowSteps] = useState<FlowStep[]>([]);
+  const [flowEnvVars, setFlowEnvVars] = useState<EnvVar[]>([]);
 
   useEffect(() => {
     getTemplates().then(d => setTemplates(d.templates ?? [])).catch(() => {});
@@ -50,7 +55,7 @@ export default function Home() {
     const opts = t.options as Record<string, unknown>;
     setForm(f => ({
       ...f,
-      type: t.type,
+      type: t.type as 'backend' | 'client-side' | 'flow',
       ...(t.target_url ? { targetUrl: t.target_url } : {}),
       ...(t.description ? { description: t.description } : {}),
       ...(opts.vus ? { vus: Number(opts.vus) } : {}),
@@ -65,11 +70,13 @@ export default function Home() {
     try {
       const options = form.type === 'backend'
         ? { vus: form.vus, duration: form.duration }
-        : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals };
+        : form.type === 'flow'
+          ? { vus: form.vus, duration: form.duration }
+          : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals };
       await createTemplate({
         name: form.description || form.targetUrl,
         description: null,
-        type: form.type,
+        type: form.type === 'flow' ? 'backend' : form.type,
         target_url: form.targetUrl || null,
         options,
         thresholds: null,
@@ -82,11 +89,32 @@ export default function Home() {
   };
 
   const handleSubmit = async () => {
-    if (!form.targetUrl) { setError('URL is required'); return; }
+    if (form.type === 'flow') {
+      if (flowSteps.length === 0) { setError('Add at least one step to run a flow test'); return; }
+      if (flowSteps.some(s => !s.url)) { setError('Every step must have a URL'); return; }
+    } else if (!form.targetUrl) {
+      setError('URL is required');
+      return;
+    }
     setLoading(true);
     setError('');
 
     try {
+      if (form.type === 'flow') {
+        const envVarsMap: Record<string, string> = {};
+        for (const ev of flowEnvVars) { if (ev.key) envVarsMap[ev.key] = ev.value; }
+        const res = await createTest({
+          type: 'flow',
+          targetUrl: flowSteps[0]?.url ?? '',
+          description: form.description || `Flow test (${flowSteps.length} steps)`,
+          options: { vus: form.vus, duration: form.duration },
+          steps: flowSteps,
+          envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
+        });
+        if (res.test?.id) router.push(`/results/${res.test.id}`);
+        return;
+      }
+
       const options = form.type === 'backend'
         ? { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus }
         : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals };
@@ -137,24 +165,39 @@ export default function Home() {
           {/* Test type */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Test type</label>
-            <div className="grid grid-cols-2 gap-3">
-              {(['backend', 'client-side'] as const).map(t => (
+            <div className="grid grid-cols-3 gap-3">
+              {([
+                { id: 'backend',     label: '⚡ Backend / API' },
+                { id: 'client-side', label: '🌐 Browser' },
+                { id: 'flow',        label: '🔗 Multi-step Flow' },
+              ] as const).map(t => (
                 <button
-                  key={t}
-                  onClick={() => setForm(f => ({ ...f, type: t }))}
+                  key={t.id}
+                  onClick={() => setForm(f => ({ ...f, type: t.id }))}
                   className={`py-3 px-4 rounded-lg border-2 text-sm font-medium transition-all ${
-                    form.type === t
+                    form.type === t.id
                       ? 'border-blue-500 bg-blue-50 text-blue-700'
                       : 'border-gray-200 text-gray-600 hover:border-gray-300'
                   }`}
                 >
-                  {t === 'backend' ? '⚡ Backend / API' : '🌐 Client-side / Browser'}
+                  {t.label}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* URL */}
+          {/* Flow builder */}
+          {form.type === 'flow' && (
+            <FlowBuilder
+              steps={flowSteps}
+              envVars={flowEnvVars}
+              onChange={setFlowSteps}
+              onEnvVarsChange={setFlowEnvVars}
+            />
+          )}
+
+          {/* URL — only for non-flow */}
+          {form.type !== 'flow' && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Target URL</label>
             <input
@@ -165,6 +208,7 @@ export default function Home() {
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+          )}
 
           {/* Description */}
           <div>
@@ -209,20 +253,7 @@ export default function Home() {
 
           {/* Options */}
           <div className="grid grid-cols-2 gap-4">
-            {form.type === 'backend' ? (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Virtual users'}
-                </label>
-                <input
-                  type="number"
-                  min={1} max={100}
-                  value={form.vus}
-                  onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            ) : (
+            {form.type === 'client-side' ? (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Browser sessions</label>
                 <input
@@ -230,6 +261,19 @@ export default function Home() {
                   min={1} max={10}
                   value={form.sessions}
                   onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {form.type === 'flow' ? 'Virtual users' : form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Virtual users'}
+                </label>
+                <input
+                  type="number"
+                  min={1} max={100}
+                  value={form.vus}
+                  onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -290,5 +334,13 @@ export default function Home() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-gray-50" />}>
+      <HomeContent />
+    </Suspense>
   );
 }

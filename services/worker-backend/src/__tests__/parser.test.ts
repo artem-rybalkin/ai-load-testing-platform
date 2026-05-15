@@ -113,6 +113,44 @@ describe('parseK6Output', () => {
 
     expect(result.requestsFailed).toBe(0);
   });
+
+  it('returns zeroes when output has no http_ metrics (e.g. WebSocket-only script)', () => {
+    const noHttpOutput = `
+      execution: local
+         script: /tmp/ws-test.js
+      vus_max.............: 10
+      iteration_duration..: avg=1.2s
+    `;
+
+    const result = parseK6Output(noHttpOutput);
+
+    expect(result.type).toBe('backend');
+    expect(result.requestsTotal).toBe(0);
+    expect(result.requestsFailed).toBe(0);
+    expect(result.avgResponseTime).toBe(0);
+    expect(result.p95ResponseTime).toBe(0);
+    expect(result.rps).toBe(0);
+  });
+
+  it('returns zero requestsFailed when http_req_failed line is missing', () => {
+    const noFailLine = `
+http_reqs...................: 100     5/s
+http_req_duration..........: avg=200ms min=100ms med=180ms max=400ms p(90)=300ms p(95)=350ms p(99)=390ms
+    `;
+
+    const result = parseK6Output(noFailLine);
+
+    expect(result.requestsTotal).toBe(100);
+    expect(result.requestsFailed).toBe(0);
+  });
+
+  it('handles large request counts without overflow', () => {
+    const result = parseK6Output(makeK6Output({ total: 1000000, rps: 3333.33, failPct: 0.01 }));
+
+    expect(result.requestsTotal).toBe(1000000);
+    expect(result.requestsFailed).toBe(Math.round(1000000 * 0.01 / 100));
+    expect(result.rps).toBeCloseTo(3333.33, 1);
+  });
 });
 
 // ─── aggregateWindow ──────────────────────────────────────────────────────────
@@ -188,6 +226,28 @@ describe('aggregateWindow', () => {
 
     expect(result!.errorRate).toBe(0);
   });
+
+  it('returns zero rps when no http_reqs points', () => {
+    const lines = [
+      makeJsonPoint('vus', 5),
+      makeJsonPoint('http_req_duration', 200),
+    ];
+
+    const result = aggregateWindow(lines);
+
+    expect(result!.rps).toBe(0);
+    expect(result!.errorRate).toBe(0);
+  });
+
+  it('handles only vus points (no duration) without returning null', () => {
+    const lines = [makeJsonPoint('vus', 15)];
+
+    const result = aggregateWindow(lines);
+
+    expect(result).not.toBeNull();
+    expect(result!.vus).toBe(15);
+    expect(result!.avgResponseTime).toBe(0);
+  });
 });
 
 // ─── parseK6StatusCodes ───────────────────────────────────────────────────────
@@ -228,5 +288,24 @@ describe('parseK6StatusCodes', () => {
   it('ignores points without status tag', () => {
     const noStatus = JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, tags: {} } });
     expect(parseK6StatusCodes(noStatus)).toEqual({});
+  });
+
+  it('counts many different status codes correctly', () => {
+    const lines = [
+      makeHttpReqPoint('200'), makeHttpReqPoint('200'), makeHttpReqPoint('200'),
+      makeHttpReqPoint('201'),
+      makeHttpReqPoint('400'), makeHttpReqPoint('400'),
+      makeHttpReqPoint('500'),
+      makeHttpReqPoint('503'),
+    ].join('\n');
+
+    const result = parseK6StatusCodes(lines);
+
+    expect(result['200']).toBe(3);
+    expect(result['201']).toBe(1);
+    expect(result['400']).toBe(2);
+    expect(result['500']).toBe(1);
+    expect(result['503']).toBe(1);
+    expect(Object.keys(result)).toHaveLength(5);
   });
 });

@@ -206,6 +206,90 @@ describe('analyzeResult — client-side thresholds', () => {
   });
 });
 
+// ─── Backend — boundary & edge cases ─────────────────────────────────────────
+
+describe('analyzeResult — backend edge cases', () => {
+  it('passes when regression is exactly 20% (boundary is strictly > 20%)', () => {
+    const prev = backend({ avgResponseTime: 200 });
+    const curr = backend({ avgResponseTime: 240 }); // exactly +20%
+
+    const result = analyzeResult(curr, prev);
+
+    expect(result.perfStatus).toBe('passed');
+  });
+
+  it('degrades when regression is 20.1% (just over boundary)', () => {
+    const prev = backend({ avgResponseTime: 200 });
+    const curr = backend({ avgResponseTime: 241 }); // +20.5%
+
+    const result = analyzeResult(curr, prev);
+
+    expect(result.perfStatus).toBe('degraded');
+  });
+
+  it('handles zero requestsTotal without division by zero', () => {
+    const result = analyzeResult(
+      backend({ requestsTotal: 0, requestsFailed: 0, avgResponseTime: 0, p95ResponseTime: 0, p99ResponseTime: 0, rps: 0, p50ResponseTime: 0 }),
+      null
+    );
+
+    expect(result.perfStatus).toBe('passed');
+    expect(result.thresholdViolations).toHaveLength(0);
+  });
+});
+
+// ─── Client-side — Lighthouse & FID ──────────────────────────────────────────
+
+describe('analyzeResult — Lighthouse thresholds', () => {
+  it('fails when Lighthouse performance score is below 50', () => {
+    const result = analyzeResult(
+      client({ lighthouseScore: { performance: 45, accessibility: 90, bestPractices: 85, seo: 80 } }),
+      null
+    );
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations.some(v => v.includes('Lighthouse'))).toBe(true);
+  });
+
+  it('passes when Lighthouse performance score is exactly 50', () => {
+    const result = analyzeResult(
+      client({ lighthouseScore: { performance: 50, accessibility: 90, bestPractices: 85, seo: 80 } }),
+      null
+    );
+
+    expect(result.perfStatus).toBe('passed');
+  });
+
+  it('passes when no lighthouse score is present', () => {
+    const result = analyzeResult(client({ lighthouseScore: undefined }), null);
+
+    expect(result.perfStatus).toBe('passed');
+  });
+
+  it('includes FID in client metric diffs when previous result exists', () => {
+    const prev = client({ fid: 100 });
+    const curr = client({ fid: 200 }); // +100%
+
+    const result = analyzeResult(curr, prev);
+
+    const fidDiff = result.diffs.find(d => d.metric === 'FID');
+    expect(fidDiff).toBeDefined();
+    expect(fidDiff!.status).toBe('worse');
+    expect(fidDiff!.diffPercent).toBeCloseTo(100, 0);
+  });
+
+  it('includes Lighthouse score diffs when both runs have scores', () => {
+    const prev = client({ lighthouseScore: { performance: 80, accessibility: 90, bestPractices: 85, seo: 80 } });
+    const curr = client({ lighthouseScore: { performance: 60, accessibility: 90, bestPractices: 85, seo: 80 } }); // perf dropped
+
+    const result = analyzeResult(curr, prev);
+
+    const lhDiff = result.diffs.find(d => d.metric === 'Lighthouse performance');
+    expect(lhDiff).toBeDefined();
+    expect(lhDiff!.status).toBe('worse');
+  });
+});
+
 // ─── Custom SLO thresholds ────────────────────────────────────────────────────
 
 describe('analyzeResult — custom SLO thresholds', () => {

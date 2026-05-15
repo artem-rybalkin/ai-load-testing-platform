@@ -45,16 +45,16 @@ export const buildApp = async (
     }
   });
 
-  app.post<{ Body: { testId: string; type: string; targetUrl: string } }>(
+  app.post<{ Body: { testId: string; type: string; targetUrl: string; durationSeconds?: number } }>(
     '/results/pending',
     async (request, reply) => {
       try {
-        const { testId, type, targetUrl } = request.body;
+        const { testId, type, targetUrl, durationSeconds } = request.body;
         await pool.query(
-          `INSERT INTO test_results (test_id, type, target_url, status)
-           VALUES ($1, $2, $3, 'pending')
+          `INSERT INTO test_results (test_id, type, target_url, status, duration_seconds)
+           VALUES ($1, $2, $3, 'pending', $4)
            ON CONFLICT (test_id) DO NOTHING`,
-          [testId, type, targetUrl]
+          [testId, type, targetUrl, durationSeconds ?? null]
         );
         return { success: true };
       } catch (err) {

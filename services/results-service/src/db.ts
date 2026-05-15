@@ -87,6 +87,7 @@ export const createSchema = async (p: Pool): Promise<void> => {
 
   // Safe migrations for columns added after initial deploy
   await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS is_baseline BOOLEAN DEFAULT FALSE`);
+  await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS duration_seconds INTEGER`);
 
   // Indexes
   await p.query(`CREATE INDEX IF NOT EXISTS live_metrics_test_id_idx

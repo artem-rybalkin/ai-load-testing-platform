@@ -1,8 +1,14 @@
+import { createHash } from 'crypto';
 import { Pool } from 'pg';
 
-import { TestType, TestScript, BackendTestOptions } from '@alt/shared';
+import { TestType, TestScript, BackendTestOptions, FlowStep } from '@alt/shared';
 import { buildK6Options, replaceK6Options } from './options';
 import { log } from './logger';
+
+export const stepsToKey = (steps: FlowStep[]): string => {
+  const hash = createHash('sha256').update(JSON.stringify(steps)).digest('hex').slice(0, 16);
+  return `flow:${hash}`;
+};
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://alt_user:alt_password@localhost:5432/alt_db'
@@ -14,11 +20,14 @@ export const findExistingScript = async (
   targetUrl: string,
   testType: TestType,
   options?: BackendTestOptions,
-  dbPool: Pool = pool
+  dbPool: Pool = pool,
+  cacheKey?: string
 ): Promise<TestScript | null> => {
+  const lookupKey = cacheKey ?? targetUrl;
+  const lookupType = testType === 'flow' ? 'backend' : testType;
   const { rows } = await dbPool.query(
     'SELECT * FROM test_scripts WHERE target_url = $1 AND test_type = $2',
-    [targetUrl, testType]
+    [lookupKey, lookupType]
   );
 
   if (rows.length === 0) return null;

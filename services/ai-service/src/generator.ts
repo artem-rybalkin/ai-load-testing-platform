@@ -89,11 +89,70 @@ Requirements:
 - Return ONLY the JavaScript code, no markdown, no explanation
 `;
 
+const FLOW_PROMPT = (test: TestRequest): string => {
+  const steps = test.steps!;
+  const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number };
+  const fallback = profileInstructions(opts);
+
+  const stepDefs = steps.map((s, i) => {
+    const lines: string[] = [
+      `  Step ${i + 1}: ${s.name}`,
+      `    URL: ${s.url}`,
+      `    Method: ${s.method}`,
+    ];
+    if (s.body) lines.push(`    Body: ${s.body}`);
+    if (s.headers && Object.keys(s.headers).length > 0) {
+      lines.push(`    Headers: ${JSON.stringify(s.headers)}`);
+    }
+    if (s.extract && Object.keys(s.extract).length > 0) {
+      lines.push(`    Extract into variables: ${JSON.stringify(s.extract)}`);
+    }
+    return lines.join('\n');
+  }).join('\n\n');
+
+  return `
+You are a performance testing expert. Generate a k6 multi-step flow test script.
+
+User request: "${test.description}"
+
+${fallback}
+
+Flow steps to test (IN ORDER):
+${stepDefs}
+
+Requirements:
+- Use k6 JavaScript API with group() for EACH step
+- Each step MUST be wrapped in: group('Step N: name', function() { ... })
+- Chain variables between steps: extract values from responses and use them in subsequent requests
+- Use __ENV.VAR_NAME for credentials (never hardcode passwords/tokens)
+- Add check() assertions for response status (2xx) in each group
+- After all groups, add sleep(1)
+- Return ONLY the JavaScript code, no markdown fences, no explanation
+
+Structure:
+import http from 'k6/http';
+import { check, sleep, group } from 'k6';
+
+export const options = { stages: [...], thresholds: {...} };
+
+export default function() {
+  const vars = {};
+
+  group('Step 1: ...', function() { /* request + check + extract */ });
+  group('Step 2: ...', function() { /* use vars.token etc */ });
+
+  sleep(1);
+}
+`;
+};
+
 export const generateScript = async (test: TestRequest): Promise<string> => {
   const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  const prompt = test.type === 'backend'
-    ? BACKEND_PROMPT(test)
-    : CLIENT_PROMPT(test);
+  const prompt = test.type === 'flow'
+    ? FLOW_PROMPT(test)
+    : test.type === 'backend'
+      ? BACKEND_PROMPT(test)
+      : CLIENT_PROMPT(test);
 
   const maxRetries = 3;
 

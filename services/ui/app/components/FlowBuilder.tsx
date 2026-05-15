@@ -1,0 +1,264 @@
+'use client';
+
+import { useRef } from 'react';
+import { FlowStep } from '@/lib/api';
+
+interface EnvVar { key: string; value: string }
+
+interface Props {
+  steps: FlowStep[];
+  envVars: EnvVar[];
+  onChange: (steps: FlowStep[]) => void;
+  onEnvVarsChange: (vars: EnvVar[]) => void;
+}
+
+const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
+
+const emptyStep = (): FlowStep => ({
+  name: '',
+  url: '',
+  method: 'GET',
+  body: '',
+  headers: {},
+  extract: {},
+});
+
+const parseHar = (raw: string): FlowStep[] => {
+  try {
+    const har = JSON.parse(raw);
+    const entries: unknown[] = har?.log?.entries ?? [];
+    return entries
+      .filter((e: unknown) => {
+        const entry = e as { request: { url: string; method: string } };
+        const { url, method } = entry.request;
+        // keep only XHR-like requests (skip static assets)
+        return (
+          /^https?:\/\//.test(url) &&
+          ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].includes(method.toUpperCase()) &&
+          !url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|webp)(\?.*)?$/i)
+        );
+      })
+      .slice(0, 20)
+      .map((e: unknown, i: number) => {
+        const entry = e as {
+          request: {
+            url: string;
+            method: string;
+            postData?: { text?: string };
+            headers: Array<{ name: string; value: string }>;
+          };
+        };
+        const { url, method, postData, headers } = entry.request;
+        const path = (() => { try { return new URL(url).pathname; } catch { return url; } })();
+        const filteredHeaders: Record<string, string> = {};
+        for (const h of headers) {
+          const name = h.name.toLowerCase();
+          if (!['cookie', 'authorization', 'host', 'content-length', 'connection'].includes(name)) {
+            filteredHeaders[h.name] = h.value;
+          }
+        }
+        return {
+          name: `Step ${i + 1}: ${method.toUpperCase()} ${path}`,
+          url,
+          method: method.toUpperCase() as FlowStep['method'],
+          body: postData?.text ?? '',
+          headers: filteredHeaders,
+          extract: {},
+        };
+      });
+  } catch {
+    return [];
+  }
+};
+
+export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange }: Props) {
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const update = (i: number, patch: Partial<FlowStep>) => {
+    const next = steps.map((s, idx) => idx === i ? { ...s, ...patch } : s);
+    onChange(next);
+  };
+
+  const addStep = () => onChange([...steps, emptyStep()]);
+  const removeStep = (i: number) => onChange(steps.filter((_, idx) => idx !== i));
+  const moveUp = (i: number) => {
+    if (i === 0) return;
+    const next = [...steps];
+    [next[i - 1], next[i]] = [next[i], next[i - 1]];
+    onChange(next);
+  };
+
+  const setExtractKey = (stepIdx: number, oldKey: string, newKey: string) => {
+    const s = steps[stepIdx];
+    const entries = Object.entries(s.extract ?? {});
+    const updated: Record<string, string> = {};
+    for (const [k, v] of entries) updated[k === oldKey ? newKey : k] = v;
+    update(stepIdx, { extract: updated });
+  };
+
+  const setExtractVal = (stepIdx: number, key: string, val: string) => {
+    update(stepIdx, { extract: { ...steps[stepIdx].extract, [key]: val } });
+  };
+
+  const removeExtract = (stepIdx: number, key: string) => {
+    const { [key]: _, ...rest } = steps[stepIdx].extract ?? {};
+    update(stepIdx, { extract: rest });
+  };
+
+  const addExtract = (stepIdx: number) => {
+    update(stepIdx, { extract: { ...steps[stepIdx].extract, '': '' } });
+  };
+
+  const handleHar = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const parsed = parseHar(ev.target?.result as string);
+      if (parsed.length > 0) onChange(parsed);
+      else alert('No XHR requests found in HAR file. Make sure to export a network recording.');
+    };
+    reader.readAsText(file);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const updateEnvVar = (i: number, field: 'key' | 'value', val: string) => {
+    onEnvVarsChange(envVars.map((ev, idx) => idx === i ? { ...ev, [field]: val } : ev));
+  };
+
+  const addEnvVar = () => onEnvVarsChange([...envVars, { key: '', value: '' }]);
+  const removeEnvVar = (i: number) => onEnvVarsChange(envVars.filter((_, idx) => idx !== i));
+
+  return (
+    <div className="space-y-4">
+      {/* HAR import */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
+        >
+          Import from HAR
+        </button>
+        <span className="text-xs text-gray-400">or build steps manually below</span>
+        <input ref={fileRef} type="file" accept=".har,application/json" className="hidden" onChange={handleHar} />
+      </div>
+
+      {/* Steps */}
+      <div className="space-y-3">
+        {steps.map((step, i) => (
+          <div key={i} className="border border-gray-200 rounded-xl p-4 bg-white space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-400 w-6">{i + 1}</span>
+              <input
+                type="text"
+                placeholder="Step name (e.g. Login)"
+                value={step.name}
+                onChange={e => update(i, { name: e.target.value })}
+                className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {i > 0 && (
+                <button type="button" onClick={() => moveUp(i)} className="text-gray-400 hover:text-gray-600 text-xs px-1">↑</button>
+              )}
+              <button type="button" onClick={() => removeStep(i)} className="text-red-400 hover:text-red-600 text-xs px-1">✕</button>
+            </div>
+
+            <div className="flex gap-2">
+              <select
+                value={step.method}
+                onChange={e => update(i, { method: e.target.value as FlowStep['method'] })}
+                className="border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              >
+                {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <input
+                type="url"
+                placeholder="https://api.example.com/endpoint"
+                value={step.url}
+                onChange={e => update(i, { url: e.target.value })}
+                className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {(step.method === 'POST' || step.method === 'PUT' || step.method === 'PATCH') && (
+              <textarea
+                rows={2}
+                placeholder='Request body (JSON): {"key": "value"}'
+                value={step.body ?? ''}
+                onChange={e => update(i, { body: e.target.value })}
+                className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              />
+            )}
+
+            {/* Extract variables */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-gray-500 font-medium">Extract variables from response</span>
+                <button type="button" onClick={() => addExtract(i)} className="text-xs text-blue-600 hover:underline">+ add</button>
+              </div>
+              {Object.entries(step.extract ?? {}).map(([key, val]) => (
+                <div key={key} className="flex gap-1 mb-1">
+                  <input
+                    type="text"
+                    placeholder="varName"
+                    value={key}
+                    onChange={e => setExtractKey(i, key, e.target.value)}
+                    className="w-28 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none"
+                  />
+                  <span className="text-gray-400 text-xs self-center">←</span>
+                  <input
+                    type="text"
+                    placeholder="JSON path, e.g. token"
+                    value={val}
+                    onChange={e => setExtractVal(i, key, e.target.value)}
+                    className="flex-1 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none"
+                  />
+                  <button type="button" onClick={() => removeExtract(i, key)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={addStep}
+        className="w-full py-2 border-2 border-dashed border-gray-300 text-gray-500 rounded-xl text-sm hover:border-blue-400 hover:text-blue-500 transition-colors"
+      >
+        + Add step
+      </button>
+
+      {/* Env vars */}
+      <div className="border border-gray-200 rounded-xl p-4 bg-white">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-gray-700">Environment variables (credentials)</span>
+          <button type="button" onClick={addEnvVar} className="text-xs text-blue-600 hover:underline">+ add</button>
+        </div>
+        <p className="text-xs text-gray-400 mb-3">Available in the script as <code className="bg-gray-100 px-1 rounded">__ENV.VAR_NAME</code>. Not stored in the database.</p>
+        {envVars.map((ev, i) => (
+          <div key={i} className="flex gap-2 mb-1">
+            <input
+              type="text"
+              placeholder="KEY"
+              value={ev.key}
+              onChange={e => updateEnvVar(i, 'key', e.target.value)}
+              className="w-32 border border-gray-200 rounded px-2 py-1 text-xs font-mono focus:outline-none"
+            />
+            <input
+              type="password"
+              placeholder="value"
+              value={ev.value}
+              onChange={e => updateEnvVar(i, 'value', e.target.value)}
+              className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs font-mono focus:outline-none"
+            />
+            <button type="button" onClick={() => removeEnvVar(i)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
+          </div>
+        ))}
+        {envVars.length === 0 && (
+          <p className="text-xs text-gray-400">No variables. Click + add if your flow requires credentials.</p>
+        )}
+      </div>
+    </div>
+  );
+}

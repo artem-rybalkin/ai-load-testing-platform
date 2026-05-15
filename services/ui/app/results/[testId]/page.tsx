@@ -11,6 +11,38 @@ import RealtimeChart from '@/app/components/RealtimeChart';
 import TrendChart from '@/app/components/TrendChart';
 
 
+interface StepMetric { name: string; avgResponseTime: number; p95ResponseTime: number; requestsTotal: number; requestsFailed: number }
+
+const StepMetricsTable = ({ steps }: { steps: StepMetric[] }) => (
+  <div className="bg-white rounded-xl border border-gray-200 p-4">
+    <h2 className="text-sm font-medium text-gray-700 mb-3">Per-step breakdown</h2>
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-xs text-gray-500 border-b border-gray-100">
+            <th className="text-left py-1 pr-4 font-medium">Step</th>
+            <th className="text-right py-1 px-2 font-medium">Requests</th>
+            <th className="text-right py-1 px-2 font-medium">Failed</th>
+            <th className="text-right py-1 px-2 font-medium">Avg (ms)</th>
+            <th className="text-right py-1 pl-2 font-medium">p95 (ms)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {steps.map((s, i) => (
+            <tr key={i} className="border-b border-gray-50 last:border-0">
+              <td className="py-2 pr-4 text-gray-800 font-medium">{s.name}</td>
+              <td className="text-right px-2 text-gray-600">{s.requestsTotal}</td>
+              <td className={`text-right px-2 ${s.requestsFailed > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}`}>{s.requestsFailed}</td>
+              <td className="text-right px-2 text-gray-600">{Math.round(s.avgResponseTime)}</td>
+              <td className={`text-right pl-2 font-medium ${s.p95ResponseTime > 1000 ? 'text-red-600' : s.p95ResponseTime > 500 ? 'text-yellow-600' : 'text-green-600'}`}>{Math.round(s.p95ResponseTime)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
 const MetricCard = ({ label, value, unit }: { label: string; value: number | string; unit?: string }) => (
   <div className="bg-white rounded-xl border border-gray-200 p-4">
     <p className="text-xs text-gray-500 mb-1">{label}</p>
@@ -35,6 +67,13 @@ const StatusBadge = ({ status }: { status: string }) => {
   );
 };
 
+const fmtRemaining = (secs: number): string => {
+  if (secs <= 0) return 'finishing…';
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+};
+
 export default function ResultPage() {
   const { testId } = useParams<{ testId: string }>();
   const [result, setResult] = useState<TestResult | null>(null);
@@ -42,6 +81,7 @@ export default function ResultPage() {
   const [loading, setLoading] = useState(true);
   const [baselineBusy, setBaselineBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -54,6 +94,21 @@ export default function ResultPage() {
     }
   };
   const [trend, setTrend] = useState<TrendPoint[]>([]);
+
+  // Countdown timer — ticks every second while the test is running
+  useEffect(() => {
+    if (result?.status !== 'running' || !result.started_at || !result.duration_seconds) {
+      setRemainingSecs(null);
+      return;
+    }
+    const tick = () => {
+      const elapsed = (Date.now() - new Date(result.started_at!).getTime()) / 1000;
+      setRemainingSecs(Math.max(0, result.duration_seconds! - elapsed));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [result?.status, result?.started_at, result?.duration_seconds]);
 
   const handleBaseline = async () => {
     if (!result) return;
@@ -105,7 +160,7 @@ export default function ResultPage() {
 
   // Poll live metrics while test is running
   useEffect(() => {
-    if (!result || result.type !== 'backend') return;
+    if (!result || (result.type !== 'backend' && result.type !== 'flow')) return;
     if (result.status === 'completed' || result.status === 'failed') {
       // Do a final fetch to show the complete live data
       getLiveMetrics(testId).then(d => setLivePoints(d.points ?? [])).catch(() => {});
@@ -146,7 +201,7 @@ if (!result) return (
 );
 
   const m = result.metrics;
-  const isBackend = result.type === 'backend';
+  const isBackend = result.type === 'backend' || result.type === 'flow';
 
   return (
     <main className="min-h-screen bg-gray-50 py-12 px-4">
@@ -209,15 +264,30 @@ if (!result) return (
 
         {isBackend && livePoints.length > 0 && (
           <div className="mb-6">
-            <div className="flex items-center gap-2 mb-3">
-              {result.status === 'running' && (
-                <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse inline-block" />
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                {result.status === 'running' && (
+                  <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse inline-block" />
+                )}
+                <span className="text-sm font-medium text-gray-600">
+                  {result.status === 'running' ? 'Live metrics' : 'Test timeline'}
+                </span>
+              </div>
+              {result.status === 'running' && remainingSecs !== null && (
+                <span className="text-xs font-medium text-blue-600 tabular-nums">
+                  {fmtRemaining(remainingSecs)} remaining
+                </span>
               )}
-              <span className="text-sm font-medium text-gray-600">
-                {result.status === 'running' ? 'Live metrics' : 'Test timeline'}
-              </span>
             </div>
-            <RealtimeChart points={livePoints} />
+            {result.status === 'running' && result.duration_seconds && remainingSecs !== null && (
+              <div className="mb-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 rounded-full transition-all duration-1000"
+                  style={{ width: `${Math.min(100, ((result.duration_seconds - remainingSecs) / result.duration_seconds) * 100)}%` }}
+                />
+              </div>
+            )}
+            <RealtimeChart points={livePoints} startedAt={result.started_at} />
           </div>
         )}
 
@@ -255,6 +325,9 @@ if (!result) return (
                 )}
               </div>
                       <BackendChart metrics={m as any} />
+                      {(m as any).stepMetrics?.length > 0 && (
+                        <StepMetricsTable steps={(m as any).stepMetrics} />
+                      )}
       </>
     ) : (
       <ClientChart metrics={m as any} />
@@ -269,8 +342,8 @@ if (!result) return (
                 </h2>
                 <TrendChart
                   trend={trend}
-                  metricKey={result.type === 'backend' ? 'p95ResponseTime' : 'lcp'}
-                  label={result.type === 'backend' ? 'p95 (ms)' : 'LCP (ms)'}
+                  metricKey={isBackend ? 'p95ResponseTime' : 'lcp'}
+                  label={isBackend ? 'p95 (ms)' : 'LCP (ms)'}
                 />
               </div>
             )}

@@ -1,4 +1,4 @@
-export type TestType = 'backend' | 'client-side';
+export type TestType = 'backend' | 'client-side' | 'flow';
 
 export type TestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -12,6 +12,23 @@ export interface SLOThresholds {
   cls?: number;       // score — default 0.1
 }
 
+export interface FlowStep {
+  name: string;
+  url: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  body?: string;
+  headers?: Record<string, string>;
+  extract?: Record<string, string>; // variable_name → jsonpath expression
+}
+
+export interface StepMetrics {
+  name: string;
+  avgResponseTime: number;
+  p95ResponseTime: number;
+  requestsTotal: number;
+  requestsFailed: number;
+}
+
 export interface TestRequest {
   id: string;
   type: TestType;
@@ -19,6 +36,8 @@ export interface TestRequest {
   description: string;
   options: BackendTestOptions | ClientTestOptions;
   thresholds?: SLOThresholds;
+  steps?: FlowStep[];
+  envVars?: Record<string, string>;
   createdAt: string;
 }
 
@@ -71,6 +90,7 @@ export interface BackendMetrics {
   p99ResponseTime: number;
   rps: number;
   statusCodes?: Record<string, number>;
+  stepMetrics?: StepMetrics[];
 }
 
 export interface LighthouseScore {
@@ -103,6 +123,7 @@ export interface EnrichedTestRequest extends TestRequest {
   generatedScript?: string;
   scriptId?: string;
   reusedScript?: boolean;
+  scriptCacheKey?: string; // for flow tests: hash key used in test_scripts table
 }
 
 export interface LiveMetricPoint {

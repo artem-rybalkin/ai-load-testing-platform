@@ -30,6 +30,54 @@ const MAX_RETRIES = 3;
 let consumerConnected = false;
 export const isConsumerConnected = (): boolean => consumerConnected;
 
+export const handleResult = async (p: Pool, result: TestResult): Promise<void> => {
+  const { rows: prevRows } = await p.query(
+    `SELECT metrics FROM test_results
+     WHERE target_url = $1
+       AND type = $2
+       AND status = 'completed'
+       AND test_id != $3
+     ORDER BY is_baseline DESC, created_at DESC
+     LIMIT 1`,
+    [result.targetUrl, result.metrics.type, result.testId]
+  );
+
+  const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
+
+  const analysis = analyzeResult(
+    result.metrics as BackendMetrics | ClientMetrics,
+    previousMetrics as BackendMetrics | ClientMetrics | null,
+    result.thresholds
+  );
+
+  await p.query(
+    `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (test_id) DO UPDATE SET
+       status       = EXCLUDED.status,
+       metrics      = EXCLUDED.metrics,
+       target_url   = COALESCE(EXCLUDED.target_url, test_results.target_url),
+       completed_at = EXCLUDED.completed_at,
+       perf_status  = EXCLUDED.perf_status,
+       analysis     = EXCLUDED.analysis`,
+    [
+      result.testId,
+      result.metrics.type,
+      result.targetUrl,
+      result.status,
+      JSON.stringify(result.metrics),
+      result.startedAt,
+      result.completedAt,
+      analysis.perfStatus,
+      JSON.stringify(analysis),
+    ]
+  );
+
+  if (analysis.perfStatus === 'failed' || analysis.perfStatus === 'degraded') {
+    fireWebhooks(p, result, analysis.perfStatus).catch(() => {});
+  }
+};
+
 export const startConsumer = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL || 'amqp://alt_user:alt_password@localhost:5672';
   const maxRetries = 20;
@@ -64,56 +112,8 @@ export const startConsumer = async (): Promise<void> => {
     testLog.info('Saving result');
 
     try {
-      const { rows: prevRows } = await pool.query(
-        `SELECT metrics FROM test_results
-         WHERE target_url = $1
-           AND type = $2
-           AND status = 'completed'
-           AND test_id != $3
-         ORDER BY is_baseline DESC, created_at DESC
-         LIMIT 1`,
-        [result.targetUrl, result.metrics.type, result.testId]
-      );
-
-      const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
-
-      const analysis = analyzeResult(
-        result.metrics as BackendMetrics | ClientMetrics,
-        previousMetrics as BackendMetrics | ClientMetrics | null,
-        result.thresholds
-      );
-
-      testLog.info({ perfStatus: analysis.perfStatus, summary: analysis.summary }, 'Analysis complete');
-
-      await pool.query(
-        `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (test_id) DO UPDATE SET
-           status       = EXCLUDED.status,
-           metrics      = EXCLUDED.metrics,
-           target_url   = COALESCE(EXCLUDED.target_url, test_results.target_url),
-           completed_at = EXCLUDED.completed_at,
-           perf_status  = EXCLUDED.perf_status,
-           analysis     = EXCLUDED.analysis`,
-        [
-          result.testId,
-          result.metrics.type,
-          result.targetUrl,
-          result.status,
-          JSON.stringify(result.metrics),
-          result.startedAt,
-          result.completedAt,
-          analysis.perfStatus,
-          JSON.stringify(analysis)
-        ]
-      );
-
-      testLog.info({ perfStatus: analysis.perfStatus }, 'Result saved');
-
-      if (analysis.perfStatus === 'failed' || analysis.perfStatus === 'degraded') {
-        fireWebhooks(pool, result, analysis.perfStatus).catch(() => {});
-      }
-
+      await handleResult(pool, result);
+      testLog.info('Result saved');
       channel.ack(msg);
     } catch (err) {
       log.error({ testId: result.testId, err: (err as Error).message }, 'Failed to save result');

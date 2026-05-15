@@ -8,12 +8,17 @@ import { LiveMetricPoint } from '@/lib/api';
 
 interface Props {
   points: LiveMetricPoint[];
+  startedAt?: string | null;
 }
 
-const fmt = (iso: string) =>
-  new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const fmtElapsed = (iso: string, startedAt?: string | null): string => {
+  if (!startedAt) return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const secs = Math.round((new Date(iso).getTime() - new Date(startedAt).getTime()) / 1000);
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m${secs % 60 > 0 ? String(secs % 60).padStart(2, '0') + 's' : ''}`;
+};
 
-export default function RealtimeChart({ points }: Props) {
+export default function RealtimeChart({ points, startedAt }: Props) {
   if (points.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
@@ -22,7 +27,7 @@ export default function RealtimeChart({ points }: Props) {
     );
   }
 
-  const data = points.map(p => ({ ...p, t: fmt(p.timestamp) }));
+  const data = points.map(p => ({ ...p, t: fmtElapsed(p.timestamp, startedAt) }));
 
   return (
     <div className="space-y-4">

@@ -54,7 +54,7 @@ export const publishTest = (test: EnrichedTestRequest, skipAI: boolean): void =>
 
   const message = Buffer.from(JSON.stringify(test));
   if (skipAI) {
-    const targetQueue = test.type === 'backend' ? QUEUES.BACKEND : QUEUES.CLIENT;
+    const targetQueue = (test.type === 'backend' || test.type === 'flow') ? QUEUES.BACKEND : QUEUES.CLIENT;
     channel.sendToQueue(targetQueue, message, { persistent: true });
     log.info({ testId: test.id, queue: targetQueue }, 'Test routed directly to worker (script reused)');
   } else {

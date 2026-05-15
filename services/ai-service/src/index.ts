@@ -64,7 +64,7 @@ const startConsumer = async (): Promise<void> => {
     try {
       const script = await generateScript(test);
       const enrichedTest = { ...test, generatedScript: script };
-      const targetQueue = test.type === 'backend' ? BACKEND_QUEUE : CLIENT_QUEUE;
+      const targetQueue = (test.type === 'backend' || test.type === 'flow') ? BACKEND_QUEUE : CLIENT_QUEUE;
 
       channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(enrichedTest)), { persistent: true });
       log.info({ testId: test.id, targetQueue }, 'Script generated and routed');

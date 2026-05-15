@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint } from '@alt/shared';
-import { parseK6Output, aggregateWindow, parseK6StatusCodes } from './parser';
+import { parseK6Output, aggregateWindow, parseK6StatusCodes, parseK6GroupMetrics } from './parser';
 import { log } from './logger';
 
 const QUEUE            = 'backend-tests';
@@ -62,7 +62,11 @@ const validateScript = (scriptPath: string): Promise<void> =>
     k6.on('error', reject);
   });
 
-const runK6Test = async (testId: string, script: string): Promise<BackendMetrics> => {
+const runK6Test = async (
+  testId: string,
+  script: string,
+  envVars?: Record<string, string>
+): Promise<BackendMetrics> => {
   const scriptPath = path.join(os.tmpdir(), `k6-${testId}.js`);
   const jsonPath   = `/tmp/k6-live-${testId}.json`;
 
@@ -74,7 +78,8 @@ const runK6Test = async (testId: string, script: string): Promise<BackendMetrics
   });
 
   return new Promise((resolve, reject) => {
-    const k6 = spawn('k6', ['run', '--out', `json=${jsonPath}`, scriptPath]);
+    const envArgs = Object.entries(envVars ?? {}).flatMap(([k, v]) => ['--env', `${k}=${v}`]);
+    const k6 = spawn('k6', ['run', '--out', `json=${jsonPath}`, ...envArgs, scriptPath]);
     runningTests.set(testId, k6);
 
     let stdout = '';
@@ -118,6 +123,8 @@ const runK6Test = async (testId: string, script: string): Promise<BackendMetrics
       log.debug({ testId }, 'k6 full output received');
       const metrics = parseK6Output(output);
       metrics.statusCodes = parseK6StatusCodes(jsonContent);
+      const stepMetrics = parseK6GroupMetrics(jsonContent);
+      if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
       resolve(metrics);
     });
 
@@ -222,7 +229,7 @@ const start = async (): Promise<void> => {
     try {
       await updateStatus(test.id, 'running');
 
-      const metrics = await runK6Test(test.id, test.generatedScript!);
+      const metrics = await runK6Test(test.id, test.generatedScript!, test.envVars);
 
       // r2: check if the test was cancelled while running
       if (cancelledTests.has(test.id)) {
@@ -233,7 +240,8 @@ const start = async (): Promise<void> => {
         return;
       }
 
-      const scriptId = await saveScript(test.targetUrl, test.generatedScript!, test.scriptId);
+      const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
+      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId);
 
       const result: TestResult = {
         testId: test.id,

@@ -101,7 +101,7 @@ export default function ResultsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        r.type === 'backend' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                        r.type === 'backend' ? 'bg-blue-100 text-blue-700' : r.type === 'flow' ? 'bg-indigo-100 text-indigo-700' : 'bg-purple-100 text-purple-700'
                       }`}>{r.type}</span>
                     </td>
                     <td className="px-4 py-3">

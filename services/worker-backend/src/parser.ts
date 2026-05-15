@@ -1,4 +1,4 @@
-import { BackendMetrics, LiveMetricPoint } from '@alt/shared';
+import { BackendMetrics, LiveMetricPoint, StepMetrics } from '@alt/shared';
 
 const toMs = (val: number, unit: string | undefined): number => {
   if (unit === 's')  return Math.round(val * 1000);
@@ -58,6 +58,51 @@ export const parseK6StatusCodes = (jsonContent: string): Record<string, number> 
     } catch { /* skip malformed */ }
   }
   return counts;
+};
+
+export const parseK6GroupMetrics = (jsonContent: string): StepMetrics[] => {
+  const durationsByGroup: Record<string, number[]> = {};
+  const countByGroup:    Record<string, number>    = {};
+  const failedByGroup:   Record<string, number[]>  = {};
+
+  for (const line of jsonContent.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type !== 'Point') continue;
+      const rawGroup: string = obj.data?.tags?.group ?? '';
+      if (!rawGroup || rawGroup === '::') continue;
+      const name = rawGroup.replace(/^::/, ''); // strip k6's leading ::
+      switch (obj.metric) {
+        case 'http_req_duration':
+          (durationsByGroup[name] ??= []).push(obj.data.value);
+          break;
+        case 'http_reqs':
+          countByGroup[name] = (countByGroup[name] ?? 0) + 1;
+          break;
+        case 'http_req_failed':
+          (failedByGroup[name] ??= []).push(obj.data.value);
+          break;
+      }
+    } catch { /* skip malformed */ }
+  }
+
+  return Object.entries(durationsByGroup).map(([name, durations]) => {
+    const total = countByGroup[name] ?? durations.length;
+    const failedVals = failedByGroup[name] ?? [];
+    const failedCount = failedVals.length
+      ? Math.round(failedVals.reduce((a, b) => a + b, 0) / failedVals.length * total)
+      : 0;
+    const sorted = [...durations].sort((a, b) => a - b);
+    const p95idx = Math.min(Math.floor(sorted.length * 0.95), sorted.length - 1);
+    return {
+      name,
+      avgResponseTime: Math.round(durations.reduce((a, b) => a + b, 0) / durations.length),
+      p95ResponseTime: Math.round(sorted[p95idx] ?? 0),
+      requestsTotal: total,
+      requestsFailed: failedCount,
+    };
+  });
 };
 
 interface K6JsonPoint {

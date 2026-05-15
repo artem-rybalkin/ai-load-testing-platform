@@ -1,8 +1,17 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 const RESULTS_URL = process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004';
 
+export interface FlowStep {
+  name: string;
+  url: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  body?: string;
+  headers?: Record<string, string>;
+  extract?: Record<string, string>;
+}
+
 export interface TestRequest {
-  type: 'backend' | 'client-side';
+  type: 'backend' | 'client-side' | 'flow';
   targetUrl: string;
   description: string;
   options: {
@@ -12,6 +21,8 @@ export interface TestRequest {
     sessions?: number;
     collectWebVitals?: boolean;
   };
+  steps?: FlowStep[];
+  envVars?: Record<string, string>;
 }
 
 export interface TestResult {
@@ -24,8 +35,9 @@ export interface TestResult {
   script: string | null;
   reused_script: boolean;
   is_baseline: boolean;
-  started_at: string;
-  completed_at: string;
+  duration_seconds: number | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
   perf_status?: string;
   analysis?: {
