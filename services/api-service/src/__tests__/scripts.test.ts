@@ -13,6 +13,7 @@ const createSchema = async (p: Pool): Promise<void> => {
       target_url  TEXT NOT NULL,
       test_type   VARCHAR(20) NOT NULL,
       script      TEXT NOT NULL,
+      description TEXT,
       used_count  INTEGER DEFAULT 1,
       created_at  TIMESTAMPTZ DEFAULT NOW(),
       updated_at  TIMESTAMPTZ DEFAULT NOW(),
@@ -26,12 +27,13 @@ const insertScript = async (
   targetUrl: string,
   testType: string,
   script: string,
-  usedCount = 1
+  usedCount = 1,
+  description?: string
 ): Promise<string> => {
   const { rows } = await p.query(
-    `INSERT INTO test_scripts (target_url, test_type, script, used_count)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [targetUrl, testType, script, usedCount]
+    `INSERT INTO test_scripts (target_url, test_type, script, used_count, description)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [targetUrl, testType, script, usedCount, description ?? null]
   );
   return rows[0].id as string;
 };
@@ -65,7 +67,7 @@ describe('findExistingScript', () => {
     expect(result).toBeNull();
   });
 
-  it('returns the script and increments used_count when found', async () => {
+  it('returns the script without incrementing used_count', async () => {
     await insertScript(pool, 'http://example.com', 'backend', 'export default function(){}', 3);
 
     const result = await findExistingScript('http://example.com', 'backend', undefined, pool);
@@ -78,7 +80,26 @@ describe('findExistingScript', () => {
       'SELECT used_count FROM test_scripts WHERE target_url = $1',
       ['http://example.com']
     );
-    expect(rows[0].used_count).toBe(4);
+    // used_count must NOT be incremented by findExistingScript — caller decides
+    expect(rows[0].used_count).toBe(3);
+  });
+
+  it('returns the stored description', async () => {
+    await insertScript(pool, 'http://desc-test.com', 'backend', 'export default function(){}', 1, 'load test 10 users 1 min');
+
+    const result = await findExistingScript('http://desc-test.com', 'backend', undefined, pool);
+
+    expect(result).not.toBeNull();
+    expect(result!.description).toBe('load test 10 users 1 min');
+  });
+
+  it('returns null description when script was inserted without one', async () => {
+    await insertScript(pool, 'http://no-desc.com', 'backend', 'export default function(){}');
+
+    const result = await findExistingScript('http://no-desc.com', 'backend', undefined, pool);
+
+    expect(result).not.toBeNull();
+    expect(result!.description).toBeNull();
   });
 
   it('injects new options into the cached script for backend type', async () => {

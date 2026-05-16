@@ -9,12 +9,14 @@ and results are stored with performance analysis, regression detection, and per-
 
 ```
 POST /tests → api-service → checks DB for existing script
-                    ↓ (new URL / flow)        ↓ (script cached)
-              RabbitMQ: ai-requests      skip AI, go directly
-                    ↓
-              ai-service (Gemini → k6 or Puppeteer script)
-                    ↓
-         RabbitMQ: backend-tests OR client-tests
+                    ↓ (no script)
+              RabbitMQ: ai-requests
+                    ↓ (script found, no description)        ↓ (script found + description)
+              skip AI, go directly               ai-service: compareDescriptions()
+                    ↓                               ↓ REUSE         ↓ REGENERATE
+                    ↓                          use cached       generateScript()
+                    ↓                               ↓                   ↓
+              RabbitMQ: backend-tests OR client-tests
                     ↓                        ↓
           worker-backend (k6)      worker-client (Puppeteer)
                     ↓                        ↓
@@ -70,7 +72,7 @@ ai-load-testing-platform/
 ├── vitest.config.ts          # Vitest config (unit + integration + UI tests)
 ├── playwright.config.ts      # Playwright E2E config (baseURL: localhost:3006)
 ├── docker-compose.yml        # production services + infrastructure
-├── docker-compose.dev.yml    # dev hot-reload overrides (tsx watch)
+├── docker-compose.dev.yml    # dev hot-reload overrides (tsx watch + WATCHPACK_POLLING)
 ├── .env                      # GEMINI_API_KEY (never commit)
 ├── CLAUDE.md                 # this file
 ├── e2e/                      # Playwright E2E specs (require docker compose up)
@@ -83,24 +85,24 @@ ai-load-testing-platform/
 └── services/
     ├── api-service/          # @alt/api-service
     │   └── src/
-    │       ├── index.ts      # Fastify app, POST /tests, POST /tests/:id/cancel
+    │       ├── index.ts      # Fastify app, POST /tests (three-way routing), cancel
     │       ├── queue.ts      # RabbitMQ publisher (ai-requests, backend-tests, cancel-fanout)
-    │       ├── scripts.ts    # script reuse + stepsToKey (SHA-256 for flow cache)
+    │       ├── scripts.ts    # findExistingScript, incrementUsedCount, stepsToKey
     │       ├── options.ts    # buildK6Options (load profiles), replaceK6Options
     │       └── logger.ts     # Pino logger
     │   └── src/__tests__/
-    │       ├── index.test.ts # POST /tests, cancel, health (mocked queue + scripts)
+    │       ├── index.test.ts # POST /tests routing branches, cancel, health
     │       ├── options.test.ts # buildK6Options + replaceK6Options unit tests
     │       └── scripts.test.ts # findExistingScript integration (Testcontainers)
     ├── ai-service/           # @alt/ai-service
     │   └── src/
-    │       ├── index.ts      # RabbitMQ consumer (ai-requests → backend/client queues)
-    │       ├── generator.ts  # Gemini API: BACKEND_PROMPT, CLIENT_PROMPT, FLOW_PROMPT
+    │       ├── index.ts      # RabbitMQ consumer: comparison branch + generation
+    │       ├── generator.ts  # generateScript (BACKEND/CLIENT/FLOW_PROMPT) + compareDescriptions
     │       └── logger.ts
     ├── worker-backend/       # @alt/worker-backend
     │   └── src/
-    │       ├── index.ts      # k6 runner, DLQ retry, cancel handler, live metrics posting
-    │       ├── parser.ts     # parseK6Output, parseK6StatusCodes, aggregateWindow,
+    │       ├── index.ts      # k6 runner, saveScript (with description), used_count on reuse
+    │       ├── parser.ts     # parseK6Output, parseK6StatusCodes, aggregateWindow (per-step),
     │       │                 #   parseK6GroupMetrics (per-step group metrics)
     │       └── logger.ts
     │   └── src/__tests__/
@@ -114,7 +116,7 @@ ai-load-testing-platform/
     │       ├── app.ts        # Fastify REST API (all endpoints)
     │       ├── consumer.ts   # RabbitMQ consumer, handleResult, webhook firing
     │       ├── analyzer.ts   # analyzeResult: thresholds + regression detection
-    │       ├── db.ts         # PostgreSQL pool, createSchema (all 6 tables + indexes)
+    │       ├── db.ts         # PostgreSQL pool, createSchema (all tables + migrations)
     │       ├── scheduler.ts  # node-cron, startScheduler, triggerSchedule
     │       ├── cleanup.ts    # runStaleCleanup: running>15min / pending>30min → failed
     │       └── logger.ts
@@ -145,11 +147,12 @@ ai-load-testing-platform/
             ├── schedules/page.tsx        # schedule CRUD + manual trigger
             ├── templates/page.tsx        # template CRUD + load into form
             └── components/
-                ├── ActiveTests.tsx       # polling header (active test count)
+                ├── ActiveTests.tsx       # polling header (active test count + type icon)
                 ├── BackendChart.tsx      # Recharts bar chart for k6 metrics
                 ├── ClientChart.tsx       # radar chart for Web Vitals + Lighthouse
+                ├── FlowStepChart.tsx     # grouped bar chart: avg+p95 per step (flow results)
                 ├── AnalysisPanel.tsx     # threshold violations + regression diffs
-                ├── RealtimeChart.tsx     # live metrics during test execution
+                ├── RealtimeChart.tsx     # live metrics with per-step lines for flow tests
                 ├── TrendChart.tsx        # p95/LCP trend across runs for same URL
                 └── FlowBuilder.tsx       # multi-step flow editor + HAR import
 ```
@@ -158,12 +161,14 @@ ai-load-testing-platform/
 
 ```sql
 -- Generated k6/Puppeteer scripts (reused across tests)
+-- description: the user description used to generate the script (for AI-powered reuse comparison)
 -- For flow tests, target_url stores the SHA-256 hash key: 'flow:<hex16>'
 CREATE TABLE test_scripts (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   target_url  TEXT NOT NULL,
   test_type   VARCHAR(20) NOT NULL,   -- 'backend' | 'client-side'
   script      TEXT NOT NULL,
+  description TEXT,                   -- prompt description used when generating this script
   used_count  INTEGER DEFAULT 1,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ DEFAULT NOW(),
@@ -172,20 +177,21 @@ CREATE TABLE test_scripts (
 
 -- Test results with analysis
 CREATE TABLE test_results (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  test_id       UUID NOT NULL UNIQUE,
-  type          VARCHAR(20) NOT NULL,   -- 'backend' | 'client-side' | 'flow'
-  target_url    TEXT NOT NULL,
-  status        VARCHAR(20) NOT NULL,   -- 'pending'|'running'|'completed'|'failed'|'cancelled'
-  metrics       JSONB,                  -- BackendMetrics | ClientMetrics (incl. stepMetrics[])
-  script_id     UUID REFERENCES test_scripts(id),
-  reused_script BOOLEAN DEFAULT FALSE,
-  perf_status   VARCHAR(20),            -- 'passed' | 'degraded' | 'failed'
-  analysis      JSONB,                  -- diffs, threshold violations, summary
-  is_baseline   BOOLEAN DEFAULT FALSE,  -- used as reference for regression comparisons
-  started_at    TIMESTAMPTZ,
-  completed_at  TIMESTAMPTZ,
-  created_at    TIMESTAMPTZ DEFAULT NOW()
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id          UUID NOT NULL UNIQUE,
+  type             VARCHAR(20) NOT NULL,   -- 'backend' | 'client-side' | 'flow'
+  target_url       TEXT NOT NULL,
+  status           VARCHAR(20) NOT NULL,   -- 'pending'|'running'|'completed'|'failed'|'cancelled'
+  metrics          JSONB,                  -- BackendMetrics | ClientMetrics (incl. stepMetrics[])
+  script_id        UUID REFERENCES test_scripts(id),
+  reused_script    BOOLEAN DEFAULT FALSE,
+  perf_status      VARCHAR(20),            -- 'passed' | 'degraded' | 'failed'
+  analysis         JSONB,                  -- diffs, threshold violations, summary
+  is_baseline      BOOLEAN DEFAULT FALSE,  -- used as reference for regression comparisons
+  duration_seconds INTEGER,               -- test duration in seconds (for countdown timer)
+  started_at       TIMESTAMPTZ,
+  completed_at     TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_test_results_status ON test_results(status);
 CREATE INDEX idx_test_results_url_type_status ON test_results(target_url, type, status);
@@ -198,7 +204,8 @@ CREATE TABLE live_metrics (
   vus               INTEGER NOT NULL DEFAULT 0,
   rps               FLOAT NOT NULL DEFAULT 0,
   avg_response_time FLOAT NOT NULL DEFAULT 0,
-  error_rate        FLOAT NOT NULL DEFAULT 0
+  error_rate        FLOAT NOT NULL DEFAULT 0,
+  step_metrics      JSONB                 -- [{name, avgResponseTime, rps, errorRate}] for flow tests
 );
 CREATE INDEX live_metrics_test_id_idx ON live_metrics(test_id);
 
@@ -244,26 +251,23 @@ CREATE TABLE test_templates (
 ## Shared Types (@alt/shared)
 
 ```typescript
-type TestType   = 'backend' | 'client-side' | 'flow'
-type TestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+type TestType    = 'backend' | 'client-side' | 'flow'
+type TestStatus  = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak'
 
 interface FlowStep {
-  name: string
-  url: string
+  name: string; url: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
-  body?: string
-  headers?: Record<string, string>
+  body?: string; headers?: Record<string, string>
   extract?: Record<string, string>  // variable_name → jsonpath field name
 }
 
 interface StepMetrics {
-  name: string
-  avgResponseTime: number
-  p95ResponseTime: number
-  requestsTotal: number
-  requestsFailed: number
+  name: string; avgResponseTime: number; p95ResponseTime: number
+  requestsTotal: number; requestsFailed: number
 }
+
+interface LiveStepMetric { name: string; avgResponseTime: number; rps: number; errorRate: number }
 
 interface SLOThresholds {
   p95?: number; avg?: number; errorRate?: number
@@ -271,8 +275,7 @@ interface SLOThresholds {
 }
 
 interface TestRequest {
-  id: string; type: TestType; targetUrl: string
-  description: string
+  id: string; type: TestType; targetUrl: string; description: string
   options: BackendTestOptions | ClientTestOptions
   thresholds?: SLOThresholds
   steps?: FlowStep[]               // for 'flow' type
@@ -285,6 +288,8 @@ interface EnrichedTestRequest extends TestRequest {
   scriptId?: string
   reusedScript?: boolean
   scriptCacheKey?: string          // for flow: 'flow:<sha256hex16>'
+  cachedScript?: string            // carried to ai-service when description comparison needed
+  cachedScriptDescription?: string | null  // stored description of the cached script
 }
 
 interface BackendTestOptions { vus, duration, rampUp?, profile?: LoadProfile, peakVus? }
@@ -301,15 +306,8 @@ interface BackendMetrics {
 interface LighthouseScore { performance, accessibility, bestPractices, seo } // 0-100
 interface ClientMetrics   { type: 'client', lcp, fid, cls, ttfb, fcp, lighthouseScore? }
 
-interface TestResult {
-  testId, targetUrl, status, metrics, thresholds?
-  startedAt, completedAt?
-  perfStatus?: 'passed' | 'degraded' | 'failed'
-  analysis?: { perfStatus, diffs[], summary, thresholdViolations[] }
-}
-
-interface TestScript { id, targetUrl, testType, script, usedCount, createdAt, updatedAt }
-interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate }
+interface TestScript { id, targetUrl, testType, script, description?, usedCount, createdAt, updatedAt }
+interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics?: LiveStepMetric[] }
 ```
 
 ## API Endpoints
@@ -321,19 +319,20 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate }
   - `type` = `'backend'` | `'client-side'` | `'flow'`
   - for flow: `steps[]` required, `targetUrl` defaults to `steps[0].url`
   - `envVars` passed to k6 as `--env KEY=VALUE` flags, **not stored in DB**
+  - description is parsed for VUs/duration/ramp-up/profile at form level; AI uses it for script content
 - `POST /tests/:testId/cancel` — cancel running/pending test; publishes to cancel-fanout exchange
 
 ### results-service (port 3004)
 **Results**
-- `POST /results/pending`         — create pending record `{ testId, type, targetUrl }`
+- `POST /results/pending`         — create pending record `{ testId, type, targetUrl, durationSeconds? }`
 - `GET  /results`                 — all results (last 50, joined with script text)
 - `GET  /results/active`          — tests with status pending/running
 - `GET  /results/compare?a=&b=`   — side-by-side diff of two completed results
 - `GET  /results/trend?url=`      — chronological metric trend for a URL (p95 or LCP)
 - `GET  /results/:testId`         — single result with joined script
 - `POST /results/:testId/cancel`  — set status = cancelled in DB
-- `POST /results/:testId/live`    — save live metric point (called by worker-backend)
-- `GET  /results/:testId/live`    — all live points for a test (chronological)
+- `POST /results/:testId/live`    — save live metric point with optional `stepMetrics` (called by worker-backend)
+- `GET  /results/:testId/live`    — all live points for a test (chronological), includes `stepMetrics`
 - `POST /results/:testId/baseline` — mark as baseline for regression comparisons
 - `DELETE /results/:testId/baseline` — clear baseline flag
 - `GET  /results/:testId/report.pdf` — download pdfkit PDF report
@@ -357,7 +356,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate }
 
 **Templates**
 - `GET    /templates`      — list all templates (by used_count DESC)
-- `POST   /templates`      — create `{ name, type, target_url, options, ... }`
+- `POST   /templates`      — create `{ name, type, target_url, options, thresholds?, description? }`
 - `GET    /templates/:id`  — single template (increments used_count)
 - `DELETE /templates/:id`  — delete template
 
@@ -365,7 +364,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate }
 
 | Queue / Exchange      | Type   | Producer          | Consumer          | Purpose                              |
 |-----------------------|--------|-------------------|-------------------|--------------------------------------|
-| `ai-requests`         | queue  | api-service       | ai-service        | new tests needing AI script gen      |
+| `ai-requests`         | queue  | api-service       | ai-service        | tests needing AI script gen or comparison |
 | `ai-requests.dlq`     | queue  | ai-service        | —                 | exhausted after 3 retries            |
 | `backend-tests`       | queue  | ai-service        | worker-backend    | k6 tests (backend + flow type)       |
 | `backend-tests.dlq`   | queue  | worker-backend    | —                 | failed k6 tests after 3 retries      |
@@ -380,37 +379,66 @@ After 3 retries the message is routed to `<queue>.dlq` and acked.
 
 ## Key Implementation Details
 
-### Script Reuse & Flow Cache
-- **Backend / client-side:** `api-service` queries `test_scripts` by `(target_url, test_type)`.
-  - Hit → increments `used_count`, injects new k6 options into cached script, sends directly to worker queue.
-  - Miss → sends to `ai-requests` queue; ai-service generates and forwards.
-- **Flow tests:** cache key = `stepsToKey(steps)` = `'flow:' + sha256(JSON.stringify(steps)).slice(0,16)`.
-  This is stored as `target_url` in `test_scripts` (type = `'backend'`).
-  Worker uses `scriptCacheKey` from `EnrichedTestRequest` when inserting a newly generated flow script.
+### Script Reuse — Three-Way Routing (api-service/index.ts)
+
+`POST /tests` uses three-way logic based on whether an existing script and description are present:
+
+1. **Cache miss** (no existing script) → send to `ai-requests` queue → ai-service generates via Gemini
+2. **Hit + no description** (or flow test) → inject new k6 options into cached script → bypass ai-service, send directly to worker queue; increment `used_count`
+3. **Hit + description provided** → send to `ai-requests` queue with `cachedScript` + `cachedScriptDescription` attached → ai-service calls `compareDescriptions()` for Gemini verdict
+
+### Semantic Script Comparison (ai-service/generator.ts)
+
+`compareDescriptions(newDescription, storedDescription)` → `'REUSE' | 'REGENERATE'`
+- Sends both descriptions to `gemini-2.5-flash` with a tight prompt asking for one-word verdict
+- Defaults to `'REGENERATE'` on any unexpected response or error (safe fallback)
+- Same 3-attempt retry loop with 60/120/180s backoff as `generateScript`
+
+**ai-service consumer branching:**
+- If `cachedScript` + `description` present and `cachedScriptDescription != null` → call `compareDescriptions()`
+  - `REUSE` → forward cached script to worker queue, mark `reusedScript: true`
+  - `REGENERATE` → clear `scriptId`, fall through to `generateScript()`
+- If `cachedScriptDescription` is null (legacy row) → always regenerate
+- Otherwise → standard `generateScript()` path
+
+**used_count tracking:** `findExistingScript` no longer auto-increments. Increment happens in:
+- api-service (`incrementUsedCount`) on direct bypass (path 2 above)
+- worker-backend (`saveScript` with `scriptId` present) on confirmed REUSE from ai-service
+
+### Script Description Storage (worker-backend/index.ts)
+
+`saveScript(targetUrl, script, scriptId?, description?)`:
+- If `scriptId` present (REUSE path) → increment `used_count` only, no INSERT
+- If `scriptId` absent → INSERT/UPDATE with `description` column populated from `test.description`
 
 ### k6 Metrics Parsing (worker-backend/parser.ts)
+
 - `parseK6Output(output)` — regex over k6 text output → `BackendMetrics`
-  - `http_reqs[^:]*:\s*(\d+)\s+[\d.]+\/s` → requestsTotal
-  - `http_req_failed[^:]*:\s*([\d.]+)%` → error rate
-  - `http_req_duration[^\n]*\bavg=([\d.]+)(ms|s|µs)?` → avgResponseTime
-  - `http_req_duration[^\n]*\bp\(50\)=...` / `p\(95\)=...` / `p\(99\)=...`
-  - Unit normalisation: `ms` (identity), `s` (×1000), `µs` (÷1000)
 - `parseK6StatusCodes(jsonContent)` — counts `http_reqs` points by `data.tags.status`
-- `aggregateWindow(lines)` — aggregates 5-second k6 JSON windows → `LiveMetricPoint`
-- `parseK6GroupMetrics(jsonContent)` — groups `http_req_duration` / `http_reqs` / `http_req_failed`
-  by `data.tags.group` (strip leading `::`) → `StepMetrics[]`
+- `aggregateWindow(lines)` — aggregates 5-second k6 JSON windows → `LiveMetricPoint` with per-step data:
+  - Collects `http_req_duration`, `http_reqs`, `http_req_failed` per `data.tags.group`
+  - Returns `stepMetrics: [{name, avgResponseTime, rps, errorRate}]` when groups present
+- `parseK6GroupMetrics(jsonContent)` — final per-step breakdown after test completes → `StepMetrics[]`
 
 ### Flow Test Execution (worker-backend)
 - AI generates k6 script using `FLOW_PROMPT` with `group('Step N: name', fn)` per step
 - `runK6Test(testId, script, envVars?)` passes `--env KEY=VALUE` args to k6 process
+- `started_at` is set in DB when status transitions to `'running'` (used for countdown timer)
 - After k6 exits, `parseK6GroupMetrics(jsonContent)` extracts per-step metrics
-- `stepMetrics[]` is attached to `BackendMetrics` and stored in `metrics` JSONB column
-- UI result page shows `StepMetricsTable` when `metrics.stepMetrics.length > 0`
+- `stepMetrics[]` attached to `BackendMetrics`; UI shows `FlowStepChart` + `StepMetricsTable`
+
+### Live Metrics with Per-Step Data
+- `aggregateWindow` returns `stepMetrics` per 5-second window when k6 group tags are present
+- Results-service stores `step_metrics JSONB` in `live_metrics` table
+- GET `/results/:testId/live` returns `stepMetrics` alongside aggregate metrics
+- `RealtimeChart` detects `stepMetrics` and renders one colored line per step in all 3 charts:
+  - Response time per step, Error rate per step, Throughput per step
+  - Step names are sanitized (`toKey()`) for safe Recharts dataKey usage
 
 ### Performance Analyzer (results-service/analyzer.ts)
 Default thresholds: p95 < 1000ms, avg < 500ms, error rate < 1%, LCP < 2500ms,
 FCP < 1800ms, TTFB < 800ms, CLS < 0.1, Lighthouse performance ≥ 50.
-- Per-test SLO overrides via `thresholds` field in `TestRequest`
+- Per-test SLO overrides via `thresholds` field in `TestRequest` (also saveable in templates)
 - Compares vs baseline (if set) or vs previous run for same URL
 - Regression: >20% worse on any metric → `degraded`; threshold violation → `failed`
 
@@ -447,15 +475,27 @@ After `handleResult()` saves a result with non-null `perf_status`:
 - Collects performance, accessibility, best-practices, SEO scores (0–100)
 - `performance < 50` → analyzer treats as threshold violation → `perf_status = 'failed'`
 
+### UI Form — Test Creation (app/page.tsx)
+- **Description field** is the primary input; Advanced settings (VUs, duration, ramp-up, profile) are collapsed by default
+- **Auto-extraction from description:** on blur, `applyDescriptionParams()` parses natural language for VUs, sessions, duration, ramp-up, profile keywords and updates the Advanced settings; the section auto-opens to confirm
+- **SLO thresholds:** collapsible section; backend/flow gets p95/avg/errorRate, browser gets LCP/FCP/TTFB/CLS
+- **Templates:** save/load includes description, URL, VUs, duration, profile, peakVus, thresholds; dropdown is controlled (always resets to placeholder after selection)
+
 ### UI Polling Strategy
-- `ActiveTests` header: polls `/results/active` every 3s while component is mounted
+- `ActiveTests` header: polls `/results/active` every 3s; shows ⚡ (backend), 🔗 (flow), 🌐 (browser) icons
 - Result detail page: polls `/results/:testId` every 2s until `completed` / `failed` / `cancelled`
-- Live metrics: polls `/results/:testId/live` every 3s while `status === 'running'`
+- Live metrics: polls `/results/:testId/live` every 3s while `status === 'running'` (backend + flow)
 - Results list page: polls `/results` every 5s
+
+### Countdown Timer & Elapsed X-axis
+- `duration_seconds` stored in `test_results` at pending-record creation
+- `started_at` set to `NOW()` when worker-backend transitions test to `'running'`
+- Result detail page shows countdown + progress bar once both fields are non-null
+- `RealtimeChart` X-axis shows elapsed time (`Xs` / `XmYYs`) by computing `timestamp - started_at`; falls back to wall-clock if `startedAt` is null
 
 ### Load Profile Stages (api-service/options.ts)
 `buildK6Options(opts)` generates k6 JSON options based on `profile`:
-- `load` (default): ramp 0→vus over 30s, hold for duration, ramp down
+- `load` (default): ramp 0→vus over 30s (or rampUp if set), hold for duration, ramp down
 - `spike`: warm-up → pre-spike → spike to peakVus over 10s → hold → ramp down
 - `capacity`: linear ramp from 0 to peakVus over duration (find the breaking point)
 - `soak`: ramp to vus, hold for duration, ramp down (detect memory leaks)
@@ -499,11 +539,15 @@ STALE_PENDING_MINUTES=30      # pending tests older than this → failed
 ## Common Commands
 
 ```bash
-# Start all services
+# Start all services (production)
 docker compose up --build
 
-# Start with hot-reload (dev mode)
+# Start with hot-reload (dev mode) — Windows: uses WATCHPACK_POLLING for Next.js HMR
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+# Start without cache
+docker compose build --no-cache
+docker compose up
 
 # Start a single service
 docker compose up --build api-service
@@ -520,7 +564,7 @@ docker compose down -v
 # Build shared types (required after any change to packages/shared/src/index.ts)
 npm run build:shared
 
-# Run unit + integration tests (191 tests)
+# Run unit + integration tests (195 tests)
 npm test
 
 # Run tests in watch mode
@@ -547,15 +591,15 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** 191 tests passing across 13 test files
+**Total:** 195 tests passing across 13 test files
 
 ### Unit Tests
 | File | Subject | Tests |
 |------|---------|-------|
-| `worker-backend/src/__tests__/parser.test.ts` | `parseK6Output`, `aggregateWindow`, `parseK6StatusCodes` | 15 |
+| `worker-backend/src/__tests__/parser.test.ts` | `parseK6Output`, `aggregateWindow` (per-step), `parseK6StatusCodes` | 15 |
 | `results-service/src/__tests__/analyzer.test.ts` | `analyzeResult` thresholds + regression | 14 |
 | `api-service/src/__tests__/options.test.ts` | `buildK6Options`, `replaceK6Options` | 12 |
-| `api-service/src/__tests__/index.test.ts` | POST /tests, cancel, health (mocked queue) | 10 |
+| `api-service/src/__tests__/index.test.ts` | POST /tests three-way routing, cancel, health | 13 |
 | `results-service/src/__tests__/scheduler.test.ts` | `startScheduler`, `triggerSchedule` (mocked cron) | 12 |
 
 ### Integration Tests (real PostgreSQL via Testcontainers)
@@ -564,14 +608,14 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `results-service/src/__tests__/api.test.ts` | all REST endpoints | 38 |
 | `results-service/src/__tests__/consumer.test.ts` | `handleResult`, webhook firing, baseline ordering | 11 |
 | `results-service/src/__tests__/stale.test.ts` | `runStaleCleanup` | 10 |
-| `api-service/src/__tests__/scripts.test.ts` | `findExistingScript` + script injection | 7 |
+| `api-service/src/__tests__/scripts.test.ts` | `findExistingScript` + description field + no auto-increment | 9 |
 
 ### UI Tests (RTL + jsdom via Vitest)
 | File | Subject | Tests |
 |------|---------|-------|
 | `ui/__tests__/AnalysisPanel.test.tsx` | threshold violations, diff rows, badges | 9 |
 | `ui/__tests__/ActiveTests.test.tsx` | count display, link, polling | 6 |
-| `ui/__tests__/home.test.tsx` | form validation, template dropdown | 8 |
+| `ui/__tests__/home.test.tsx` | form validation, Advanced settings, template dropdown | 8 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links | 6 |
 
 ### Playwright E2E (requires `docker compose up`)
@@ -592,7 +636,6 @@ All phases complete:
 - ✅ Puppeteer client-side testing with Web Vitals (LCP, FID, CLS, TTFB, FCP)
 - ✅ Lighthouse integration (performance / accessibility / best-practices / SEO scores)
 - ✅ Results storage in PostgreSQL with performance analyzer
-- ✅ Script reuse: cached scripts injected with fresh k6 options per run
 - ✅ Load profiles: load / spike / capacity / soak (UI selector + prompt engineering)
 - ✅ Next.js UI: test form, results dashboard, charts, live metrics
 
@@ -603,7 +646,7 @@ All phases complete:
 - ✅ Execution timeouts (k6: 10 min, Puppeteer: 5 min; SIGTERM + SIGKILL)
 - ✅ Stale test cleanup (every 60s; configurable running/pending thresholds)
 - ✅ Baseline management (regression vs baseline instead of previous run)
-- ✅ Configurable SLO thresholds per test request
+- ✅ Configurable SLO thresholds per test request (UI + API)
 - ✅ p50 + status code breakdown in backend metrics
 - ✅ Script dry-run validation (`k6 inspect` before execution)
 - ✅ Manual run comparison (`/results/compare?a=&b=`)
@@ -615,31 +658,45 @@ All phases complete:
 - ✅ Structured Pino logging (JSON, testId in every line)
 - ✅ Horizontal worker scaling + cancel fanout exchange
 - ✅ Scheduled tests (node-cron, CRUD API + manual trigger)
-- ✅ Test template library (save/load from home page)
+- ✅ Test template library (save/load including thresholds, profile, ramp-up)
 - ✅ PDF report generation (pdfkit, Download PDF button)
-- ✅ Dev hot-reload (docker-compose.dev.yml + tsx watch)
+- ✅ Dev hot-reload (docker-compose.dev.yml + tsx watch + WATCHPACK_POLLING for Windows)
 - ✅ Real-time charts during k6 execution (5s live metric windows)
 
-### Phase 3 — Test Coverage (191 tests)
-- ✅ Unit tests: parser, analyzer, options builder, api-service handler
+### Phase 3 — Test Coverage (195 tests)
+- ✅ Unit tests: parser, analyzer, options builder, api-service handler (routing branches)
 - ✅ Integration tests: all REST endpoints, consumer pipeline, stale cleanup, scheduler
 - ✅ UI tests: RTL component + page tests (home form, results list, analysis panel, active tests)
 - ✅ Playwright E2E: happy path, cancel flow, compare flow
 
 ### Phase 4 — Multi-step Flow Testing
-- ✅ `FlowStep` / `StepMetrics` types in `@alt/shared`; `'flow'` added to `TestType`
+- ✅ `FlowStep` / `StepMetrics` / `LiveStepMetric` types in `@alt/shared`; `'flow'` added to `TestType`
 - ✅ `FLOW_PROMPT` in ai-service: k6 script with `group()` per step + variable chaining
 - ✅ Flow cache key: SHA-256 hash of steps JSON (`flow:<hex16>`) in `test_scripts`
 - ✅ `POST /tests` accepts `steps[]` + `envVars` (credentials passed as k6 `--env`, never stored)
 - ✅ `parseK6GroupMetrics` in worker-backend: per-step avg/p95/requests from k6 JSON group tags
+- ✅ `aggregateWindow` emits per-step live metrics (avg RT, rps, error rate) stored in `live_metrics.step_metrics`
+- ✅ `RealtimeChart` shows one colored line per step across all 3 charts (response time, error rate, throughput)
+- ✅ `FlowStepChart` shows grouped bar chart (avg + p95) for completed flow results
 - ✅ `FlowBuilder` UI: add/remove/reorder steps, method+URL+body+extract editor, env vars panel
 - ✅ HAR import: parse Chrome DevTools HAR → auto-generate `steps[]`, pre-fill builder
-- ✅ Result detail page shows `StepMetricsTable` when step metrics are present
+- ✅ Result detail page shows `FlowStepChart` + `StepMetricsTable` when step metrics present
+
+### Phase 5 — UX & Intelligence
+- ✅ Countdown timer + progress bar on result page (requires `started_at` + `duration_seconds`)
+- ✅ Elapsed time X-axis on live charts (vs wall-clock time)
+- ✅ Description-field auto-extraction: parses VUs, duration, ramp-up, profile from natural language
+- ✅ Advanced settings collapsible (load profile, VUs, duration, ramp-up hidden by default)
+- ✅ SLO threshold inputs in UI (collapsible, type-aware: backend vs browser fields)
+- ✅ Template save/load fully fixed: description, URL, duration, profile, peakVus, thresholds all round-trip
+- ✅ **Semantic script reuse:** Gemini `compareDescriptions()` decides REUSE vs REGENERATE based on description match; `test_scripts.description` stores the generating prompt; legacy rows (null description) always regenerate
+- ✅ Type-aware icons in ActiveTests header (⚡ backend, 🔗 flow, 🌐 browser)
+- ✅ Status-aware pending/running messages on result detail page
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)
 - k6 threshold violations cause non-zero exit code — handled by catching the exec error and parsing output anyway
-- Gemini rate limit: 5 RPM on free tier — 60s×attempt backoff retry implemented
+- Gemini rate limit: 5 RPM on free tier — 60s×attempt backoff retry implemented (both generateScript and compareDescriptions)
 - UI uses polling instead of WebSockets (planned improvement)
-- `is_baseline` column added via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (safe migration, not in original CREATE TABLE)
 - Flow `envVars` are stored in the RabbitMQ message while the test is in-flight — do not log them
+- Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)

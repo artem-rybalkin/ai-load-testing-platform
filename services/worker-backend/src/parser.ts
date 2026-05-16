@@ -1,4 +1,4 @@
-import { BackendMetrics, LiveMetricPoint, StepMetrics } from '@alt/shared';
+import { BackendMetrics, LiveMetricPoint, LiveStepMetric, StepMetrics } from '@alt/shared';
 
 const toMs = (val: number, unit: string | undefined): number => {
   if (unit === 's')  return Math.round(val * 1000);
@@ -108,13 +108,16 @@ export const parseK6GroupMetrics = (jsonContent: string): StepMetrics[] => {
 interface K6JsonPoint {
   type: string;
   metric: string;
-  data: { value: number; time: string };
+  data: { value: number; time: string; tags?: Record<string, string> };
 }
 
 const LIVE_WINDOW_SEC = 5;
 
 export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timestamp'> | null => {
   const durations: number[] = [];
+  const durationsByGroup: Record<string, number[]> = {};
+  const countByGroup:     Record<string, number>   = {};
+  const failedByGroup:    Record<string, number[]> = {};
   const vusValues: number[] = [];
   const failedValues: number[] = [];
   let requestCount = 0;
@@ -123,11 +126,24 @@ export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timesta
     try {
       const obj: K6JsonPoint = JSON.parse(line);
       if (obj.type !== 'Point') continue;
+      const rawGroup = obj.data.tags?.group ?? '';
+      const groupName = rawGroup && rawGroup !== '::' ? rawGroup.replace(/^::/, '') : null;
       switch (obj.metric) {
-        case 'http_req_duration': durations.push(obj.data.value);   break;
-        case 'vus':               vusValues.push(obj.data.value);   break;
-        case 'http_req_failed':   failedValues.push(obj.data.value);break;
-        case 'http_reqs':         requestCount++;                    break;
+        case 'http_req_duration':
+          durations.push(obj.data.value);
+          if (groupName) (durationsByGroup[groupName] ??= []).push(obj.data.value);
+          break;
+        case 'http_reqs':
+          requestCount++;
+          if (groupName) countByGroup[groupName] = (countByGroup[groupName] ?? 0) + 1;
+          break;
+        case 'http_req_failed':
+          failedValues.push(obj.data.value);
+          if (groupName) (failedByGroup[groupName] ??= []).push(obj.data.value);
+          break;
+        case 'vus':
+          vusValues.push(obj.data.value);
+          break;
       }
     } catch { /* skip malformed lines */ }
   }
@@ -137,10 +153,20 @@ export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timesta
   const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const max = (arr: number[]) => Math.max(...arr);
 
+  const stepMetrics: LiveStepMetric[] = Object.entries(durationsByGroup).map(([name, d]) => ({
+    name,
+    avgResponseTime: Math.round(avg(d)),
+    rps:             parseFloat(((countByGroup[name] ?? d.length) / LIVE_WINDOW_SEC).toFixed(2)),
+    errorRate:       failedByGroup[name]?.length
+                       ? parseFloat((avg(failedByGroup[name]) * 100).toFixed(2))
+                       : 0,
+  }));
+
   return {
-    vus:             vusValues.length   ? Math.round(max(vusValues))              : 0,
+    vus:             vusValues.length    ? Math.round(max(vusValues))                    : 0,
     rps:             parseFloat((requestCount / LIVE_WINDOW_SEC).toFixed(2)),
-    avgResponseTime: durations.length   ? Math.round(avg(durations))              : 0,
-    errorRate:       failedValues.length? parseFloat((avg(failedValues)*100).toFixed(2)): 0,
+    avgResponseTime: durations.length    ? Math.round(avg(durations))                    : 0,
+    errorRate:       failedValues.length ? parseFloat((avg(failedValues)*100).toFixed(2)): 0,
+    ...(stepMetrics.length > 0 && { stepMetrics }),
   };
 };

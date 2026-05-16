@@ -125,15 +125,15 @@ export const buildApp = async (
 
   app.post<{
     Params: { testId: string };
-    Body: { timestamp: string; vus: number; rps: number; avgResponseTime: number; errorRate: number };
+    Body: { timestamp: string; vus: number; rps: number; avgResponseTime: number; errorRate: number; stepMetrics?: Array<{ name: string; avgResponseTime: number }> };
   }>('/results/:testId/live', async (request, reply) => {
     const { testId } = request.params;
-    const { timestamp, vus, rps, avgResponseTime, errorRate } = request.body;
+    const { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } = request.body;
     try {
       await pool.query(
-        `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [testId, timestamp, vus, rps, avgResponseTime, errorRate]
+        `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate, step_metrics)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [testId, timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics ? JSON.stringify(stepMetrics) : null]
       );
       return { success: true };
     } catch (err) {
@@ -147,7 +147,7 @@ export const buildApp = async (
       const { testId } = request.params;
       try {
         const { rows } = await pool.query(
-          `SELECT timestamp, vus, rps, avg_response_time AS "avgResponseTime", error_rate AS "errorRate"
+          `SELECT timestamp, vus, rps, avg_response_time AS "avgResponseTime", error_rate AS "errorRate", step_metrics AS "stepMetrics"
            FROM live_metrics WHERE test_id = $1 ORDER BY timestamp ASC`,
           [testId]
         );

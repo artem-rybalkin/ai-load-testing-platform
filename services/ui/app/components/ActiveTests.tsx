@@ -37,10 +37,10 @@ export default function ActiveTests() {
               className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-blue-200 rounded-full text-xs text-blue-700 hover:bg-blue-50 transition-colors"
             >
               <span className={`w-1.5 h-1.5 rounded-full ${
-                t.type === 'backend' ? 'bg-blue-400' : 'bg-purple-400'
+                t.type === 'client-side' ? 'bg-purple-400' : 'bg-blue-400'
               }`}></span>
               <span className="max-w-32 truncate">{t.target_url.replace(/https?:\/\//, '')}</span>
-              <span className="text-blue-400">({t.type === 'backend' ? '⚡' : '🌐'})</span>
+              <span className="text-blue-400">({t.type === 'client-side' ? '🌐' : t.type === 'flow' ? '🔗' : '⚡'})</span>
             </Link>
           ))}
         </div>

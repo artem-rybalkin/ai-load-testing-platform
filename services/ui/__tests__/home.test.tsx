@@ -73,10 +73,13 @@ describe('Home page — form validation', () => {
     expect(screen.getByRole('button', { name: /multi-step flow/i })).toBeInTheDocument();
   });
 
-  it('shows load profile selector for backend type', () => {
+  it('shows load profile selector for backend type inside Advanced settings', () => {
     render(<Home />);
-    expect(screen.getByRole('button', { name: /load/i })).toBeInTheDocument();
+    const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
+    expect(advancedBtn).toBeDefined();
+    fireEvent.click(advancedBtn!);
     expect(screen.getByRole('button', { name: /spike/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /soak/i })).toBeInTheDocument();
   });
 });
 

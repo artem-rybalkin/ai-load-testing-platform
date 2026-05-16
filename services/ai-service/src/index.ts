@@ -1,8 +1,8 @@
 import amqplib from 'amqplib';
 import Fastify from 'fastify';
 
-import { TestRequest } from '@alt/shared';
-import { generateScript } from './generator';
+import { EnrichedTestRequest } from '@alt/shared';
+import { generateScript, compareDescriptions } from './generator';
 import { log } from './logger';
 
 const CONSUME_QUEUE      = 'ai-requests';
@@ -58,13 +58,36 @@ const startConsumer = async (): Promise<void> => {
   channel.consume(CONSUME_QUEUE, async (msg) => {
     if (!msg) return;
 
-    const test: TestRequest = JSON.parse(msg.content.toString());
-    log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Generating script');
+    let test: EnrichedTestRequest = JSON.parse(msg.content.toString());
+    log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Processing script request');
 
     try {
-      const script = await generateScript(test);
-      const enrichedTest = { ...test, generatedScript: script };
       const targetQueue = (test.type === 'backend' || test.type === 'flow') ? BACKEND_QUEUE : CLIENT_QUEUE;
+
+      // Description comparison path: cached script exists and has a stored description
+      if (test.cachedScript && test.description) {
+        if (test.cachedScriptDescription == null) {
+          log.info({ testId: test.id }, 'Cached script has no stored description — regenerating');
+          // falls through to generateScript below; clear scriptId so worker overwrites the row
+          test = { ...test, scriptId: undefined };
+        } else {
+          const verdict = await compareDescriptions(test.description, test.cachedScriptDescription);
+          log.info({ testId: test.id, verdict }, 'Description comparison result');
+          if (verdict === 'REUSE') {
+            const reused: EnrichedTestRequest = { ...test, generatedScript: test.cachedScript, reusedScript: true };
+            channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(reused)), { persistent: true });
+            log.info({ testId: test.id, targetQueue }, 'Script reused after semantic comparison');
+            channel.ack(msg);
+            return;
+          }
+          // REGENERATE: clear scriptId so worker overwrites the row with the new script
+          test = { ...test, scriptId: undefined };
+          log.info({ testId: test.id }, 'Description mismatch — generating new script');
+        }
+      }
+
+      const script = await generateScript(test);
+      const enrichedTest: EnrichedTestRequest = { ...test, generatedScript: script };
 
       channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(enrichedTest)), { persistent: true });
       log.info({ testId: test.id, targetQueue }, 'Script generated and routed');

@@ -70,4 +70,5 @@ services:
       - /app/services/ui/.next
     environment:
       NODE_ENV: development
+      WATCHPACK_POLLING: "true"
     command: npx next dev -p 3006

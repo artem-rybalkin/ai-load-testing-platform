@@ -114,6 +114,7 @@ export interface TestScript {
   targetUrl: string;
   testType: TestType;
   script: string;
+  description?: string | null;
   usedCount: number;
   createdAt: string;
   updatedAt: string;
@@ -124,6 +125,15 @@ export interface EnrichedTestRequest extends TestRequest {
   scriptId?: string;
   reusedScript?: boolean;
   scriptCacheKey?: string; // for flow tests: hash key used in test_scripts table
+  cachedScript?: string;             // carried to ai-service when description comparison is needed
+  cachedScriptDescription?: string | null; // stored description of the cached script
+}
+
+export interface LiveStepMetric {
+  name: string;
+  avgResponseTime: number;
+  rps: number;
+  errorRate: number;
 }
 
 export interface LiveMetricPoint {
@@ -132,4 +142,5 @@ export interface LiveMetricPoint {
   rps: number;
   avgResponseTime: number;
   errorRate: number;
+  stepMetrics?: LiveStepMetric[];
 }

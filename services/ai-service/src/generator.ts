@@ -146,6 +146,52 @@ export default function() {
 `;
 };
 
+export const compareDescriptions = async (
+  newDescription: string,
+  storedDescription: string
+): Promise<'REUSE' | 'REGENERATE'> => {
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const prompt = `You are a load test script classifier.
+
+Stored description (used to generate the existing k6 script):
+"""
+${storedDescription}
+"""
+
+New description (what the user now wants to test):
+"""
+${newDescription}
+"""
+
+Decide whether the existing script still satisfies the new description.
+- REUSE: the test scenario, load shape, and key requirements are equivalent or compatible. Minor wording differences are fine.
+- REGENERATE: the new description requires different behavior (different ramp shape, new ramp-down, different endpoints, different VU strategy, new steps, etc.).
+
+Reply with exactly one word: REUSE or REGENERATE`;
+
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      const verdict = result.response.text().trim().toUpperCase();
+      if (verdict === 'REUSE' || verdict === 'REGENERATE') return verdict;
+      console.warn(`Unexpected comparison verdict "${verdict}", defaulting to REGENERATE`);
+      return 'REGENERATE';
+    } catch (err: unknown) {
+      const error = err as { status?: number };
+      if (error.status === 429 && attempt < maxRetries) {
+        const waitTime = 60000 * attempt;
+        console.log(`Rate limited on comparison, waiting ${waitTime / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        console.error('compareDescriptions failed, defaulting to REGENERATE:', err);
+        return 'REGENERATE';
+      }
+    }
+  }
+  return 'REGENERATE';
+};
+
 export const generateScript = async (test: TestRequest): Promise<string> => {
   const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   const prompt = test.type === 'flow'

@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 
 import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, SLOThresholds, FlowStep } from '@alt/shared';
 import { connectQueue, publishTest, publishCancel, isQueueConnected } from './queue';
-import { findExistingScript, checkDbHealth, stepsToKey } from './scripts';
+import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount } from './scripts';
 
 const parseDurationSeconds = (d: string): number => {
   const m = d.match(/^(\d+)(s|m|h)$/i);
@@ -89,8 +89,16 @@ export const buildApp = async (): Promise<FastifyInstance> => {
 
       const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey);
 
-      if (existingScript) {
-        request.log.info({ targetUrl, usedCount: existingScript.usedCount }, 'Reusing cached script');
+      if (!existingScript) {
+        // Cache miss — generate new script
+        publishTest(test, false);
+        return { success: true, test, scriptReused: false };
+      }
+
+      if (!description || type === 'flow') {
+        // No description to compare, or flow test (keyed by step hash) — reuse directly
+        request.log.info({ targetUrl, usedCount: existingScript.usedCount }, 'Reusing cached script (no description comparison)');
+        await incrementUsedCount(existingScript.id);
         test.generatedScript = existingScript.script;
         test.scriptId = existingScript.id;
         test.reusedScript = true;
@@ -98,6 +106,11 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         return { success: true, test, scriptReused: true, scriptUsedCount: existingScript.usedCount };
       }
 
+      // Description provided + cached script — route through ai-service for Gemini comparison
+      request.log.info({ targetUrl }, 'Sending to AI for description comparison');
+      test.cachedScript = existingScript.script;
+      test.cachedScriptDescription = existingScript.description;
+      test.scriptId = existingScript.id;
       publishTest(test, false);
       return { success: true, test, scriptReused: false };
     }

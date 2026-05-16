@@ -6,6 +6,7 @@ import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancel
 import Link from 'next/link';
 import BackendChart from '@/app/components/BackendChart';
 import ClientChart from '@/app/components/ClientChart';
+import FlowStepChart from '@/app/components/FlowStepChart';
 import AnalysisPanel from '@/app/components/AnalysisPanel';
 import RealtimeChart from '@/app/components/RealtimeChart';
 import TrendChart from '@/app/components/TrendChart';
@@ -68,7 +69,6 @@ const StatusBadge = ({ status }: { status: string }) => {
 };
 
 const fmtRemaining = (secs: number): string => {
-  if (secs <= 0) return 'finishing…';
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
   return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
@@ -275,7 +275,7 @@ if (!result) return (
               </div>
               {result.status === 'running' && remainingSecs !== null && (
                 <span className="text-xs font-medium text-blue-600 tabular-nums">
-                  {fmtRemaining(remainingSecs)} remaining
+                  {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} remaining`}
                 </span>
               )}
             </div>
@@ -294,9 +294,28 @@ if (!result) return (
         {result.status === 'pending' || !result.metrics ? (
           <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
             <div className="animate-pulse">
-              <p className="text-gray-500">Test is running...</p>
-              <p className="text-xs text-gray-400 mt-1">Page updates every 2 seconds</p>
+              <p className="text-gray-500">
+                {result.status === 'pending' ? 'Waiting in queue...' : 'Test is running...'}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {result.status === 'pending' ? 'AI is generating the test script' : 'Page updates every 2 seconds'}
+              </p>
             </div>
+            {remainingSecs !== null && (
+              <div className="mt-4">
+                <p className="text-sm font-medium text-blue-600 tabular-nums">
+                  {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} remaining`}
+                </p>
+                {result.duration_seconds && (
+                  <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden max-w-xs mx-auto">
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-1000"
+                      style={{ width: `${Math.min(100, ((result.duration_seconds - remainingSecs) / result.duration_seconds) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-6">
@@ -324,7 +343,11 @@ if (!result) return (
                   </div>
                 )}
               </div>
-                      <BackendChart metrics={m as any} />
+                      {result.type === 'flow' && (m as any).stepMetrics?.length > 0 ? (
+                        <FlowStepChart steps={(m as any).stepMetrics} />
+                      ) : (
+                        <BackendChart metrics={m as any} />
+                      )}
                       {(m as any).stepMetrics?.length > 0 && (
                         <StepMetricsTable steps={(m as any).stepMetrics} />
                       )}

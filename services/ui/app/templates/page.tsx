@@ -65,13 +65,15 @@ export default function TemplatesPage() {
 
   const handleUse = (t: Template) => {
     const opts = t.options as Record<string, unknown>;
+    const description = t.description ?? '';
     const params = new URLSearchParams({
       type: t.type,
       ...(t.target_url ? { targetUrl: t.target_url } : {}),
-      ...(t.description ? { description: t.description } : {}),
+      ...(description ? { description } : {}),
       ...(opts.vus ? { vus: String(opts.vus) } : {}),
       ...(opts.sessions ? { sessions: String(opts.sessions) } : {}),
       ...(opts.duration ? { duration: String(opts.duration) } : {}),
+      ...(opts.profile ? { profile: String(opts.profile) } : {}),
     });
     router.push(`/?${params.toString()}`);
   };

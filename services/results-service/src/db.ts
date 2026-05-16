@@ -12,6 +12,7 @@ export const createSchema = async (p: Pool): Promise<void> => {
       target_url   TEXT NOT NULL,
       test_type    VARCHAR(20) NOT NULL,
       script       TEXT NOT NULL,
+      description  TEXT,
       used_count   INTEGER DEFAULT 1,
       created_at   TIMESTAMPTZ DEFAULT NOW(),
       updated_at   TIMESTAMPTZ DEFAULT NOW(),
@@ -88,6 +89,8 @@ export const createSchema = async (p: Pool): Promise<void> => {
   // Safe migrations for columns added after initial deploy
   await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS is_baseline BOOLEAN DEFAULT FALSE`);
   await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS duration_seconds INTEGER`);
+  await p.query(`ALTER TABLE live_metrics ADD COLUMN IF NOT EXISTS step_metrics JSONB`);
+  await p.query(`ALTER TABLE test_scripts ADD COLUMN IF NOT EXISTS description TEXT`);
 
   // Indexes
   await p.query(`CREATE INDEX IF NOT EXISTS live_metrics_test_id_idx

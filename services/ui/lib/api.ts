@@ -23,6 +23,10 @@ export interface TestRequest {
   };
   steps?: FlowStep[];
   envVars?: Record<string, string>;
+  thresholds?: {
+    p95?: number; avg?: number; errorRate?: number;
+    lcp?: number; fcp?: number; ttfb?: number; cls?: number;
+  };
 }
 
 export interface TestResult {
@@ -96,6 +100,7 @@ export interface LiveMetricPoint {
   rps: number;
   avgResponseTime: number;
   errorRate: number;
+  stepMetrics?: Array<{ name: string; avgResponseTime: number; rps: number; errorRate: number }>;
 }
 
 export const getLiveMetrics = async (testId: string): Promise<{ points: LiveMetricPoint[] }> => {

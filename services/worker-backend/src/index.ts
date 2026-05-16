@@ -31,16 +31,23 @@ const cancelledTests = new Set<string>();
 const saveScript = async (
   targetUrl: string,
   script: string,
-  scriptId?: string
+  scriptId?: string,
+  description?: string
 ): Promise<string> => {
-  if (scriptId) return scriptId;
+  if (scriptId) {
+    await pool.query(
+      'UPDATE test_scripts SET used_count = used_count + 1, updated_at = NOW() WHERE id = $1',
+      [scriptId]
+    );
+    return scriptId;
+  }
   const { rows } = await pool.query(
-    `INSERT INTO test_scripts (target_url, test_type, script)
-     VALUES ($1, 'backend', $2)
+    `INSERT INTO test_scripts (target_url, test_type, script, description)
+     VALUES ($1, 'backend', $2, $3)
      ON CONFLICT (target_url, test_type) DO UPDATE
-     SET script = EXCLUDED.script, updated_at = NOW()
+     SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW()
      RETURNING id`,
-    [targetUrl, script]
+    [targetUrl, script, description ?? null]
   );
   return rows[0].id;
 };
@@ -140,7 +147,14 @@ const runK6Test = async (
 };
 
 const updateStatus = async (testId: string, status: string): Promise<void> => {
-  await pool.query(`UPDATE test_results SET status = $1 WHERE test_id = $2`, [status, testId]);
+  if (status === 'running') {
+    await pool.query(
+      `UPDATE test_results SET status = $1, started_at = NOW() WHERE test_id = $2`,
+      [status, testId]
+    );
+  } else {
+    await pool.query(`UPDATE test_results SET status = $1 WHERE test_id = $2`, [status, testId]);
+  }
 };
 
 // r1: retry helper — republish with incremented counter or route to DLQ
@@ -241,7 +255,7 @@ const start = async (): Promise<void> => {
       }
 
       const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
-      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId);
+      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description);
 
       const result: TestResult = {
         testId: test.id,
