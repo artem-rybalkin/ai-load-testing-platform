@@ -13,49 +13,53 @@ interface StepMetric {
   requestsFailed: number;
 }
 
-interface Props {
-  steps: StepMetric[];
-}
+const COLORS = ['#0969da', '#1f883d', '#9a6700', '#7c3aed', '#cf222e', '#0891b2', '#c2410c'];
 
-const COLORS = ['#3b82f6', '#f59e0b', '#22c55e', '#a855f7', '#ef4444', '#06b6d4', '#f97316'];
+const TOOLTIP_STYLE = {
+  background: '#fff',
+  border: '1px solid #d0d7de',
+  borderRadius: '6px',
+  fontSize: 11,
+  fontFamily: 'monospace',
+  boxShadow: 'none',
+};
 
-export default function FlowStepChart({ steps }: Props) {
+const TICK = { fill: '#57606a', fontSize: 11, fontFamily: 'monospace' };
+
+export default function FlowStepChart({ steps }: { steps: StepMetric[] }) {
   const data = steps.map(s => ({
     name: s.name.length > 20 ? s.name.slice(0, 18) + '…' : s.name,
     fullName: s.name,
-    avg: s.avgResponseTime,
-    p95: s.p95ResponseTime,
+    avg: Math.round(s.avgResponseTime),
+    p95: Math.round(s.p95ResponseTime),
   }));
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-gray-700">Response Time per Step</h3>
-        <span className="text-xs text-gray-400">ms</span>
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Response Time per Step</span>
+        <span className="text-[10px] font-mono text-[#8c959f]">ms</span>
       </div>
-      <ResponsiveContainer width="100%" height={220}>
+      <ResponsiveContainer width="100%" height={200}>
         <BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-          <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-          <YAxis tick={{ fontSize: 11 }} unit="ms" width={52} />
+          <CartesianGrid stroke="#eaeef2" vertical={false} />
+          <XAxis dataKey="name" tick={TICK} axisLine={false} tickLine={false} />
+          <YAxis tick={TICK} unit="ms" width={50} axisLine={false} tickLine={false} />
           <Tooltip
-            contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: 12 }}
+            contentStyle={TOOLTIP_STYLE}
             formatter={(v, name) => [`${v}ms`, name === 'avg' ? 'Avg' : 'p95']}
             labelFormatter={(_, payload) => payload?.[0]?.payload?.fullName ?? ''}
+            cursor={{ fill: '#f6f8fa' }}
           />
           <Legend
-            wrapperStyle={{ fontSize: 12 }}
+            wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }}
             formatter={(value) => value === 'avg' ? 'Avg response' : 'p95 response'}
           />
-          <Bar dataKey="avg" name="avg" radius={[3, 3, 0, 0]}>
-            {data.map((_, i) => (
-              <Cell key={i} fill={COLORS[i % COLORS.length]} fillOpacity={0.7} />
-            ))}
+          <Bar dataKey="avg" name="avg" radius={[2, 2, 0, 0]}>
+            {data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} fillOpacity={0.55} />)}
           </Bar>
-          <Bar dataKey="p95" name="p95" radius={[3, 3, 0, 0]}>
-            {data.map((_, i) => (
-              <Cell key={i} fill={COLORS[i % COLORS.length]} />
-            ))}
+          <Bar dataKey="p95" name="p95" radius={[2, 2, 0, 0]}>
+            {data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
           </Bar>
         </BarChart>
       </ResponsiveContainer>

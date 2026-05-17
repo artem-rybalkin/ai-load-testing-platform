@@ -11,68 +11,84 @@ import AnalysisPanel from '@/app/components/AnalysisPanel';
 import RealtimeChart from '@/app/components/RealtimeChart';
 import TrendChart from '@/app/components/TrendChart';
 
-
 interface StepMetric { name: string; avgResponseTime: number; p95ResponseTime: number; requestsTotal: number; requestsFailed: number }
 
-const StepMetricsTable = ({ steps }: { steps: StepMetric[] }) => (
-  <div className="bg-white rounded-xl border border-gray-200 p-4">
-    <h2 className="text-sm font-medium text-gray-700 mb-3">Per-step breakdown</h2>
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-xs text-gray-500 border-b border-gray-100">
-            <th className="text-left py-1 pr-4 font-medium">Step</th>
-            <th className="text-right py-1 px-2 font-medium">Requests</th>
-            <th className="text-right py-1 px-2 font-medium">Failed</th>
-            <th className="text-right py-1 px-2 font-medium">Avg (ms)</th>
-            <th className="text-right py-1 pl-2 font-medium">p95 (ms)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {steps.map((s, i) => (
-            <tr key={i} className="border-b border-gray-50 last:border-0">
-              <td className="py-2 pr-4 text-gray-800 font-medium">{s.name}</td>
-              <td className="text-right px-2 text-gray-600">{s.requestsTotal}</td>
-              <td className={`text-right px-2 ${s.requestsFailed > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}`}>{s.requestsFailed}</td>
-              <td className="text-right px-2 text-gray-600">{Math.round(s.avgResponseTime)}</td>
-              <td className={`text-right pl-2 font-medium ${s.p95ResponseTime > 1000 ? 'text-red-600' : s.p95ResponseTime > 500 ? 'text-yellow-600' : 'text-green-600'}`}>{Math.round(s.p95ResponseTime)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </div>
-);
-
-const MetricCard = ({ label, value, unit }: { label: string; value: number | string; unit?: string }) => (
-  <div className="bg-white rounded-xl border border-gray-200 p-4">
-    <p className="text-xs text-gray-500 mb-1">{label}</p>
-    <p className="text-2xl font-bold text-gray-900">
-      {value}<span className="text-sm font-normal text-gray-500 ml-1">{unit}</span>
-    </p>
-  </div>
-);
+const fmtRemaining = (secs: number) => {
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+};
 
 const StatusBadge = ({ status }: { status: string }) => {
-  const colors: Record<string, string> = {
-    completed:  'bg-green-100 text-green-700',
-    running:    'bg-blue-100 text-blue-700',
-    pending:    'bg-yellow-100 text-yellow-700',
-    failed:     'bg-red-100 text-red-700',
-    cancelled:  'bg-gray-100 text-gray-600',
+  const cls: Record<string, string> = {
+    completed: 'bg-[#dafbe1] text-[#1a7f37]',
+    running:   'bg-[#ddf4ff] text-[#0969da]',
+    pending:   'bg-[#fff8c5] text-[#9a6700]',
+    failed:    'bg-[#ffebe9] text-[#cf222e]',
+    cancelled: 'bg-[#f6f8fa] text-[#57606a]',
   };
   return (
-    <span className={`px-3 py-1 rounded-full text-xs font-medium ${colors[status] || 'bg-gray-100 text-gray-700'}`}>
+    <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium ${cls[status] ?? 'bg-[#f6f8fa] text-[#57606a]'}`}>
       {status}
     </span>
   );
 };
 
-const fmtRemaining = (secs: number): string => {
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
-};
+const BentoCard = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
+  <div className={`bg-white border border-[#d0d7de] rounded-md overflow-hidden ${className}`}>
+    {children}
+  </div>
+);
+
+const CardHeader = ({ title }: { title: string }) => (
+  <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
+    <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">{title}</span>
+  </div>
+);
+
+const MetricCell = ({
+  label, value, unit, color,
+}: { label: string; value: number | string; unit?: string; color?: string }) => (
+  <BentoCard>
+    <div className="p-3">
+      <div className="text-[10px] font-mono font-semibold text-[#57606a] uppercase tracking-wide mb-1">{label}</div>
+      <div className={`text-[22px] font-mono font-bold leading-none ${color ?? 'text-[#24292f]'}`}>
+        {value}
+        {unit && <span className="text-[13px] font-normal text-[#57606a] ml-1">{unit}</span>}
+      </div>
+    </div>
+  </BentoCard>
+);
+
+const StepMetricsTable = ({ steps }: { steps: StepMetric[] }) => (
+  <BentoCard className="col-span-full">
+    <CardHeader title="Per-step breakdown" />
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-[#eaeef2]">
+            {['Step', 'Requests', 'Failed', 'Avg ms', 'p95 ms'].map(h => (
+              <th key={h} className={`py-2 px-3 text-[11px] font-semibold text-[#57606a] ${h === 'Step' ? 'text-left' : 'text-right'}`}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#eaeef2]">
+          {steps.map((s, i) => (
+            <tr key={i} className="hover:bg-[#f6f8fa]">
+              <td className="py-2 px-3 text-[13px] font-medium text-[#24292f]">{s.name}</td>
+              <td className="py-2 px-3 text-right font-mono text-[12px] text-[#57606a]">{s.requestsTotal}</td>
+              <td className={`py-2 px-3 text-right font-mono text-[12px] ${s.requestsFailed > 0 ? 'text-[#cf222e] font-semibold' : 'text-[#8c959f]'}`}>{s.requestsFailed}</td>
+              <td className="py-2 px-3 text-right font-mono text-[12px] text-[#57606a]">{Math.round(s.avgResponseTime)}</td>
+              <td className={`py-2 px-3 text-right font-mono text-[12px] font-semibold ${s.p95ResponseTime > 1000 ? 'text-[#cf222e]' : s.p95ResponseTime > 500 ? 'text-[#9a6700]' : 'text-[#1f883d]'}`}>
+                {Math.round(s.p95ResponseTime)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </BentoCard>
+);
 
 export default function ResultPage() {
   const { testId } = useParams<{ testId: string }>();
@@ -82,6 +98,7 @@ export default function ResultPage() {
   const [baselineBusy, setBaselineBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
+  const [trend, setTrend] = useState<TrendPoint[]>([]);
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -89,17 +106,24 @@ export default function ResultPage() {
       await cancelTest(testId);
       const data = await getResult(testId);
       if (data.result) setResult(data.result);
-    } finally {
-      setCancelling(false);
-    }
+    } finally { setCancelling(false); }
   };
-  const [trend, setTrend] = useState<TrendPoint[]>([]);
 
-  // Countdown timer — ticks every second while the test is running
+  const handleBaseline = async () => {
+    if (!result) return;
+    setBaselineBusy(true);
+    try {
+      if (result.is_baseline) await clearBaseline(testId);
+      else await setBaseline(testId);
+      const data = await getResult(testId);
+      if (data.result) setResult(data.result);
+    } finally { setBaselineBusy(false); }
+  };
+
+  // Countdown
   useEffect(() => {
     if (result?.status !== 'running' || !result.started_at || !result.duration_seconds) {
-      setRemainingSecs(null);
-      return;
+      setRemainingSecs(null); return;
     }
     const tick = () => {
       const elapsed = (Date.now() - new Date(result.started_at!).getTime()) / 1000;
@@ -110,22 +134,7 @@ export default function ResultPage() {
     return () => clearInterval(id);
   }, [result?.status, result?.started_at, result?.duration_seconds]);
 
-  const handleBaseline = async () => {
-    if (!result) return;
-    setBaselineBusy(true);
-    try {
-      if (result.is_baseline) {
-        await clearBaseline(testId);
-      } else {
-        await setBaseline(testId);
-      }
-      const data = await getResult(testId);
-      if (data.result) setResult(data.result);
-    } finally {
-      setBaselineBusy(false);
-    }
-  };
-
+  // Poll result
   useEffect(() => {
     const fetchResult = async () => {
       try {
@@ -136,251 +145,307 @@ export default function ResultPage() {
             getTrend(data.result.target_url).then(d => setTrend(d.trend ?? [])).catch(() => {});
           }
         }
-      } catch {
-        console.error('Failed to fetch result');
-      } finally {
-        setLoading(false);
-      }
+      } catch { /* ignore */ } finally { setLoading(false); }
     };
-
     fetchResult();
-
-    const resultInterval = setInterval(async () => {
+    const iv = setInterval(async () => {
       const data = await getResult(testId);
       if (data.result) {
         setResult(data.result);
-        if (data.result.status === 'completed' || data.result.status === 'failed') {
-          clearInterval(resultInterval);
-        }
+        if (data.result.status === 'completed' || data.result.status === 'failed') clearInterval(iv);
       }
     }, 2000);
-
-    return () => clearInterval(resultInterval);
+    return () => clearInterval(iv);
   }, [testId]);
 
-  // Poll live metrics while test is running
+  // Poll live metrics
   useEffect(() => {
     if (!result || (result.type !== 'backend' && result.type !== 'flow')) return;
     if (result.status === 'completed' || result.status === 'failed') {
-      // Do a final fetch to show the complete live data
       getLiveMetrics(testId).then(d => setLivePoints(d.points ?? [])).catch(() => {});
       return;
     }
-
-    const liveInterval = setInterval(async () => {
+    const iv = setInterval(async () => {
       try {
         const data = await getLiveMetrics(testId);
         setLivePoints(data.points ?? []);
       } catch { /* ignore */ }
     }, 3000);
-
-    return () => clearInterval(liveInterval);
+    return () => clearInterval(iv);
   }, [testId, result?.status, result?.type]);
 
   if (loading) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <p className="text-gray-500">Loading...</p>
-    </div>
+    <div className="flex items-center justify-center h-40 text-[#57606a] text-[13px]">Loading…</div>
   );
-if (!result) return (
-  <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-    <div className="text-center">
-      <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-      <p className="text-gray-600 font-medium mb-1">AI is generating the test script...</p>
-      <p className="text-xs text-gray-400 mb-6">This usually takes 10-30 seconds</p>
-      <div className="flex gap-3 justify-center">
-        <a href="/" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-          + New test
-        </a>
-        <a href="/results" className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50">
-          All results
-        </a>
+
+  if (!result) return (
+    <div className="flex items-center justify-center h-48">
+      <div className="text-center">
+        <div className="animate-spin w-6 h-6 border-2 border-[#0969da] border-t-transparent rounded-full mx-auto mb-3" />
+        <p className="text-[#24292f] font-medium text-[13px] mb-1">Generating test script…</p>
+        <p className="text-[#57606a] text-[11px] mb-4">This usually takes 10–30 seconds</p>
+        <div className="flex gap-2 justify-center">
+          <Link href="/" className="px-3 py-1.5 bg-[#1f883d] text-white rounded-md text-[12px] font-medium">+ New test</Link>
+          <Link href="/results" className="px-3 py-1.5 border border-[#d0d7de] text-[#24292f] rounded-md text-[12px]">All results</Link>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
 
   const m = result.metrics;
   const isBackend = result.type === 'backend' || result.type === 'flow';
+  const isRunning = result.status === 'running';
+  const isPending = result.status === 'pending';
+  const pct = result.duration_seconds && remainingSecs !== null
+    ? Math.min(100, ((result.duration_seconds - remainingSecs) / result.duration_seconds) * 100)
+    : 0;
 
   return (
-    <main className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-4xl mx-auto">
-
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-2xl font-bold text-gray-900">Test result</h1>
-              <StatusBadge status={result.status} />
-              {result.reused_script && (
-                <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
-                  script reused
-                </span>
-              )}
-              {result.is_baseline && (
-                <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
-                  baseline
-                </span>
-              )}
-            </div>
-            <p className="text-gray-500 text-sm">{result.target_url}</p>
-          </div>
-          <div className="flex items-center gap-3">
-            {(result.status === 'pending' || result.status === 'running') && (
-              <button
-                onClick={handleCancel}
-                disabled={cancelling}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-red-300 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-              >
-                {cancelling ? 'Cancelling…' : 'Cancel test'}
-              </button>
-            )}
-            {result.status === 'completed' && (
-              <>
-                <button
-                  onClick={handleBaseline}
-                  disabled={baselineBusy}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${
-                    result.is_baseline
-                      ? 'border-amber-300 text-amber-700 hover:bg-amber-50'
-                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  {result.is_baseline ? 'Clear baseline' : 'Set as baseline'}
-                </button>
-                <a
-                  href={`${process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.pdf`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-300 text-gray-600 hover:bg-gray-50"
-                >
-                  Download PDF
-                </a>
-              </>
-            )}
-            <Link href="/results" className="text-sm text-blue-600 hover:underline">← All results</Link>
-          </div>
+    <div className="p-4 lg:p-6">
+      {/* Page header */}
+      <div className="mb-1">
+        <Link href="/results" className="text-[11px] text-[#57606a] hover:text-[#0969da] hover:underline">← All Results</Link>
+      </div>
+      <div className="flex items-start justify-between gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-[15px] font-semibold text-[#24292f] font-mono">{result.target_url}</h1>
+          <StatusBadge status={result.status} />
+          {result.reused_script && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[#faf5ff] text-[#7c3aed] border border-[#e9d5ff]">script reused</span>
+          )}
+          {result.is_baseline && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[#fff8c5] text-[#9a6700] border border-[#e3b341]">baseline</span>
+          )}
         </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {(isPending || isRunning) && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="px-2.5 py-1 rounded-md text-[12px] font-medium border border-[#f4c7c3] text-[#cf222e] hover:bg-[#ffebe9] disabled:opacity-50 transition-colors"
+            >
+              {cancelling ? 'Cancelling…' : 'Cancel'}
+            </button>
+          )}
+          {result.status === 'completed' && (
+            <>
+              <button
+                onClick={handleBaseline}
+                disabled={baselineBusy}
+                className={`px-2.5 py-1 rounded-md text-[12px] font-medium border transition-colors disabled:opacity-50 ${
+                  result.is_baseline
+                    ? 'border-[#e3b341] text-[#9a6700] hover:bg-[#fff8c5]'
+                    : 'border-[#d0d7de] text-[#24292f] hover:bg-[#eaeef2]'
+                }`}
+              >
+                {result.is_baseline ? 'Clear baseline' : 'Set baseline'}
+              </button>
+              <a
+                href={`${process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.pdf`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-2.5 py-1 rounded-md text-[12px] font-medium border border-[#d0d7de] text-[#24292f] hover:bg-[#eaeef2] transition-colors"
+              >
+                ↓ PDF
+              </a>
+            </>
+          )}
+        </div>
+      </div>
 
-        {isBackend && livePoints.length > 0 && (
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                {result.status === 'running' && (
-                  <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse inline-block" />
-                )}
-                <span className="text-sm font-medium text-gray-600">
-                  {result.status === 'running' ? 'Live metrics' : 'Test timeline'}
-                </span>
-              </div>
-              {result.status === 'running' && remainingSecs !== null && (
-                <span className="text-xs font-medium text-blue-600 tabular-nums">
-                  {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} remaining`}
-                </span>
-              )}
-            </div>
-            {result.status === 'running' && result.duration_seconds && remainingSecs !== null && (
-              <div className="mb-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 rounded-full transition-all duration-1000"
-                  style={{ width: `${Math.min(100, ((result.duration_seconds - remainingSecs) / result.duration_seconds) * 100)}%` }}
-                />
-              </div>
-            )}
-            <RealtimeChart points={livePoints} startedAt={result.started_at} />
+      {/* Progress bar (running) */}
+      {isRunning && result.duration_seconds && remainingSecs !== null && (
+        <div className="flex items-center gap-3 mb-4 bg-white border border-[#d0d7de] rounded-md px-3 py-2">
+          <span className="flex items-center gap-1.5 text-[11px] font-mono text-[#0969da] font-semibold whitespace-nowrap">
+            <span className="w-1.5 h-1.5 bg-[#0969da] rounded-full animate-pulse" />
+            LIVE
+          </span>
+          <div className="flex-1 h-1.5 bg-[#eaeef2] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-[#0969da] rounded-full transition-all duration-1000"
+              style={{ width: `${pct}%` }}
+            />
           </div>
-        )}
+          <span className="text-[11px] font-mono text-[#57606a] whitespace-nowrap">
+            {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} left`}
+          </span>
+        </div>
+      )}
 
-        {result.status === 'pending' || !result.metrics ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
+      {/* Pending / no metrics state */}
+      {(isPending || !m) ? (
+        <BentoCard>
+          <div className="p-8 text-center">
             <div className="animate-pulse">
-              <p className="text-gray-500">
-                {result.status === 'pending' ? 'Waiting in queue...' : 'Test is running...'}
+              <p className="text-[#57606a] text-[13px]">
+                {isPending ? 'Waiting in queue…' : 'Test is running…'}
               </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {result.status === 'pending' ? 'AI is generating the test script' : 'Page updates every 2 seconds'}
+              <p className="text-[#8c959f] text-[11px] mt-1">
+                {isPending ? 'AI is generating the test script' : 'Page updates every 2 seconds'}
               </p>
             </div>
             {remainingSecs !== null && (
-              <div className="mt-4">
-                <p className="text-sm font-medium text-blue-600 tabular-nums">
+              <div className="mt-4 max-w-xs mx-auto">
+                <p className="text-[12px] font-mono text-[#0969da] mb-2">
                   {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} remaining`}
                 </p>
                 {result.duration_seconds && (
-                  <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden max-w-xs mx-auto">
-                    <div
-                      className="h-full bg-blue-500 rounded-full transition-all duration-1000"
-                      style={{ width: `${Math.min(100, ((result.duration_seconds - remainingSecs) / result.duration_seconds) * 100)}%` }}
-                    />
+                  <div className="h-1.5 bg-[#eaeef2] rounded-full overflow-hidden">
+                    <div className="h-full bg-[#0969da] rounded-full transition-all duration-1000" style={{ width: `${pct}%` }} />
                   </div>
                 )}
               </div>
             )}
           </div>
-        ) : (
-          <div className="space-y-6">
-            {isBackend ? (
-                <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <MetricCard label="Total requests" value={m.requestsTotal} />
-                <MetricCard label="Failed requests" value={m.requestsFailed} />
-                <MetricCard label="Requests/sec" value={m.rps?.toFixed(1) ?? 0} />
-                <MetricCard label="Avg response time" value={Math.round(m.avgResponseTime)} unit="ms" />
-                <MetricCard label="p50 response time" value={Math.round(m.p50ResponseTime ?? 0)} unit="ms" />
-                <MetricCard label="p95 response time" value={Math.round(m.p95ResponseTime)} unit="ms" />
-                <MetricCard label="p99 response time" value={Math.round(m.p99ResponseTime)} unit="ms" />
-                {m.statusCodes && Object.keys(m.statusCodes as unknown as Record<string,number>).length > 0 && (
-                  <div className="bg-white rounded-xl border border-gray-200 p-4">
-                    <p className="text-xs text-gray-500 mb-1">Status codes</p>
-                    <div className="space-y-0.5">
-                      {Object.entries(m.statusCodes as unknown as Record<string,number>).sort().map(([code, count]) => (
-                        <p key={code} className="text-sm font-semibold text-gray-900">
-                          <span className={`mr-1 ${code.startsWith('2') ? 'text-green-600' : code.startsWith('4') || code.startsWith('5') ? 'text-red-600' : 'text-gray-600'}`}>{code}</span>
-                          <span className="text-gray-500 font-normal text-xs">×{count}</span>
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                )}
+        </BentoCard>
+      ) : (
+        /* ── Bento grid ── */
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-12 gap-3">
+
+          {/* ── Metric cells (top row) ── */}
+          {isBackend ? (
+            <>
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell label="Total Requests" value={m.requestsTotal} />
               </div>
-                      {result.type === 'flow' && (m as any).stepMetrics?.length > 0 ? (
-                        <FlowStepChart steps={(m as any).stepMetrics} />
-                      ) : (
-                        <BackendChart metrics={m as any} />
-                      )}
-                      {(m as any).stepMetrics?.length > 0 && (
-                        <StepMetricsTable steps={(m as any).stepMetrics} />
-                      )}
-      </>
-    ) : (
-      <ClientChart metrics={m as any} />
-    )}
-            {result.analysis && (
-              <AnalysisPanel analysis={result.analysis as any} />
-            )}
-            {trend.length > 1 && (
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <h2 className="text-sm font-medium text-gray-700 mb-3">
-                  Trend for this URL <span className="text-gray-400 font-normal">({trend.length} runs)</span>
-                </h2>
-                <TrendChart
-                  trend={trend}
-                  metricKey={isBackend ? 'p95ResponseTime' : 'lcp'}
-                  label={isBackend ? 'p95 (ms)' : 'LCP (ms)'}
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell label="Req / sec" value={(m.rps ?? 0).toFixed(1)} color="text-[#0969da]" />
+              </div>
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell
+                  label="Failed"
+                  value={m.requestsFailed}
+                  unit={`/ ${m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : 0}%`}
+                  color={m.requestsFailed > 0 ? 'text-[#cf222e]' : 'text-[#24292f]'}
                 />
               </div>
-            )}
-            {result.script && (
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <h2 className="text-sm font-medium text-gray-700 mb-3">Generated script</h2>
-                <pre className="text-xs text-gray-600 bg-gray-50 rounded-lg p-4 overflow-auto max-h-64">
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell label="p95 Response" value={Math.round(m.p95ResponseTime ?? 0)} unit="ms" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell label="LCP" value={Math.round(m.lcp ?? 0)} unit="ms" color={(m.lcp ?? 0) > 2500 ? 'text-[#cf222e]' : 'text-[#1f883d]'} />
+              </div>
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell label="FCP" value={Math.round(m.fcp ?? 0)} unit="ms" />
+              </div>
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell label="TTFB" value={Math.round(m.ttfb ?? 0)} unit="ms" />
+              </div>
+              <div className="col-span-1 md:col-span-1 lg:col-span-3">
+                <MetricCell label="CLS" value={(m.cls ?? 0).toFixed(3)} color={(m.cls ?? 0) > 0.1 ? 'text-[#cf222e]' : 'text-[#1f883d]'} />
+              </div>
+            </>
+          )}
+
+          {/* ── Live / timeline chart ── */}
+          {isBackend && livePoints.length > 0 && (
+            <div className="col-span-full">
+              <BentoCard>
+                <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
+                <div className="p-3">
+                  <RealtimeChart points={livePoints} startedAt={result.started_at} />
+                </div>
+              </BentoCard>
+            </div>
+          )}
+
+          {/* ── Backend: more metric cells ── */}
+          {isBackend && (
+            <>
+              <div className="col-span-1 lg:col-span-3">
+                <MetricCell label="Avg Response" value={Math.round(m.avgResponseTime ?? 0)} unit="ms" />
+              </div>
+              <div className="col-span-1 lg:col-span-3">
+                <MetricCell label="p50 Response" value={Math.round(m.p50ResponseTime ?? 0)} unit="ms" />
+              </div>
+              <div className="col-span-1 lg:col-span-3">
+                <MetricCell label="p99 Response" value={Math.round(m.p99ResponseTime ?? 0)} unit="ms" />
+              </div>
+              {m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0 && (
+                <div className="col-span-1 lg:col-span-3">
+                  <BentoCard>
+                    <div className="p-3">
+                      <div className="text-[10px] font-mono font-semibold text-[#57606a] uppercase tracking-wide mb-2">Status codes</div>
+                      <div className="space-y-0.5">
+                        {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
+                          <div key={code} className="flex items-center justify-between text-[12px] font-mono">
+                            <span className={code.startsWith('2') ? 'text-[#1f883d]' : code.startsWith('4') || code.startsWith('5') ? 'text-[#cf222e]' : 'text-[#57606a]'}>
+                              {code}
+                            </span>
+                            <span className="text-[#57606a]">×{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </BentoCard>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── Chart + Analysis side by side ── */}
+          <div className="col-span-full lg:col-span-7">
+            <BentoCard>
+              <CardHeader title={isBackend ? 'Response Distribution' : 'Web Vitals'} />
+              <div className="p-3">
+                {result.type === 'flow' && (m as any).stepMetrics?.length > 0
+                  ? <FlowStepChart steps={(m as any).stepMetrics} />
+                  : isBackend
+                    ? <BackendChart metrics={m as any} />
+                    : <ClientChart metrics={m as any} />
+                }
+              </div>
+            </BentoCard>
+          </div>
+
+          {result.analysis && (
+            <div className="col-span-full lg:col-span-5">
+              <BentoCard>
+                <CardHeader title="Analysis" />
+                <div className="p-3">
+                  <AnalysisPanel analysis={result.analysis as any} />
+                </div>
+              </BentoCard>
+            </div>
+          )}
+
+          {/* ── Per-step table (flow) ── */}
+          {(m as any).stepMetrics?.length > 0 && (
+            <StepMetricsTable steps={(m as any).stepMetrics} />
+          )}
+
+          {/* ── Trend chart ── */}
+          {trend.length > 1 && (
+            <div className="col-span-full">
+              <BentoCard>
+                <CardHeader title={`Trend — ${trend.length} runs for this URL`} />
+                <div className="p-3">
+                  <TrendChart
+                    trend={trend}
+                    metricKey={isBackend ? 'p95ResponseTime' : 'lcp'}
+                    label={isBackend ? 'p95 (ms)' : 'LCP (ms)'}
+                  />
+                </div>
+              </BentoCard>
+            </div>
+          )}
+
+          {/* ── Generated script ── */}
+          {result.script && (
+            <div className="col-span-full">
+              <BentoCard>
+                <CardHeader title="Generated Script" />
+                <pre className="text-[11px] font-mono text-[#57606a] bg-[#f6f8fa] p-4 overflow-auto max-h-64 leading-relaxed">
                   {result.script}
                 </pre>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </main>
+              </BentoCard>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

@@ -18,7 +18,18 @@ const fmtElapsed = (iso: string, startedAt?: string | null): string => {
   return `${Math.floor(secs / 60)}m${secs % 60 > 0 ? String(secs % 60).padStart(2, '0') + 's' : ''}`;
 };
 
-const STEP_COLORS = ['#3b82f6', '#f59e0b', '#22c55e', '#a855f7', '#ef4444', '#06b6d4', '#f97316'];
+const STEP_COLORS = ['#0969da', '#1f883d', '#9a6700', '#7c3aed', '#cf222e', '#0891b2', '#c2410c'];
+
+const TOOLTIP_STYLE = {
+  background: '#fff',
+  border: '1px solid #d0d7de',
+  borderRadius: '6px',
+  fontSize: 11,
+  fontFamily: 'monospace',
+  boxShadow: 'none',
+};
+
+const TICK = { fill: '#57606a', fontSize: 11, fontFamily: 'monospace' };
 
 const toKey = (name: string) => name.replace(/[^a-zA-Z0-9_]/g, '_');
 
@@ -30,8 +41,8 @@ const labelFor = (stepNames: string[], prefix: string, rawName: string) => {
 export default function RealtimeChart({ points, startedAt }: Props) {
   if (points.length === 0) {
     return (
-      <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-        <div className="animate-pulse text-gray-400 text-sm">Waiting for first data point...</div>
+      <div className="py-6 text-center">
+        <div className="animate-pulse text-[#8c959f] text-[12px] font-mono">Waiting for first data point…</div>
       </div>
     );
   }
@@ -61,77 +72,78 @@ export default function RealtimeChart({ points, startedAt }: Props) {
     return row;
   });
 
+  const chartH = hasSteps ? 180 : 140;
+
   return (
     <div className="space-y-4">
       {/* Response time */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-700">
-            {hasSteps ? 'Response Time per Step (live)' : 'Response Time (live)'}
-          </h3>
-          <span className="text-xs text-gray-400">ms · updates every 5s</span>
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+            {hasSteps ? 'Response Time per Step' : 'Response Time'}
+          </span>
+          <span className="text-[10px] font-mono text-[#8c959f]">ms · 5s windows</span>
         </div>
-        <ResponsiveContainer width="100%" height={hasSteps ? 220 : 180}>
+        <ResponsiveContainer width="100%" height={chartH}>
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 11 }} unit="ms" width={52} domain={[0, 'auto']} />
+            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
+            <YAxis tick={TICK} unit="ms" width={50} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
-              contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: 12 }}
+              contentStyle={TOOLTIP_STYLE}
               formatter={(v, name) => [`${v}ms`, labelFor(stepNames, 'avg', String(name))]}
             />
-            {hasSteps && <Legend wrapperStyle={{ fontSize: 11 }} formatter={name => labelFor(stepNames, 'avg', String(name))} />}
+            {hasSteps && <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }} formatter={name => labelFor(stepNames, 'avg', String(name))} />}
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`avg_${toKey(name)}`}
-                stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={2}
+                stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
                 dot={false} name={`avg_${toKey(name)}`} connectNulls />
             )) : (
               <Line type="monotone" dataKey="avgResponseTime"
-                stroke="#3b82f6" strokeWidth={2} dot={false} name="Avg response" />
+                stroke="#0969da" strokeWidth={1.5} dot={false} name="Avg response" />
             )}
           </LineChart>
         </ResponsiveContainer>
       </div>
 
       {/* Error rate */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-700">
-            {hasSteps ? 'Error Rate per Step (live)' : 'Virtual Users & Error Rate (live)'}
-          </h3>
-          <span className="text-xs text-gray-400">{hasSteps ? 'error % per step' : 'VUs left · error % right'}</span>
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+            {hasSteps ? 'Error Rate per Step' : 'VUs & Error Rate'}
+          </span>
+          <span className="text-[10px] font-mono text-[#8c959f]">{hasSteps ? 'error %' : 'VUs left · error % right'}</span>
         </div>
-        <ResponsiveContainer width="100%" height={hasSteps ? 160 : 180}>
+        <ResponsiveContainer width="100%" height={chartH}>
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             {hasSteps ? (
-              <YAxis tick={{ fontSize: 11 }} unit="%" width={44}
-                domain={[0, (max: number) => Math.max(max, 1)]} />
+              <YAxis tick={TICK} unit="%" width={42} domain={[0, (max: number) => Math.max(max, 1)]} axisLine={false} tickLine={false} />
             ) : (
               <>
-                <YAxis yAxisId="vus" tick={{ fontSize: 11 }} width={36} />
-                <YAxis yAxisId="err" orientation="right" tick={{ fontSize: 11 }} unit="%" width={44} />
+                <YAxis yAxisId="vus" tick={TICK} width={34} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="err" orientation="right" tick={TICK} unit="%" width={42} axisLine={false} tickLine={false} />
               </>
             )}
             <Tooltip
-              contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: 12 }}
+              contentStyle={TOOLTIP_STYLE}
               formatter={(v, name) => {
                 if (hasSteps) return [`${v}%`, labelFor(stepNames, 'err', String(name))];
                 return name === 'VUs' ? [`${v}`, 'VUs'] : [`${v}%`, 'Error rate'];
               }}
             />
-            {hasSteps && <Legend wrapperStyle={{ fontSize: 12 }} formatter={name => labelFor(stepNames, 'err', String(name))} />}
+            {hasSteps && <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }} formatter={name => labelFor(stepNames, 'err', String(name))} />}
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`err_${toKey(name)}`}
-                stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={2}
+                stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
                 dot={false} name={`err_${toKey(name)}`} connectNulls />
             )) : (
               <>
                 <Line yAxisId="vus" type="monotone" dataKey="vus"
-                  stroke="#22c55e" strokeWidth={2} dot={false} name="VUs" />
+                  stroke="#1f883d" strokeWidth={1.5} dot={false} name="VUs" />
                 <Line yAxisId="err" type="monotone" dataKey="errorRate"
-                  stroke="#ef4444" strokeWidth={2} dot={false} name="Error rate" />
+                  stroke="#cf222e" strokeWidth={1.5} dot={false} name="Error rate" />
               </>
             )}
           </LineChart>
@@ -139,30 +151,30 @@ export default function RealtimeChart({ points, startedAt }: Props) {
       </div>
 
       {/* Throughput */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-700">
-            {hasSteps ? 'Throughput per Step (live)' : 'Throughput (live)'}
-          </h3>
-          <span className="text-xs text-gray-400">requests / sec</span>
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+            {hasSteps ? 'Throughput per Step' : 'Throughput'}
+          </span>
+          <span className="text-[10px] font-mono text-[#8c959f]">req/sec</span>
         </div>
-        <ResponsiveContainer width="100%" height={hasSteps ? 200 : 140}>
+        <ResponsiveContainer width="100%" height={chartH}>
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 11 }} unit=" rps" width={56} domain={[0, 'auto']} />
+            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
+            <YAxis tick={TICK} unit=" rps" width={52} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
-              contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: 12 }}
+              contentStyle={TOOLTIP_STYLE}
               formatter={(v, name) => [`${v} rps`, labelFor(stepNames, 'rps', String(name))]}
             />
-            {hasSteps && <Legend wrapperStyle={{ fontSize: 11 }} formatter={name => labelFor(stepNames, 'rps', String(name))} />}
+            {hasSteps && <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }} formatter={name => labelFor(stepNames, 'rps', String(name))} />}
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`rps_${toKey(name)}`}
-                stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={2}
+                stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
                 dot={false} name={`rps_${toKey(name)}`} connectNulls />
             )) : (
               <Line type="monotone" dataKey="rps"
-                stroke="#a855f7" strokeWidth={2} dot={false} name="RPS" />
+                stroke="#7c3aed" strokeWidth={1.5} dot={false} name="RPS" />
             )}
           </LineChart>
         </ResponsiveContainer>

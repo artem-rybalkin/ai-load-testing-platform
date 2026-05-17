@@ -2,8 +2,9 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { createTest, getTemplates, createTemplate, Template, FlowStep } from '@/lib/api';
+import { createTest, getTemplates, createTemplate, getResults, getActiveTests, Template, FlowStep, TestResult, ActiveTest } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
+import Link from 'next/link';
 
 interface EnvVar { key: string; value: string }
 
@@ -17,6 +18,109 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   lcp: '2500', fcp: '1800', ttfb: '800', cls: '0.1',
 };
 
+function relTime(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function QuickStatsPanel({ active, recent }: { active: ActiveTest[]; recent: TestResult[] }) {
+  const completed = recent.filter(r => r.status === 'completed');
+  const passCount = completed.filter(r => r.perf_status === 'passed').length;
+  const passRate = completed.length > 0 ? Math.round((passCount / completed.length) * 100) : null;
+  const avgP95 = completed.length > 0 && completed[0]?.metrics?.p95ResponseTime != null
+    ? Math.round(completed.reduce((s, r) => s + (r.metrics?.p95ResponseTime ?? 0), 0) / completed.length)
+    : null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Stats */}
+      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
+        <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Quick Stats</span>
+        </div>
+        <div className="divide-y divide-[#eaeef2]">
+          <div className="flex justify-between items-center px-3 py-2 text-[13px]">
+            <span className="text-[#57606a]">Tests today</span>
+            <span className="font-mono font-semibold text-[#24292f]">{recent.length}</span>
+          </div>
+          {avgP95 !== null && (
+            <div className="flex justify-between items-center px-3 py-2 text-[13px]">
+              <span className="text-[#57606a]">Avg p95</span>
+              <span className="font-mono font-semibold text-[#24292f]">{avgP95}ms</span>
+            </div>
+          )}
+          {passRate !== null && (
+            <div className="flex justify-between items-center px-3 py-2 text-[13px]">
+              <span className="text-[#57606a]">Pass rate</span>
+              <span className={`font-mono font-semibold ${passRate >= 80 ? 'text-[#1f883d]' : passRate >= 50 ? 'text-[#9a6700]' : 'text-[#cf222e]'}`}>
+                {passRate}%
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Active */}
+      {active.length > 0 && (
+        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
+          <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
+            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Active Now</span>
+          </div>
+          <div className="divide-y divide-[#eaeef2]">
+            {active.map(t => (
+              <Link
+                key={t.test_id}
+                href={`/results/${t.test_id}`}
+                className="flex items-center justify-between px-3 py-2 text-[12px] hover:bg-[#f6f8fa] group"
+              >
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="w-1.5 h-1.5 bg-[#0969da] rounded-full animate-pulse flex-shrink-0" />
+                  <span className="font-mono truncate text-[#24292f]">{t.target_url.replace(/https?:\/\//, '')}</span>
+                </span>
+                <span className="text-[#57606a] text-[10px] font-mono ml-2 flex-shrink-0">{t.type}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent */}
+      {recent.length > 0 && (
+        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
+          <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
+            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Recent</span>
+          </div>
+          <div className="divide-y divide-[#eaeef2]">
+            {recent.slice(0, 5).map(r => (
+              <Link
+                key={r.id}
+                href={`/results/${r.test_id}`}
+                className="flex items-center justify-between px-3 py-2 text-[12px] hover:bg-[#f6f8fa]"
+              >
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                    r.perf_status === 'passed' ? 'bg-[#1f883d]' :
+                    r.perf_status === 'failed' ? 'bg-[#cf222e]' :
+                    r.status === 'running' ? 'bg-[#0969da] animate-pulse' :
+                    'bg-[#9a6700]'
+                  }`} />
+                  <span className="font-mono truncate text-[#24292f]">{r.target_url.replace(/https?:\/\//, '')}</span>
+                </span>
+                <span className="text-[#57606a] text-[10px] font-mono ml-2 flex-shrink-0">{relTime(r.created_at)}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -27,6 +131,8 @@ function HomeContent() {
   const [showThresholds, setShowThresholds] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
+  const [recent, setRecent] = useState<TestResult[]>([]);
+  const [active, setActive] = useState<ActiveTest[]>([]);
   const [form, setForm] = useState({
     type: 'backend' as 'backend' | 'client-side' | 'flow',
     targetUrl: '',
@@ -55,13 +161,10 @@ function HomeContent() {
 
   const applyDescriptionParams = (desc: string) => {
     const updates: Partial<typeof form> = {};
-
     const vusM = desc.match(/\b(\d+)\s*(?:virtual\s+users?|vus?|users?|concurrent)\b/i);
     if (vusM) updates.vus = Math.min(100, Math.max(1, parseInt(vusM[1])));
-
     const sessM = desc.match(/\b(\d+)\s*(?:sessions?|browsers?|tabs?)\b/i);
     if (sessM) updates.sessions = Math.min(10, Math.max(1, parseInt(sessM[1])));
-
     const durM = desc.match(/\b(?:full\s+)?duration[:\s]+(\d+)\s*(minutes?|mins?|seconds?|secs?|hours?|hrs?|[smh])\b|\b(\d+)\s*(?:minute|min|second|sec|hour|hr)s?\s+(?:duration|test|long)\b|\bfor\s+(\d+)\s*(minutes?|mins?|seconds?|secs?|hours?|hrs?|[smh])\b/i);
     if (durM) {
       const n = parseInt(durM[1] ?? durM[3] ?? durM[4]);
@@ -69,19 +172,16 @@ function HomeContent() {
       const secs = n * (u === 'h' ? 3600 : u === 'm' ? 60 : 1);
       updates.duration = snapDuration(secs);
     }
-
     const rampM = desc.match(/\bramp(?:\s*[-\s]?up)?[:\s]+(\d+)\s*(minutes?|mins?|seconds?|secs?|[sm])\b/i);
     if (rampM) {
       const n = parseInt(rampM[1]);
       const u = rampM[2].toLowerCase()[0];
       updates.rampUp = u === 'm' ? `${n}m` : `${n}s`;
     }
-
     if (/\bspike\b/i.test(desc)) updates.profile = 'spike';
     else if (/\bsoak\b/i.test(desc)) updates.profile = 'soak';
     else if (/\bcapacity\b/i.test(desc)) updates.profile = 'capacity';
     else if (/\bload\b/i.test(desc)) updates.profile = 'load';
-
     if (Object.keys(updates).length > 0) {
       setForm(f => ({ ...f, ...updates }));
       setShowAdvanced(true);
@@ -90,6 +190,9 @@ function HomeContent() {
 
   useEffect(() => {
     getTemplates().then(d => setTemplates(d.templates ?? [])).catch(() => {});
+    getResults().then(d => setRecent(d.results?.slice(0, 10) ?? [])).catch(() => {});
+    getActiveTests().then(d => setActive(d.active ?? [])).catch(() => {});
+
     const type = searchParams.get('type') as 'backend' | 'client-side' | null;
     const targetUrl = searchParams.get('targetUrl');
     const description = searchParams.get('description');
@@ -100,13 +203,13 @@ function HomeContent() {
     if (type || targetUrl) {
       setForm(f => ({
         ...f,
-        ...(type        ? { type }                  : {}),
-        ...(targetUrl   ? { targetUrl }             : {}),
-        ...(description ? { description }           : {}),
-        ...(vus         ? { vus: Number(vus) }      : {}),
+        ...(type        ? { type }                      : {}),
+        ...(targetUrl   ? { targetUrl }                 : {}),
+        ...(description ? { description }               : {}),
+        ...(vus         ? { vus: Number(vus) }          : {}),
         ...(sessions    ? { sessions: Number(sessions) } : {}),
-        ...(duration    ? { duration }              : {}),
-        ...(profile     ? { profile }               : {}),
+        ...(duration    ? { duration }                  : {}),
+        ...(profile     ? { profile }                   : {}),
       }));
     }
   }, [searchParams]);
@@ -119,13 +222,13 @@ function HomeContent() {
     setForm(f => ({
       ...f,
       type: t.type as 'backend' | 'client-side' | 'flow',
-      ...(t.target_url                ? { targetUrl: t.target_url }              : {}),
+      ...(t.target_url                 ? { targetUrl: t.target_url }              : {}),
       ...((t.description ?? t.name)    ? { description: t.description ?? t.name } : {}),
-      ...(opts.vus                    ? { vus: Number(opts.vus) }                : {}),
-      ...(opts.peakVus                ? { peakVus: Number(opts.peakVus) }        : {}),
-      ...(opts.sessions               ? { sessions: Number(opts.sessions) }      : {}),
-      ...(opts.duration               ? { duration: String(opts.duration) }      : {}),
-      ...(opts.profile                ? { profile: opts.profile as typeof f.profile } : {}),
+      ...(opts.vus                     ? { vus: Number(opts.vus) }                : {}),
+      ...(opts.peakVus                 ? { peakVus: Number(opts.peakVus) }        : {}),
+      ...(opts.sessions                ? { sessions: Number(opts.sessions) }      : {}),
+      ...(opts.duration                ? { duration: String(opts.duration) }      : {}),
+      ...(opts.profile                 ? { profile: opts.profile as typeof f.profile } : {}),
     }));
     if (t.thresholds) {
       const th = t.thresholds as Record<string, unknown>;
@@ -223,9 +326,7 @@ function HomeContent() {
         thresholds: buildThresholds(),
       });
 
-      if (res.test?.id) {
-        router.push(`/results/${res.test.id}`);
-      }
+      if (res.test?.id) router.push(`/results/${res.test.id}`);
     } catch {
       setError('Failed to create test');
     } finally {
@@ -233,287 +334,297 @@ function HomeContent() {
     }
   };
 
+  const inputCls = "w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]";
+
   return (
-    <main className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-2xl mx-auto">
+    <div className="p-4 lg:p-6">
+      <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 items-start">
 
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">AI Load Testing Platform</h1>
-          <p className="text-gray-500 mt-1">AI-powered performance testing for backend APIs and browser</p>
-        </div>
-
-        {templates.length > 0 && (
-          <div className="mb-4">
-            <select
-              value=""
-              onChange={e => handleLoadTemplate(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-            >
-              <option value="" disabled>Load from template…</option>
-              {templates.map(t => (
-                <option key={t.id} value={t.id}>{t.name} ({t.type})</option>
-              ))}
-            </select>
+        {/* ── Left: Test form ── */}
+        <div className="w-full lg:flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-3">
+            <h1 className="text-[15px] font-semibold text-[#24292f]">New Test</h1>
+            {templates.length > 0 && (
+              <select
+                value=""
+                onChange={e => handleLoadTemplate(e.target.value)}
+                className="text-[12px] border border-[#d0d7de] rounded-md px-2 py-1 bg-[#f6f8fa] text-[#57606a] focus:outline-none focus:border-[#0969da]"
+              >
+                <option value="" disabled>Load from template…</option>
+                {templates.map(t => (
+                  <option key={t.id} value={t.id}>{t.name} ({t.type})</option>
+                ))}
+              </select>
+            )}
           </div>
-        )}
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-5">
+          <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
+            <div className="p-4 space-y-4">
 
-          {/* Test type */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Test type</label>
-            <div className="grid grid-cols-3 gap-3">
-              {([
-                { id: 'backend',     label: '⚡ Backend / API' },
-                { id: 'client-side', label: '🌐 Browser' },
-                { id: 'flow',        label: '🔗 Multi-step Flow' },
-              ] as const).map(t => (
+              {/* Test type */}
+              <div>
+                <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Test type</label>
+                <div className="flex border border-[#d0d7de] rounded-md overflow-hidden">
+                  {([
+                    { id: 'backend',     label: '⚡ Backend'        },
+                    { id: 'client-side', label: '🌐 Browser'        },
+                    { id: 'flow',        label: '🔗 Multi-step Flow' },
+                  ] as const).map((t, i) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setForm(f => ({ ...f, type: t.id }))}
+                      className={`flex-1 py-1.5 text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-[#d0d7de]' : ''} ${
+                        form.type === t.id
+                          ? 'bg-white text-[#0969da]'
+                          : 'bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2]'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Flow builder */}
+              {form.type === 'flow' && (
+                <FlowBuilder
+                  steps={flowSteps}
+                  envVars={flowEnvVars}
+                  onChange={setFlowSteps}
+                  onEnvVarsChange={setFlowEnvVars}
+                />
+              )}
+
+              {/* URL */}
+              {form.type !== 'flow' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Target URL</label>
+                  <input
+                    type="url"
+                    placeholder="https://example.com"
+                    value={form.targetUrl}
+                    onChange={e => setForm(f => ({ ...f, targetUrl: e.target.value }))}
+                    className={inputCls}
+                  />
+                </div>
+              )}
+
+              {/* Description */}
+              <div>
+                <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
+                  What to test?{' '}
+                  <span className="text-[#8c959f] normal-case font-normal tracking-normal">(AI parses VUs, duration, profile)</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. load test with 10 users for 2 minutes, ramp up 30s..."
+                  value={form.description}
+                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                  onBlur={e => applyDescriptionParams(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+
+              {/* Advanced settings */}
+              <div>
                 <button
-                  key={t.id}
-                  onClick={() => setForm(f => ({ ...f, type: t.id }))}
-                  className={`py-3 px-4 rounded-lg border-2 text-sm font-medium transition-all ${
-                    form.type === t.id
-                      ? 'border-blue-500 bg-blue-50 text-blue-700'
-                      : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                  }`}
+                  type="button"
+                  onClick={() => setShowAdvanced(v => !v)}
+                  className="flex items-center gap-1 text-[12px] text-[#57606a] hover:text-[#24292f] py-0.5"
                 >
-                  {t.label}
+                  <span className={`transition-transform inline-block text-[10px] ${showAdvanced ? 'rotate-90' : ''}`}>▶</span>
+                  Advanced settings
+                  {!showAdvanced && (
+                    <span className="text-[11px] text-[#8c959f] ml-1 font-mono">
+                      {form.type === 'client-side'
+                        ? `${form.sessions} sessions · ${form.duration}`
+                        : `${form.vus} VUs · ${form.duration}${form.rampUp ? ` · ramp ${form.rampUp}` : ''}${form.type === 'backend' ? ` · ${form.profile}` : ''}`}
+                    </span>
+                  )}
                 </button>
-              ))}
+                {showAdvanced && (
+                  <div className="mt-2 space-y-3 p-3 bg-[#f6f8fa] rounded-md border border-[#d0d7de]">
+                    {form.type === 'backend' && (
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#57606a] mb-1.5">Load profile</label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {([
+                            { id: 'load',     label: 'Load',     hint: 'Constant VUs' },
+                            { id: 'spike',    label: 'Spike',    hint: 'Traffic burst' },
+                            { id: 'capacity', label: 'Capacity', hint: 'Find breakpoint' },
+                            { id: 'soak',     label: 'Soak',     hint: 'Long steady-state' },
+                          ] as const).map(p => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => setForm(f => ({ ...f, profile: p.id }))}
+                              className={`py-1.5 px-2.5 rounded-md border text-left transition-colors ${
+                                form.profile === p.id
+                                  ? 'border-[#0969da] bg-[#ddf4ff]'
+                                  : 'border-[#d0d7de] bg-white hover:bg-[#eaeef2]'
+                              }`}
+                            >
+                              <div className="text-[12px] font-medium text-[#24292f]">{p.label}</div>
+                              <div className="text-[10px] text-[#8c959f]">{p.hint}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-3">
+                      {form.type === 'client-side' ? (
+                        <div>
+                          <label className="block text-[11px] text-[#57606a] mb-1">Browser sessions</label>
+                          <input type="number" min={1} max={10} value={form.sessions}
+                            onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))}
+                            className={inputCls}
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="block text-[11px] text-[#57606a] mb-1">
+                            {form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Virtual users'}
+                          </label>
+                          <input type="number" min={1} max={100} value={form.vus}
+                            onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
+                            className={inputCls}
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-[11px] text-[#57606a] mb-1">Duration</label>
+                        <select value={form.duration} onChange={e => setForm(f => ({ ...f, duration: e.target.value }))}
+                          className={inputCls}
+                        >
+                          {['30s', '1m', '2m', '5m', '10m', '30m'].map(d => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {form.type !== 'client-side' && (
+                      <div>
+                        <label className="block text-[11px] text-[#57606a] mb-1">Ramp-up <span className="text-[#8c959f]">(optional, e.g. 30s, 1m)</span></label>
+                        <input type="text" placeholder="30s" value={form.rampUp}
+                          onChange={e => setForm(f => ({ ...f, rampUp: e.target.value }))}
+                          className={inputCls}
+                        />
+                      </div>
+                    )}
+                    {form.type === 'backend' && (form.profile === 'spike' || form.profile === 'capacity') && (
+                      <div>
+                        <label className="block text-[11px] text-[#57606a] mb-1">
+                          {form.profile === 'spike' ? 'Peak VUs (spike target)' : 'Max VUs (capacity ceiling)'}
+                        </label>
+                        <input type="number" min={form.vus + 1} max={500} value={form.peakVus}
+                          onChange={e => setForm(f => ({ ...f, peakVus: Number(e.target.value) }))}
+                          className={inputCls}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* SLO thresholds */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowThresholds(v => !v)}
+                  className="flex items-center gap-1 text-[12px] text-[#57606a] hover:text-[#24292f] py-0.5"
+                >
+                  <span className={`transition-transform inline-block text-[10px] ${showThresholds ? 'rotate-90' : ''}`}>▶</span>
+                  SLO thresholds
+                  {showThresholds && <span className="text-[11px] text-[#0969da] ml-1">active</span>}
+                </button>
+                {showThresholds && (
+                  <div className="mt-2 grid grid-cols-3 gap-2 p-3 bg-[#f6f8fa] rounded-md border border-[#d0d7de]">
+                    {(form.type === 'client-side' ? [
+                      { key: 'lcp',  label: 'LCP ms'  },
+                      { key: 'fcp',  label: 'FCP ms'  },
+                      { key: 'ttfb', label: 'TTFB ms' },
+                      { key: 'cls',  label: 'CLS'     },
+                    ] : [
+                      { key: 'p95',       label: 'p95 ms'  },
+                      { key: 'avg',       label: 'Avg ms'  },
+                      { key: 'errorRate', label: 'Err %'   },
+                    ] as const).map(({ key, label }) => (
+                      <div key={key}>
+                        <label className="block text-[10px] text-[#57606a] mb-1">{label} max</label>
+                        <input
+                          type="number" min={0}
+                          value={(thresholds as Record<string, string>)[key]}
+                          onChange={e => setThresholds(t => ({ ...t, [key]: e.target.value }))}
+                          className={inputCls}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+            </div>
+
+            {/* Action buttons */}
+            <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] flex gap-2">
+              <button
+                onClick={handleSubmit}
+                disabled={loading}
+                className="flex-1 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {loading ? 'Creating…' : '▶ Run Test'}
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveTemplate}
+                disabled={savingTemplate}
+                className="px-3 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] disabled:opacity-50 transition-colors"
+              >
+                {savingTemplate ? 'Saving…' : 'Save template'}
+              </button>
             </div>
           </div>
+        </div>
 
-          {/* Flow builder */}
-          {form.type === 'flow' && (
-            <FlowBuilder
-              steps={flowSteps}
-              envVars={flowEnvVars}
-              onChange={setFlowSteps}
-              onEnvVarsChange={setFlowEnvVars}
-            />
-          )}
-
-          {/* URL — only for non-flow */}
-          {form.type !== 'flow' && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Target URL</label>
-            <input
-              type="url"
-              placeholder="https://example.com"
-              value={form.targetUrl}
-              onChange={e => setForm(f => ({ ...f, targetUrl: e.target.value }))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+        {/* ── Right: Quick stats panel ── */}
+        <div className="hidden lg:block w-72 flex-shrink-0">
+          <div className="mb-3">
+            <h2 className="text-[15px] font-semibold text-[#24292f]">&nbsp;</h2>
           </div>
-          )}
+          <QuickStatsPanel active={active} recent={recent} />
 
-          {/* Description — primary input */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">What do you want to test?</label>
-            <input
-              type="text"
-              placeholder="e.g. load test with 10 users for 2 minutes, ramp up 30s..."
-              value={form.description}
-              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-              onBlur={e => applyDescriptionParams(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <p className="text-xs text-gray-400 mt-1">Mention VUs, duration, ramp-up or profile and they'll be applied automatically</p>
-          </div>
-
-          {/* Advanced settings */}
-          <div>
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(v => !v)}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
-            >
-              <span className={`transition-transform inline-block ${showAdvanced ? 'rotate-90' : ''}`}>▶</span>
-              Advanced settings
-              {!showAdvanced && (
-                <span className="text-xs text-gray-400 ml-1">
-                  {form.type === 'client-side'
-                    ? `${form.sessions} sessions · ${form.duration}`
-                    : `${form.vus} VUs · ${form.duration}${form.rampUp ? ` · ramp ${form.rampUp}` : ''}${form.type === 'backend' ? ` · ${form.profile}` : ''}`}
-                </span>
-              )}
-            </button>
-            {showAdvanced && (
-              <div className="mt-3 space-y-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                {/* Load profile (backend only) */}
-                {form.type === 'backend' && (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-2">Load profile</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {([
-                        { id: 'load',     label: 'Load',     hint: 'Constant VUs' },
-                        { id: 'spike',    label: 'Spike',    hint: 'Sudden traffic burst' },
-                        { id: 'capacity', label: 'Capacity', hint: 'Ramp until breakpoint' },
-                        { id: 'soak',     label: 'Soak',     hint: 'Long steady-state' },
-                      ] as const).map(p => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => setForm(f => ({ ...f, profile: p.id }))}
-                          className={`py-2 px-3 rounded-lg border-2 text-left transition-all ${
-                            form.profile === p.id
-                              ? 'border-blue-500 bg-blue-50'
-                              : 'border-gray-200 bg-white hover:border-gray-300'
-                          }`}
-                        >
-                          <div className="text-sm font-medium text-gray-800">{p.label}</div>
-                          <div className="text-xs text-gray-400">{p.hint}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* VUs / sessions + duration */}
-                <div className="grid grid-cols-2 gap-4">
-                  {form.type === 'client-side' ? (
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Browser sessions</label>
-                      <input type="number" min={1} max={10} value={form.sessions}
-                        onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                      />
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">
-                        {form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Virtual users'}
-                      </label>
-                      <input type="number" min={1} max={100} value={form.vus}
-                        onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                      />
-                    </div>
-                  )}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Duration</label>
-                    <select value={form.duration} onChange={e => setForm(f => ({ ...f, duration: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+          {/* Templates quick-access */}
+          {templates.length > 0 && (
+            <div className="mt-3 bg-white border border-[#d0d7de] rounded-md overflow-hidden">
+              <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
+                <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Templates</span>
+              </div>
+              <div className="divide-y divide-[#eaeef2]">
+                {templates.slice(0, 5).map(t => (
+                  <div key={t.id} className="flex items-center justify-between px-3 py-2">
+                    <span className="font-mono text-[12px] text-[#24292f] truncate mr-2">{t.name}</span>
+                    <button
+                      onClick={() => handleLoadTemplate(t.id)}
+                      className="text-[11px] text-[#0969da] hover:underline flex-shrink-0"
                     >
-                      {['30s', '1m', '2m', '5m', '10m', '30m'].map(d => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
+                      [Use]
+                    </button>
                   </div>
-                </div>
-                {form.type !== 'client-side' && (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Ramp-up <span className="text-gray-400 font-normal">(optional, e.g. 30s, 1m)</span></label>
-                    <input type="text" placeholder="30s"
-                      value={form.rampUp}
-                      onChange={e => setForm(f => ({ ...f, rampUp: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                    />
-                  </div>
-                )}
-                {/* Peak VUs — spike and capacity only */}
-                {form.type === 'backend' && (form.profile === 'spike' || form.profile === 'capacity') && (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      {form.profile === 'spike' ? 'Peak VUs (spike target)' : 'Max VUs (capacity ceiling)'}
-                    </label>
-                    <input type="number" min={form.vus + 1} max={500} value={form.peakVus}
-                      onChange={e => setForm(f => ({ ...f, peakVus: Number(e.target.value) }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                    />
-                  </div>
-                )}
+                ))}
               </div>
-            )}
-          </div>
-
-          {/* SLO thresholds */}
-          <div>
-            <button
-              type="button"
-              onClick={() => setShowThresholds(v => !v)}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
-            >
-              <span className={`transition-transform ${showThresholds ? 'rotate-90' : ''}`}>▶</span>
-              SLO thresholds
-              {showThresholds && <span className="text-xs text-blue-500 ml-1">active</span>}
-            </button>
-            {showThresholds && (
-              <div className="mt-3 grid grid-cols-3 gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                {form.type === 'client-side' ? (
-                  <>
-                    {([
-                      { key: 'lcp',  label: 'LCP',  unit: 'ms' },
-                      { key: 'fcp',  label: 'FCP',  unit: 'ms' },
-                      { key: 'ttfb', label: 'TTFB', unit: 'ms' },
-                      { key: 'cls',  label: 'CLS',  unit: 'score' },
-                    ] as const).map(({ key, label, unit }) => (
-                      <div key={key}>
-                        <label className="block text-xs text-gray-500 mb-1">{label} max <span className="text-gray-400">({unit})</span></label>
-                        <input
-                          type="number" min={0} step={key === 'cls' ? 0.01 : 1}
-                          value={thresholds[key]}
-                          onChange={e => setThresholds(t => ({ ...t, [key]: e.target.value }))}
-                          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                    ))}
-                  </>
-                ) : (
-                  <>
-                    {([
-                      { key: 'p95',       label: 'p95',        unit: 'ms' },
-                      { key: 'avg',       label: 'Avg',        unit: 'ms' },
-                      { key: 'errorRate', label: 'Error rate', unit: '%'  },
-                    ] as const).map(({ key, label, unit }) => (
-                      <div key={key}>
-                        <label className="block text-xs text-gray-500 mb-1">{label} max <span className="text-gray-400">({unit})</span></label>
-                        <input
-                          type="number" min={0} step={key === 'errorRate' ? 0.1 : 1}
-                          value={thresholds[key]}
-                          onChange={e => setThresholds(t => ({ ...t, [key]: e.target.value }))}
-                          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
-          {error && <p className="text-red-500 text-sm">{error}</p>}
-
-          <button
-            onClick={handleSubmit}
-            disabled={loading}
-            className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {loading ? 'Creating test...' : 'Run test'}
-          </button>
-          <button
-            type="button"
-            onClick={handleSaveTemplate}
-            disabled={savingTemplate}
-            className="w-full py-2 border border-gray-300 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
-          >
-            {savingTemplate ? 'Saving…' : 'Save as template'}
-          </button>
+            </div>
+          )}
         </div>
 
-        <div className="mt-4 text-center">
-          <a href="/results" className="text-sm text-blue-600 hover:underline">
-            View all results →
-          </a>
-        </div>
       </div>
-    </main>
+    </div>
   );
 }
 
 export default function Home() {
   return (
-    <Suspense fallback={<main className="min-h-screen bg-gray-50" />}>
+    <Suspense fallback={<div className="p-6 text-[#57606a] text-[13px]">Loading…</div>}>
       <HomeContent />
     </Suspense>
   );

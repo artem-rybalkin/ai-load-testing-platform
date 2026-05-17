@@ -23,6 +23,8 @@ vi.mock('@/lib/api', () => ({
   createTest: vi.fn().mockResolvedValue({ test: { id: 'new-test-id' } }),
   getTemplates: vi.fn().mockResolvedValue({ templates: [] }),
   createTemplate: vi.fn().mockResolvedValue({}),
+  getResults: vi.fn().mockResolvedValue({ results: [] }),
+  getActiveTests: vi.fn().mockResolvedValue({ active: [] }),
 }));
 
 import { createTest, getTemplates } from '@/lib/api';

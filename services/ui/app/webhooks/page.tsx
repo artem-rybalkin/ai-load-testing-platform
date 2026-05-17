@@ -41,68 +41,72 @@ export default function WebhooksPage() {
     setEvents(prev => prev.includes(e) ? prev.filter(x => x !== e) : [...prev, e]);
 
   return (
-    <main className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold text-gray-900 mb-6">Webhooks</h1>
+    <div className="p-4 lg:p-6 max-w-2xl">
+      <h1 className="text-[15px] font-semibold text-[#24292f] mb-4">Webhooks</h1>
 
-        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-          <h2 className="text-sm font-medium text-gray-700 mb-4">Add webhook</h2>
-          <div className="space-y-3">
-            <input
-              type="url"
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-              placeholder="https://your-endpoint.example.com/webhook"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-            />
-            <div className="flex gap-4 text-sm">
-              <span className="text-gray-600">Trigger on:</span>
-              {['failed', 'degraded'].map(e => (
-                <label key={e} className="flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={events.includes(e)}
-                    onChange={() => toggleEvent(e)}
-                    className="rounded border-gray-300"
-                  />
-                  <span className={e === 'failed' ? 'text-red-600' : 'text-yellow-600'}>{e}</span>
-                </label>
-              ))}
-            </div>
-            {error && <p className="text-red-500 text-xs">{error}</p>}
-            <button
-              onClick={handleAdd}
-              disabled={saving}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Add webhook'}
-            </button>
-          </div>
+      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden mb-4">
+        <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Add Webhook</span>
         </div>
-
-        {webhooks.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-8">No webhooks configured</p>
-        ) : (
-          <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-            {webhooks.map(w => (
-              <div key={w.id} className="flex items-center justify-between px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium text-gray-900 truncate max-w-xs">{w.url}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    Events: {w.events.join(', ')} · Added {new Date(w.created_at).toLocaleDateString()}
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleDelete(w.id)}
-                  className="text-red-500 hover:text-red-700 text-xs ml-4"
-                >
-                  Remove
-                </button>
-              </div>
+        <div className="p-4 space-y-3">
+          <input
+            type="url"
+            value={url}
+            onChange={e => setUrl(e.target.value)}
+            placeholder="https://your-endpoint.example.com/webhook"
+            className="w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]"
+          />
+          <div className="flex items-center gap-4 text-[13px]">
+            <span className="text-[#57606a]">Trigger on:</span>
+            {['failed', 'degraded'].map(e => (
+              <label key={e} className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={events.includes(e)}
+                  onChange={() => toggleEvent(e)}
+                  className="rounded border-[#d0d7de] text-[#0969da] focus:ring-[#0969da]"
+                />
+                <span className={`font-mono text-[12px] ${e === 'failed' ? 'text-[#cf222e]' : 'text-[#9a6700]'}`}>{e}</span>
+              </label>
             ))}
           </div>
-        )}
+          {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+        </div>
+        <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de]">
+          <button
+            onClick={handleAdd}
+            disabled={saving}
+            className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+          >
+            {saving ? 'Saving…' : 'Add webhook'}
+          </button>
+        </div>
       </div>
-    </main>
+
+      {webhooks.length === 0 ? (
+        <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">
+          No webhooks configured
+        </div>
+      ) : (
+        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
+          {webhooks.map(w => (
+            <div key={w.id} className="flex items-center justify-between px-4 py-3 hover:bg-[#f6f8fa]">
+              <div className="min-w-0">
+                <p className="text-[13px] font-mono text-[#24292f] truncate max-w-sm">{w.url}</p>
+                <p className="text-[10px] font-mono text-[#8c959f] mt-0.5">
+                  Events: {w.events.join(', ')} · Added {new Date(w.created_at).toLocaleDateString()}
+                </p>
+              </div>
+              <button
+                onClick={() => handleDelete(w.id)}
+                className="text-[11px] text-[#cf222e] hover:underline ml-4 flex-shrink-0"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

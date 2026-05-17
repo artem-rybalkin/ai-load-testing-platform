@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Variant 1 — Obsidian Pro (Dark Developer Dashboard)</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, 'Geist Sans', BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0a0a0a;
+  color: #f4f4f5;
+  min-height: 100vh;
+  display: flex;
+}
+/* ─── Sidebar ─── */
+.sidebar {
+  width: 240px;
+  min-height: 100vh;
+  background: #111111;
+  border-right: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.sidebar-logo {
+  padding: 20px 20px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #f4f4f5;
+  border-bottom: 1px solid #2a2a2a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: -0.01em;
+}
+.sidebar-logo .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #7c3aed;
+  box-shadow: 0 0 8px #7c3aed;
+}
+.sidebar-section {
+  padding: 12px 8px;
+  flex: 1;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  color: #a1a1aa;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: 2px;
+}
+.nav-item:hover { background: #1a1a1a; color: #f4f4f5; }
+.nav-item.active { background: #1a1a1a; color: #f4f4f5; }
+.nav-item.active .nav-icon { color: #7c3aed; }
+.nav-icon { font-size: 16px; width: 20px; text-align: center; }
+.sidebar-bottom {
+  padding: 12px 8px;
+  border-top: 1px solid #2a2a2a;
+}
+/* ─── Main ─── */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* ─── ActiveTests pill ─── */
+.active-pill {
+  position: fixed;
+  top: 16px; right: 20px;
+  background: #111111;
+  border: 1px solid rgba(6,182,212,0.3);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: 'Geist Mono', monospace;
+  color: #06b6d4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 50;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+}
+.pulse-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #06b6d4;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+/* ─── Page content ─── */
+.page {
+  padding: 40px 48px;
+  max-width: 760px;
+}
+.page-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: #f4f4f5;
+  margin-bottom: 4px;
+  letter-spacing: -0.02em;
+}
+.page-sub {
+  font-size: 13px;
+  color: #52525b;
+  margin-bottom: 28px;
+}
+/* ─── Card ─── */
+.card {
+  background: #111111;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+}
+.card-title {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #52525b;
+  margin-bottom: 16px;
+}
+/* ─── Segment control ─── */
+.segment {
+  background: #1a1a1a;
+  border-radius: 10px;
+  padding: 4px;
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+}
+.seg-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+  color: #71717a;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.seg-btn.active {
+  background: #2a2a2a;
+  color: #f4f4f5;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+/* ─── Input ─── */
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #a1a1aa;
+  margin-bottom: 6px;
+}
+.input {
+  width: 100%;
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13.5px;
+  color: #f4f4f5;
+  outline: none;
+  margin-bottom: 16px;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+.input:focus { border-color: #7c3aed; }
+.input::placeholder { color: #3f3f46; }
+.textarea {
+  width: 100%;
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13.5px;
+  color: #f4f4f5;
+  outline: none;
+  margin-bottom: 4px;
+  resize: none;
+  font-family: inherit;
+  min-height: 80px;
+}
+.input-hint {
+  font-size: 11px;
+  color: #3f3f46;
+  margin-bottom: 16px;
+}
+/* ─── Collapsible ─── */
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #52525b;
+  cursor: pointer;
+  padding: 8px 0;
+  border-top: 1px solid #1a1a1a;
+  margin-top: 4px;
+  transition: color 0.15s;
+}
+.collapse-btn:hover { color: #a1a1aa; }
+/* ─── Buttons ─── */
+.btn-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+  border-top: 1px solid #1a1a1a;
+  padding-top: 20px;
+}
+.btn-primary {
+  flex: 1;
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 0 0px 0px rgba(124,58,237,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.btn-primary:hover {
+  background: #6d28d9;
+  box-shadow: 0 0 16px -2px rgba(124,58,237,0.6);
+}
+.btn-ghost {
+  padding: 11px 16px;
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  font-size: 13.5px;
+  color: #71717a;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-ghost:hover { border-color: #3a3a3a; color: #a1a1aa; }
+/* ─── Template chips ─── */
+.chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chip {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  color: #71717a;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.chip:hover { border-color: #7c3aed; color: #a1a1aa; }
+/* ─── Results section ─── */
+.results-page {
+  padding: 40px 48px;
+}
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.table-wrap {
+  background: #111111;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  overflow: hidden;
+}
+table { width: 100%; border-collapse: collapse; }
+th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #52525b;
+  background: #0f0f0f;
+  border-bottom: 1px solid #2a2a2a;
+}
+td {
+  padding: 13px 16px;
+  font-size: 13px;
+  color: #a1a1aa;
+  border-bottom: 1px solid #1a1a1a;
+  vertical-align: middle;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #141414; }
+.url-text {
+  font-family: 'Geist Mono', 'Courier New', monospace;
+  font-size: 12.5px;
+  color: #f4f4f5;
+}
+.metric-mono {
+  font-family: 'Geist Mono', 'Courier New', monospace;
+  font-size: 12px;
+  color: #a1a1aa;
+}
+/* ─── Status badges ─── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-family: 'Geist Mono', monospace;
+  font-weight: 500;
+  border: 1px solid;
+}
+.badge.passed { background: rgba(52,211,153,0.08); border-color: rgba(52,211,153,0.25); color: #34d399; }
+.badge.failed { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.25); color: #f87171; }
+.badge.degraded { background: rgba(251,191,36,0.08); border-color: rgba(251,191,36,0.25); color: #fbbf24; }
+.badge.running { background: rgba(6,182,212,0.08); border-color: rgba(6,182,212,0.25); color: #06b6d4; }
+.type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'Geist Mono', monospace;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  color: #71717a;
+}
+/* ─── Metric cards ─── */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.metric-card {
+  background: #0f0f0f;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 16px;
+}
+.metric-label {
+  font-size: 11px;
+  color: #52525b;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.metric-value {
+  font-family: 'Geist Mono', 'Courier New', monospace;
+  font-size: 26px;
+  font-weight: 600;
+  color: #f4f4f5;
+  line-height: 1;
+  tabular-nums: true;
+}
+.metric-unit {
+  font-size: 13px;
+  color: #52525b;
+  font-weight: 400;
+  margin-left: 3px;
+}
+/* ─── Progress bar ─── */
+.progress-card {
+  background: #111111;
+  border: 1px solid rgba(6,182,212,0.2);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.progress-label { font-size: 12px; color: #06b6d4; font-family: monospace; white-space: nowrap; }
+.progress-bar-bg {
+  flex: 1;
+  height: 6px;
+  background: #1a1a1a;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  width: 68%;
+  background: linear-gradient(90deg, #7c3aed, #06b6d4);
+  border-radius: 999px;
+  transition: width 1s linear;
+}
+.progress-time { font-size: 12px; color: #52525b; font-family: monospace; white-space: nowrap; }
+/* ─── View toggle ─── */
+.view-tabs {
+  display: flex;
+  gap: 0;
+  background: #0f0f0f;
+  border-bottom: 1px solid #2a2a2a;
+  padding: 0 48px;
+}
+.view-tab {
+  padding: 14px 20px;
+  font-size: 13px;
+  color: #52525b;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  font-weight: 500;
+}
+.view-tab:hover { color: #a1a1aa; }
+.view-tab.active { color: #f4f4f5; border-bottom-color: #7c3aed; }
+/* ─── Checkbox ─── */
+.cb { width: 15px; height: 15px; accent-color: #7c3aed; cursor: pointer; }
+/* ─── Mobile preview note ─── */
+.mobile-note {
+  margin-top: 40px;
+  padding: 16px 20px;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #52525b;
+}
+.mobile-note strong { color: #a1a1aa; }
+.mobile-mock {
+  display: inline-flex;
+  flex-direction: column;
+  width: 200px;
+  background: #0a0a0a;
+  border: 2px solid #3a3a3a;
+  border-radius: 16px;
+  overflow: hidden;
+  vertical-align: top;
+  margin-top: 16px;
+  margin-right: 20px;
+  font-size: 11px;
+}
+.mobile-top-bar {
+  background: #111;
+  border-bottom: 1px solid #2a2a2a;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f4f4f5;
+}
+.mobile-content { padding: 12px; flex: 1; }
+.mobile-bottom-bar {
+  background: #111;
+  border-top: 1px solid #2a2a2a;
+  padding: 8px 0;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+}
+.mobile-tab { font-size: 18px; text-align: center; color: #52525b; padding: 2px 8px; }
+.mobile-tab.active { color: #7c3aed; }
+.mini-input {
+  background: #0f0f0f;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 10px;
+  color: #52525b;
+  margin-bottom: 6px;
+  width: 100%;
+}
+.mini-btn {
+  background: #7c3aed;
+  color: white;
+  border-radius: 6px;
+  padding: 7px;
+  font-size: 11px;
+  text-align: center;
+  margin-top: 8px;
+}
+.mini-seg {
+  display: flex;
+  gap: 3px;
+  background: #1a1a1a;
+  padding: 3px;
+  border-radius: 7px;
+  margin-bottom: 8px;
+}
+.mini-seg-btn {
+  flex: 1;
+  padding: 4px;
+  font-size: 9px;
+  text-align: center;
+  border-radius: 4px;
+  color: #52525b;
+}
+.mini-seg-btn.active { background: #2a2a2a; color: #f4f4f5; }
+/* ─── Chart mockup ─── */
+.chart-mock {
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.chart-mock-title {
+  font-size: 11px;
+  color: #52525b;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 80px;
+}
+.bar {
+  flex: 1;
+  background: linear-gradient(180deg, #7c3aed, #5b21b6);
+  border-radius: 3px 3px 0 0;
+  opacity: 0.85;
+}
+.bar.cyan { background: linear-gradient(180deg, #06b6d4, #0e7490); }
+.chart-line-mock {
+  height: 70px;
+  background: #0f0f0f;
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.chart-line-svg {
+  width: 100%;
+  height: 100%;
+}
+/* ─── Section header ─── */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f4f4f5;
+  letter-spacing: -0.01em;
+}
+</style>
+</head>
+<body>
+
+<!-- Active tests floating pill -->
+<div class="active-pill">
+  <div class="pulse-dot"></div>
+  1 test running
+</div>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <div class="dot"></div>
+    AI Load Testing
+  </div>
+  <div class="sidebar-section">
+    <div class="nav-item active">
+      <span class="nav-icon">⊕</span>
+      New Test
+    </div>
+    <div class="nav-item">
+      <span class="nav-icon">≡</span>
+      Results
+    </div>
+    <div class="nav-item">
+      <span class="nav-icon">⏱</span>
+      Schedules
+    </div>
+    <div class="nav-item">
+      <span class="nav-icon">◫</span>
+      Templates
+    </div>
+    <div class="nav-item">
+      <span class="nav-icon">◻</span>
+      Webhooks
+    </div>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="nav-item">
+      <span class="nav-icon">⚙</span>
+      Settings
+    </div>
+  </div>
+</div>
+
+<!-- Main content -->
+<div class="main">
+  <!-- View tabs -->
+  <div class="view-tabs">
+    <div class="view-tab active">New Test</div>
+    <div class="view-tab">Results</div>
+    <div class="view-tab">Test Detail</div>
+  </div>
+
+  <!-- NEW TEST PAGE -->
+  <div id="view-new" class="page">
+    <div class="page-title">New Test</div>
+    <div class="page-sub">Describe what you want to test — AI will generate the script.</div>
+
+    <div class="card">
+      <div class="segment">
+        <div class="seg-btn active">⚡ Backend</div>
+        <div class="seg-btn">🌐 Browser</div>
+        <div class="seg-btn">🔗 Flow</div>
+      </div>
+
+      <div class="label">Target URL</div>
+      <input class="input" type="text" placeholder="https://api.example.com/endpoint" value="https://api.example.com/users" />
+
+      <div class="label">What do you want to test? <span style="color:#52525b">(AI will parse this)</span></div>
+      <textarea class="textarea" placeholder="e.g. Load test with 50 VUs for 5 minutes, spike to 200 users…">Load test with 20 VUs for 2 minutes, check that p95 stays under 500ms</textarea>
+      <div class="input-hint">✦ Mention VUs, duration, ramp-up, profile — AI extracts them automatically</div>
+
+      <div class="collapse-btn">
+        <span>▶</span>
+        Advanced settings
+        <span style="margin-left:auto;font-family:monospace;font-size:11px;color:#3f3f46">20 VUs · 2m · load</span>
+      </div>
+      <div class="collapse-btn">
+        <span>▶</span>
+        SLO Thresholds
+        <span style="margin-left:auto;font-family:monospace;font-size:11px;color:#3f3f46">p95 &lt; 1000ms</span>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-primary">▶ Run Test</button>
+        <button class="btn-ghost">Save as template</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Recent Templates</div>
+      <div class="chip-row">
+        <div class="chip">API smoke test</div>
+        <div class="chip">Soak 1 hour</div>
+        <div class="chip">Spike to 500VU</div>
+        <div class="chip">Checkout flow</div>
+      </div>
+    </div>
+
+    <!-- Mobile mockups -->
+    <div class="mobile-note">
+      <strong>Mobile view</strong> — sidebar hidden, bottom tab navigation
+      <br>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">
+        <div class="mobile-mock">
+          <div class="mobile-top-bar">⚡ ALT Load Testing</div>
+          <div class="mobile-content">
+            <div class="mini-seg">
+              <div class="mini-seg-btn active">⚡ Back</div>
+              <div class="mini-seg-btn">🌐 Brow</div>
+              <div class="mini-seg-btn">🔗 Flow</div>
+            </div>
+            <div style="font-size:9px;color:#52525b;margin-bottom:4px;">Target URL</div>
+            <div class="mini-input">https://api.example.com</div>
+            <div style="font-size:9px;color:#52525b;margin-bottom:4px;">Description</div>
+            <div class="mini-input" style="height:36px;">20 VUs for 2 minutes...</div>
+            <div style="display:flex;gap:4px;margin-top:6px;">
+              <div style="flex:1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:5px;padding:4px 6px;font-size:9px;color:#52525b;">▶ Advanced</div>
+              <div style="flex:1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:5px;padding:4px 6px;font-size:9px;color:#52525b;">▶ SLO</div>
+            </div>
+            <div class="mini-btn">▶ Run Test</div>
+          </div>
+          <div class="mobile-bottom-bar">
+            <div class="mobile-tab active">⊕</div>
+            <div class="mobile-tab">≡</div>
+            <div class="mobile-tab">⏱</div>
+            <div class="mobile-tab">◫</div>
+            <div class="mobile-tab">◻</div>
+          </div>
+        </div>
+
+        <div class="mobile-mock">
+          <div class="mobile-top-bar">≡ Results</div>
+          <div class="mobile-content">
+            <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:6px;">
+              <div style="font-family:monospace;font-size:10px;color:#f4f4f5;">api.example.com/users</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;">
+                <span style="font-size:9px;color:#52525b;">backend · 2m ago</span>
+                <span style="font-size:9px;padding:2px 7px;border-radius:99px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);color:#34d399;">● pass</span>
+              </div>
+              <div style="font-family:monospace;font-size:9px;color:#52525b;margin-top:4px;">p95: 142ms · 847 rps</div>
+            </div>
+            <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:6px;">
+              <div style="font-family:monospace;font-size:10px;color:#f4f4f5;">app.example.com</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;">
+                <span style="font-size:9px;color:#52525b;">browser · 1d ago</span>
+                <span style="font-size:9px;padding:2px 7px;border-radius:99px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.25);color:#f87171;">● fail</span>
+              </div>
+              <div style="font-family:monospace;font-size:9px;color:#52525b;margin-top:4px;">LCP: 3200ms</div>
+            </div>
+          </div>
+          <div class="mobile-bottom-bar">
+            <div class="mobile-tab">⊕</div>
+            <div class="mobile-tab active">≡</div>
+            <div class="mobile-tab">⏱</div>
+            <div class="mobile-tab">◫</div>
+            <div class="mobile-tab">◻</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULTS PAGE -->
+  <div id="view-results" class="results-page" style="display:none;">
+    <div class="results-header">
+      <div class="section-title">All Results</div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn-ghost" style="padding:8px 14px;font-size:13px;">Compare (2)</button>
+        <button class="btn-primary" style="padding:8px 14px;flex:none;">+ New Test</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:32px"></th>
+            <th>URL</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>p95</th>
+            <th>RPS</th>
+            <th>Date</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><input type="checkbox" class="cb" /></td>
+            <td><span class="url-text">api.example.com/users</span></td>
+            <td><span class="type-badge">backend</span></td>
+            <td><span class="badge passed">● passed</span></td>
+            <td><span class="metric-mono">142ms</span></td>
+            <td><span class="metric-mono">847</span></td>
+            <td style="font-size:11px;color:#52525b">2h ago</td>
+            <td style="color:#52525b;font-size:13px;">→</td>
+          </tr>
+          <tr>
+            <td><input type="checkbox" class="cb" checked /></td>
+            <td><span class="url-text">api.example.com/orders</span></td>
+            <td><span class="type-badge">backend</span></td>
+            <td><span class="badge passed">● passed</span></td>
+            <td><span class="metric-mono">198ms</span></td>
+            <td><span class="metric-mono">612</span></td>
+            <td style="font-size:11px;color:#52525b">5h ago</td>
+            <td style="color:#52525b;font-size:13px;">→</td>
+          </tr>
+          <tr>
+            <td><input type="checkbox" class="cb" checked /></td>
+            <td><span class="url-text">app.example.com</span></td>
+            <td><span class="type-badge" style="color:#a855f7;border-color:#3a1a5e;background:#1a0a2e">browser</span></td>
+            <td><span class="badge failed">● failed</span></td>
+            <td><span class="metric-mono" style="color:#f87171">LCP 3.2s</span></td>
+            <td><span class="metric-mono">—</span></td>
+            <td style="font-size:11px;color:#52525b">1d ago</td>
+            <td style="color:#52525b;font-size:13px;">→</td>
+          </tr>
+          <tr>
+            <td><input type="checkbox" class="cb" /></td>
+            <td><span class="url-text">api.example.com/checkout</span></td>
+            <td><span class="type-badge" style="color:#818cf8;border-color:#2a2a5e;background:#0f0f2e">flow</span></td>
+            <td><span class="badge degraded">● degraded</span></td>
+            <td><span class="metric-mono" style="color:#fbbf24">320ms</span></td>
+            <td><span class="metric-mono">410</span></td>
+            <td style="font-size:11px;color:#52525b">3d ago</td>
+            <td style="color:#52525b;font-size:13px;">→</td>
+          </tr>
+          <tr>
+            <td><input type="checkbox" class="cb" /></td>
+            <td><span class="url-text">api.example.com/search</span></td>
+            <td><span class="type-badge">backend</span></td>
+            <td><span class="badge running">● running</span></td>
+            <td><span class="metric-mono" style="color:#52525b">—</span></td>
+            <td><span class="metric-mono" style="color:#52525b">—</span></td>
+            <td style="font-size:11px;color:#52525b">now</td>
+            <td style="color:#52525b;font-size:13px;">→</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TEST DETAIL PAGE -->
+  <div id="view-detail" class="results-page" style="display:none;">
+    <div style="font-size:12px;color:#52525b;margin-bottom:12px;">← All Results</div>
+    <div class="results-header" style="margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="section-title">api.example.com/users</div>
+        <span class="badge running">● running</span>
+        <span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#1a0a2e;border:1px solid #3a1a5e;color:#a855f7;font-family:monospace;">script reused</span>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn-ghost" style="padding:7px 14px;font-size:12px;color:#f87171;border-color:#3a1a1a;">Cancel</button>
+        <button class="btn-ghost" style="padding:7px 14px;font-size:12px;">Set baseline</button>
+        <button class="btn-ghost" style="padding:7px 14px;font-size:12px;">↓ PDF</button>
+      </div>
+    </div>
+
+    <div class="progress-card">
+      <div class="pulse-dot"></div>
+      <span class="progress-label">LIVE</span>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill"></div>
+      </div>
+      <span class="progress-time">2m 14s remaining</span>
+    </div>
+
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-label">Total Requests</div>
+        <div class="metric-value">2,841</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Failed</div>
+        <div class="metric-value" style="color:#f87171;">12<span class="metric-unit">/ 0.4%</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Requests/sec</div>
+        <div class="metric-value" style="color:#a855f7">847</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">p95 Response</div>
+        <div class="metric-value" style="color:#06b6d4">142<span class="metric-unit">ms</span></div>
+      </div>
+    </div>
+
+    <div class="chart-mock">
+      <div class="chart-mock-title">Response Time (live)</div>
+      <div class="chart-line-mock">
+        <svg class="chart-line-svg" viewBox="0 0 400 60" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path d="M0,45 L40,40 L80,35 L120,38 L160,30 L200,28 L240,32 L280,25 L320,20 L360,22 L400,18" fill="none" stroke="#06b6d4" stroke-width="1.5"/>
+          <path d="M0,45 L40,40 L80,35 L120,38 L160,30 L200,28 L240,32 L280,25 L320,20 L360,22 L400,18 L400,60 L0,60Z" fill="url(#g1)"/>
+          <line x1="0" y1="20" x2="400" y2="20" stroke="#1f1f1f" stroke-width="1" stroke-dasharray="3,3"/>
+          <line x1="0" y1="40" x2="400" y2="40" stroke="#1f1f1f" stroke-width="1" stroke-dasharray="3,3"/>
+        </svg>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div class="chart-mock">
+        <div class="chart-mock-title">Response Time Distribution</div>
+        <div class="chart-bars">
+          <div class="bar" style="height:40%"></div>
+          <div class="bar" style="height:70%"></div>
+          <div class="bar" style="height:100%"></div>
+          <div class="bar cyan" style="height:85%"></div>
+          <div class="bar" style="height:60%;opacity:0.5"></div>
+        </div>
+      </div>
+      <div class="chart-mock">
+        <div class="chart-mock-title">Analysis</div>
+        <div style="font-size:12px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <span class="badge passed">● passed</span>
+            <span style="color:#52525b;font-size:11px;">All thresholds met</span>
+          </div>
+          <div style="background:#0f0f0f;border-radius:6px;padding:10px;font-family:monospace;font-size:11px;">
+            <div style="display:flex;justify-content:space-between;color:#a1a1aa;margin-bottom:4px;">
+              <span>p95</span><span style="color:#34d399">142ms ↓12%</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;color:#a1a1aa;margin-bottom:4px;">
+              <span>avg</span><span style="color:#34d399">89ms ↓8%</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;color:#a1a1aa;">
+              <span>errors</span><span style="color:#34d399">0.4% ↓0.1%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Tab switching for preview
+document.querySelectorAll('.view-tab').forEach((tab, i) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const views = ['view-new','view-results','view-detail'];
+    views.forEach(v => document.getElementById(v).style.display = 'none');
+    document.getElementById(views[i]).style.display = 'block';
+  });
+});
+</script>
+</body>
+</html>

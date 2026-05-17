@@ -78,166 +78,137 @@ export default function TemplatesPage() {
     router.push(`/?${params.toString()}`);
   };
 
-  return (
-    <main className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Test templates</h1>
-            <p className="text-gray-500 text-sm mt-1">Save and reuse test configurations</p>
-          </div>
-          <button
-            onClick={() => setShowForm(v => !v)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
-          >
-            {showForm ? 'Cancel' : '+ New template'}
-          </button>
-        </div>
+  const inputCls = "w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]";
+  const labelCls = "block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1";
 
-        {showForm && (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6 space-y-4">
-            <h2 className="text-sm font-semibold text-gray-800">New template</h2>
-            <div className="grid grid-cols-2 gap-4">
+  return (
+    <div className="p-4 lg:p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-[15px] font-semibold text-[#24292f]">Templates</h1>
+        <button
+          onClick={() => setShowForm(v => !v)}
+          className={`px-3 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${
+            showForm
+              ? 'border-[#d0d7de] bg-white text-[#24292f] hover:bg-[#eaeef2]'
+              : 'bg-[#1f883d] hover:bg-[#1a7f37] text-white border-transparent'
+          }`}
+        >
+          {showForm ? 'Cancel' : '+ New template'}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="bg-white border border-[#d0d7de] rounded-md mb-4 overflow-hidden">
+          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
+            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">New Template</span>
+          </div>
+          <div className="p-4 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
-                <input
-                  type="text"
-                  value={form.name}
+                <label className={labelCls}>Name</label>
+                <input type="text" value={form.name}
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder="API smoke test"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                  placeholder="API smoke test" className={inputCls} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Test type</label>
-                <select
-                  value={form.type}
+                <label className={labelCls}>Test type</label>
+                <select value={form.type}
                   onChange={e => setForm(f => ({ ...f, type: e.target.value as 'backend' | 'client-side' }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
+                  className={inputCls}>
                   <option value="backend">Backend / API</option>
                   <option value="client-side">Client-side / Browser</option>
                 </select>
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Default URL (optional)</label>
-              <input
-                type="url"
-                value={form.target_url}
+              <label className={labelCls}>Default URL (optional)</label>
+              <input type="url" value={form.target_url}
                 onChange={e => setForm(f => ({ ...f, target_url: e.target.value }))}
-                placeholder="https://example.com"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+                placeholder="https://example.com" className={inputCls} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3">
               {form.type === 'backend' ? (
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Virtual users</label>
-                  <input
-                    type="number"
-                    min={1} max={100}
-                    value={form.vus}
+                  <label className={labelCls}>Virtual users</label>
+                  <input type="number" min={1} max={100} value={form.vus}
                     onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                    className={inputCls} />
                 </div>
               ) : (
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Sessions</label>
-                  <input
-                    type="number"
-                    min={1} max={10}
-                    value={form.sessions}
+                  <label className={labelCls}>Sessions</label>
+                  <input type="number" min={1} max={10} value={form.sessions}
                     onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                    className={inputCls} />
                 </div>
               )}
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Duration</label>
-                <select
-                  value={form.duration}
+                <label className={labelCls}>Duration</label>
+                <select value={form.duration}
                   onChange={e => setForm(f => ({ ...f, duration: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
+                  className={inputCls}>
                   {['30s', '1m', '2m', '5m', '10m'].map(d => <option key={d} value={d}>{d}</option>)}
                 </select>
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Description (optional)</label>
-              <input
-                type="text"
-                value={form.description}
+              <label className={labelCls}>Description (optional)</label>
+              <input type="text" value={form.description}
                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="Describe this template..."
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+                placeholder="Describe this template…" className={inputCls} />
             </div>
-            {error && <p className="text-red-500 text-sm">{error}</p>}
-            <button
-              onClick={handleCreate}
-              disabled={saving}
-              className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-            >
+            {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+          </div>
+          <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de]">
+            <button onClick={handleCreate} disabled={saving}
+              className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors">
               {saving ? 'Saving…' : 'Save template'}
             </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {loading ? (
-          <div className="text-center py-16 text-gray-400">Loading…</div>
-        ) : templates.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400">
-            No templates yet. Save a test configuration to reuse it later.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {templates.map(t => {
-              const opts = t.options as Record<string, unknown>;
-              return (
-                <div key={t.id} className="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-medium text-gray-900 text-sm">{t.name}</span>
-                      <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700">{t.type}</span>
-                      {t.used_count > 0 && (
-                        <span className="text-xs text-gray-400">used {t.used_count}×</span>
-                      )}
-                    </div>
-                    {t.target_url && (
-                      <p className="text-xs text-gray-500 truncate">{t.target_url}</p>
-                    )}
-                    <div className="flex items-center gap-3 mt-1">
-                      {opts.vus != null && <span className="text-xs text-gray-400">{String(opts.vus)} VUs</span>}
-                      {opts.sessions != null && <span className="text-xs text-gray-400">{String(opts.sessions)} sessions</span>}
-                      {opts.duration != null && <span className="text-xs text-gray-400">{String(opts.duration)}</span>}
-                    </div>
-                    {t.description && (
-                      <p className="text-xs text-gray-400 mt-0.5">{t.description}</p>
-                    )}
+      {loading ? (
+        <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">Loading…</div>
+      ) : templates.length === 0 ? (
+        <div className="bg-white border border-[#d0d7de] rounded-md p-10 text-center text-[13px] text-[#57606a]">
+          No templates yet. Save a test configuration to reuse it later.
+        </div>
+      ) : (
+        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
+          {templates.map(t => {
+            const opts = t.options as Record<string, unknown>;
+            return (
+              <div key={t.id} className="flex items-center gap-4 px-4 py-3 hover:bg-[#f6f8fa]">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="font-medium text-[#24292f] text-[13px]">{t.name}</span>
+                    <span className="px-1.5 rounded text-[10px] font-mono bg-[#ddf4ff] text-[#0969da]">{t.type}</span>
+                    {t.used_count > 0 && <span className="text-[10px] font-mono text-[#8c959f]">used {t.used_count}×</span>}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => handleUse(t)}
-                      className="px-3 py-1.5 text-xs border border-blue-300 text-blue-600 rounded-lg hover:bg-blue-50"
-                    >
-                      Use template
-                    </button>
-                    <button
-                      onClick={() => handleDelete(t.id)}
-                      className="px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
-                    >
-                      Delete
-                    </button>
+                  {t.target_url && <p className="text-[11px] font-mono text-[#57606a] truncate">{t.target_url}</p>}
+                  <div className="flex items-center gap-3 mt-0.5">
+                    {opts.vus != null && <span className="text-[10px] font-mono text-[#8c959f]">{String(opts.vus)} VUs</span>}
+                    {opts.sessions != null && <span className="text-[10px] font-mono text-[#8c959f]">{String(opts.sessions)} sessions</span>}
+                    {opts.duration != null && <span className="text-[10px] font-mono text-[#8c959f]">{String(opts.duration)}</span>}
                   </div>
+                  {t.description && <p className="text-[10px] text-[#8c959f] mt-0.5">{t.description}</p>}
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </main>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button onClick={() => handleUse(t)}
+                    className="px-2.5 py-1 text-[11px] border border-[#54aeff] text-[#0969da] rounded-md hover:bg-[#ddf4ff] transition-colors">
+                    Use
+                  </button>
+                  <button onClick={() => handleDelete(t.id)}
+                    className="px-2.5 py-1 text-[11px] border border-[#f4c7c3] text-[#cf222e] rounded-md hover:bg-[#ffebe9] transition-colors">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

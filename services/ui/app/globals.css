@@ -1,26 +1,56 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f6f7f8;
+  --foreground: #24292f;
+  --surface: #ffffff;
+  --border: #d0d7de;
+  --border-muted: #eaeef2;
+  --text-primary: #24292f;
+  --text-secondary: #57606a;
+  --text-tertiary: #8c959f;
+  --accent: #0969da;
+  --accent-hover: #0860ca;
+  --success: #1f883d;
+  --success-hover: #1a7f37;
+  --warning: #9a6700;
+  --danger: #cf222e;
+  --danger-hover: #a40e26;
+  --bg-success: #dafbe1;
+  --bg-warning: #fff8c5;
+  --bg-danger: #ffebe9;
+  --bg-accent: #ddf4ff;
+  --bg-muted: #f6f8fa;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-border-muted: var(--border-muted);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-bg-muted: var(--bg-muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Shared utility: monospace metric values */
+.metric-mono {
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
 }

@@ -137,24 +137,28 @@ ai-load-testing-platform/
         │   ├── home.test.tsx
         │   └── results.test.tsx
         └── app/
-            ├── layout.tsx    # nav + ActiveTests polling header
-            ├── page.tsx      # test creation form (backend / browser / flow tabs)
+            ├── globals.css   # Tailwind 4 CSS-first config; CSS vars for Command Center palette
+            ├── layout.tsx    # shell: Sidebar + TopBar + ActiveTests strip + main + BottomNav
+            ├── page.tsx      # New Test — 2-col bento: form left, quick-stats panel right
             ├── results/
-            │   ├── page.tsx              # all results table (compare checkboxes)
-            │   ├── [testId]/page.tsx     # result detail + charts + step breakdown
-            │   └── compare/page.tsx      # side-by-side metric diff view
+            │   ├── page.tsx              # 2-line table rows (desktop) + card list (mobile)
+            │   ├── [testId]/page.tsx     # 12-col bento grid: metric cells + charts + analysis
+            │   └── compare/page.tsx      # side-by-side metric diff table
             ├── webhooks/page.tsx         # webhook CRUD management
             ├── schedules/page.tsx        # schedule CRUD + manual trigger
             ├── templates/page.tsx        # template CRUD + load into form
             └── components/
-                ├── ActiveTests.tsx       # polling header (active test count + type icon)
-                ├── BackendChart.tsx      # Recharts bar chart for k6 metrics
-                ├── ClientChart.tsx       # radar chart for Web Vitals + Lighthouse
-                ├── FlowStepChart.tsx     # grouped bar chart: avg+p95 per step (flow results)
-                ├── AnalysisPanel.tsx     # threshold violations + regression diffs
-                ├── RealtimeChart.tsx     # live metrics with per-step lines for flow tests
-                ├── TrendChart.tsx        # p95/LCP trend across runs for same URL
-                └── FlowBuilder.tsx       # multi-step flow editor + HAR import
+                ├── Sidebar.tsx       # collapsible icon-rail sidebar (220px ↔ 48px, localStorage)
+                ├── BottomNav.tsx     # mobile bottom tab bar (5 items, lg:hidden)
+                ├── TopBar.tsx        # mobile top bar h-10 with page title (lg:hidden)
+                ├── ActiveTests.tsx   # inline strip (bg-[#ddf4ff]) showing running tests
+                ├── BackendChart.tsx  # bar charts: response time distribution + request breakdown
+                ├── ClientChart.tsx   # radar chart for Web Vitals + Lighthouse gauge dials
+                ├── FlowStepChart.tsx # grouped bar chart: avg+p95 per step (flow results)
+                ├── AnalysisPanel.tsx # perf status badge + threshold violations + regression diffs
+                ├── RealtimeChart.tsx # 3-panel live metrics (response time, error rate, throughput)
+                ├── TrendChart.tsx    # p95/LCP trend line across runs for same URL
+                └── FlowBuilder.tsx   # multi-step flow editor + HAR import
 ```
 
 ## Database Schema
@@ -475,6 +479,41 @@ After `handleResult()` saves a result with non-null `perf_status`:
 - Collects performance, accessibility, best-practices, SEO scores (0–100)
 - `performance < 50` → analyzer treats as threshold violation → `perf_status = 'failed'`
 
+### UI Layout — Command Center Design (Phase 6)
+The UI follows a "Command Center" aesthetic: GitHub-style color palette, collapsible sidebar, bento grid, monospace metrics.
+
+**Design tokens** (`globals.css` CSS vars): `#f6f7f8` background, `#ffffff` surface, `#d0d7de` border, `#0969da` accent, `#1f883d` success (primary button), `#cf222e` danger.
+
+**Navigation:**
+- Desktop: `Sidebar.tsx` — 220px full / 48px icon-rail (toggle persisted to `localStorage`). Active item highlighted with `bg-[#ddf4ff] text-[#0969da]`.
+- Mobile: `TopBar.tsx` (h-10 sticky header) + `BottomNav.tsx` (5-tab bar, `fixed bottom-0`, `lg:hidden`).
+- `ActiveTests.tsx` renders as an inline strip directly below the top bar when tests are running — not a floating element.
+
+**Home page (`page.tsx`):**
+- 2-column layout on `lg:` screens: form (flex-1) + quick-stats panel (w-72 fixed).
+- Quick-stats panel fetches `getResults()` and `getActiveTests()` on mount; shows today's count, avg p95, pass rate, active tests, recent runs, template shortcuts.
+- Form type selector: segmented border-collapse buttons (Backend / Browser / Multi-step Flow).
+- Template select: `<select>` in header row, placeholder "Load from template…".
+- Action buttons in a `bg-[#f6f8fa]` footer strip: green primary "▶ Run Test" + ghost "Save template".
+
+**Results list (`results/page.tsx`):**
+- Desktop: `<table>` with 2-line rows — primary line (URL + type/status badges), secondary line (date · rps · p95 in `font-mono text-[#57606a]`). Full-row `cursor-pointer` click navigates; "View →" link in last column.
+- Mobile: stacked cards (`md:hidden`), one card per result with status dot + key metric.
+- Status representation: colored `w-2 h-2 rounded-full` dot + `font-mono` text, not pill badges.
+
+**Test detail (`results/[testId]/page.tsx`):**
+- Bento grid: `grid grid-cols-2 md:grid-cols-4 lg:grid-cols-12 gap-3`.
+- Metric cells: `lg:col-span-3` each — `font-mono font-bold text-[22px]` value, uppercase mono label.
+- BackendChart + AnalysisPanel sit side by side: `lg:col-span-7` / `lg:col-span-5`.
+- TrendChart and script block: `col-span-full`.
+- Progress bar: `bg-[#0969da]` fill, displayed in a card with `LIVE` badge.
+
+**Charts (all components):**
+- `CartesianGrid stroke="#eaeef2" vertical={false}` — horizontal lines only, no verticals.
+- All axis ticks: `{ fill: '#57606a', fontSize: 11, fontFamily: 'monospace' }`.
+- Tooltip: `{ background: '#fff', border: '1px solid #d0d7de', borderRadius: '6px', fontFamily: 'monospace', boxShadow: 'none' }`.
+- Primary line color `#0969da`; step colors `['#0969da','#1f883d','#9a6700','#7c3aed','#cf222e','#0891b2','#c2410c']`.
+
 ### UI Form — Test Creation (app/page.tsx)
 - **Description field** is the primary input; Advanced settings (VUs, duration, ramp-up, profile) are collapsed by default
 - **Auto-extraction from description:** on blur, `applyDescriptionParams()` parses natural language for VUs, sessions, duration, ramp-up, profile keywords and updates the Advanced settings; the section auto-opens to confirm
@@ -482,10 +521,11 @@ After `handleResult()` saves a result with non-null `perf_status`:
 - **Templates:** save/load includes description, URL, VUs, duration, profile, peakVus, thresholds; dropdown is controlled (always resets to placeholder after selection)
 
 ### UI Polling Strategy
-- `ActiveTests` header: polls `/results/active` every 3s; shows ⚡ (backend), 🔗 (flow), 🌐 (browser) icons
+- `ActiveTests` strip: polls `/results/active` every 3s; shows ⚡ (backend), 🔗 (flow), 🌐 (browser) icons inline
 - Result detail page: polls `/results/:testId` every 2s until `completed` / `failed` / `cancelled`
 - Live metrics: polls `/results/:testId/live` every 3s while `status === 'running'` (backend + flow)
 - Results list page: polls `/results` every 5s
+- Home page: fetches `getResults()` + `getActiveTests()` once on mount for the quick-stats panel
 
 ### Countdown Timer & Elapsed X-axis
 - `duration_seconds` stored in `test_results` at pending-record creation
@@ -690,8 +730,20 @@ All phases complete:
 - ✅ SLO threshold inputs in UI (collapsible, type-aware: backend vs browser fields)
 - ✅ Template save/load fully fixed: description, URL, duration, profile, peakVus, thresholds all round-trip
 - ✅ **Semantic script reuse:** Gemini `compareDescriptions()` decides REUSE vs REGENERATE based on description match; `test_scripts.description` stores the generating prompt; legacy rows (null description) always regenerate
-- ✅ Type-aware icons in ActiveTests header (⚡ backend, 🔗 flow, 🌐 browser)
+- ✅ Type-aware icons in ActiveTests strip (⚡ backend, 🔗 flow, 🌐 browser)
 - ✅ Status-aware pending/running messages on result detail page
+
+### Phase 6 — UI Redesign (Command Center)
+- ✅ **Command Center design system:** GitHub-palette CSS vars in `globals.css` (Tailwind 4 CSS-first `@theme inline`)
+- ✅ **Collapsible sidebar:** `Sidebar.tsx` — 220px ↔ 48px icon-rail toggle, state in `localStorage`, active item highlighted
+- ✅ **Mobile navigation:** `BottomNav.tsx` (5-tab fixed bottom bar) + `TopBar.tsx` (h-10 sticky header), both `lg:hidden`
+- ✅ **ActiveTests as inline strip:** replaces blue banner with compact `bg-[#ddf4ff]` row; inline font-mono links
+- ✅ **Home page bento:** 2-column layout — form on left, quick-stats panel on right (active tests, recent runs, templates)
+- ✅ **Results list:** 2-line table rows with monospace meta; mobile card list (`md:hidden`)
+- ✅ **Test detail bento grid:** `grid-cols-12` responsive layout; metric cells `col-span-3`, chart+analysis side-by-side, trend full-width
+- ✅ **Chart reskin:** all 5 chart components — horizontal-only grid, `#0969da` primary, monospace axis ticks, plain white tooltip
+- ✅ **Remaining pages:** compare, schedules, templates, webhooks — GitHub-style cards, no shadows, tight `rounded-md`
+- ✅ **29/29 UI tests passing** after updating mocks and component text to match new design
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)

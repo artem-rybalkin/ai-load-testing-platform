@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
-import ActiveTests from '@/app/components/ActiveTests';
 import { Geist, Geist_Mono } from "next/font/google";
+import Sidebar from "@/app/components/Sidebar";
+import BottomNav from "@/app/components/BottomNav";
+import TopBar from "@/app/components/TopBar";
+import ActiveTests from "@/app/components/ActiveTests";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -20,22 +23,19 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body suppressHydrationWarning>
-        <nav className="bg-white border-b border-gray-200 px-4 py-3">
-          <div className="max-w-5xl mx-auto flex items-center justify-between">
-            <a href="/" className="font-semibold text-gray-900">⚡ AI Load Testing</a>
-            <div className="flex gap-4">
-              <a href="/" className="text-sm text-gray-600 hover:text-gray-900">New test</a>
-              <a href="/results" className="text-sm text-gray-600 hover:text-gray-900">Results</a>
-              <a href="/schedules" className="text-sm text-gray-600 hover:text-gray-900">Schedules</a>
-              <a href="/templates" className="text-sm text-gray-600 hover:text-gray-900">Templates</a>
-              <a href="/webhooks" className="text-sm text-gray-600 hover:text-gray-900">Webhooks</a>
-            </div>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body suppressHydrationWarning className="bg-[#f6f7f8] text-[#24292f]">
+        <div className="flex min-h-screen">
+          <Sidebar />
+          <div className="flex-1 min-w-0 flex flex-col">
+            <TopBar />
+            <ActiveTests />
+            <main className="flex-1 pb-14 lg:pb-0">
+              {children}
+            </main>
           </div>
-        </nav>
-        <ActiveTests />
-        {children}
+        </div>
+        <BottomNav />
       </body>
     </html>
   );

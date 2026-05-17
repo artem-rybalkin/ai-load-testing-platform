@@ -2,7 +2,7 @@
 
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine, Legend
+  Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
 
 interface BackendMetrics {
@@ -14,16 +14,27 @@ interface BackendMetrics {
   rps: number;
 }
 
+const TOOLTIP_STYLE = {
+  background: '#fff',
+  border: '1px solid #d0d7de',
+  borderRadius: '6px',
+  fontSize: 12,
+  fontFamily: 'monospace',
+  boxShadow: 'none',
+};
+
+const TICK = { fill: '#57606a', fontSize: 11, fontFamily: 'monospace' };
+
 export default function BackendChart({ metrics }: { metrics: BackendMetrics }) {
   const responseTimeData = [
-    { name: 'Avg', value: Math.round(metrics.avgResponseTime), fill: '#3b82f6' },
-    { name: 'p95', value: Math.round(metrics.p95ResponseTime), fill: '#f59e0b' },
-    { name: 'p99', value: Math.round(metrics.p99ResponseTime), fill: '#ef4444' },
+    { name: 'Avg', value: Math.round(metrics.avgResponseTime), color: '#0969da' },
+    { name: 'p95', value: Math.round(metrics.p95ResponseTime), color: '#9a6700' },
+    { name: 'p99', value: Math.round(metrics.p99ResponseTime), color: '#cf222e' },
   ];
 
   const requestsData = [
-    { name: 'Successful', value: metrics.requestsTotal - metrics.requestsFailed, fill: '#22c55e' },
-    { name: 'Failed', value: metrics.requestsFailed, fill: '#ef4444' },
+    { name: 'Success', value: metrics.requestsTotal - metrics.requestsFailed, color: '#1f883d' },
+    { name: 'Failed',  value: metrics.requestsFailed,                          color: '#cf222e' },
   ];
 
   const errorRate = metrics.requestsTotal > 0
@@ -31,27 +42,26 @@ export default function BackendChart({ metrics }: { metrics: BackendMetrics }) {
     : '0';
 
   return (
-    <div className="space-y-6">
-
+    <div className="space-y-4">
       {/* Response Time */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-medium text-gray-700">Response Time</h3>
-          <span className="text-xs text-gray-400">milliseconds</span>
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Response Time</span>
+          <span className="text-[10px] font-mono text-[#8c959f]">milliseconds</span>
         </div>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={responseTimeData} barSize={48}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} unit="ms" />
+        <ResponsiveContainer width="100%" height={160}>
+          <BarChart data={responseTimeData} barSize={40}>
+            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <XAxis dataKey="name" tick={TICK} axisLine={false} tickLine={false} />
+            <YAxis tick={TICK} unit="ms" width={48} axisLine={false} tickLine={false} />
             <Tooltip
-              formatter={(value) => [`${value}ms`, 'Response time']}
-              contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
+              formatter={(v) => [`${v}ms`, 'Response time']}
+              contentStyle={TOOLTIP_STYLE}
+              cursor={{ fill: '#f6f8fa' }}
             />
-            <ReferenceLine y={300} stroke="#ef4444" strokeDasharray="4 4" label={{ value: 'threshold 300ms', fontSize: 11, fill: '#ef4444' }} />
-            <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+            <Bar dataKey="value" radius={[3, 3, 0, 0]}>
               {responseTimeData.map((entry, i) => (
-                <rect key={i} fill={entry.fill} />
+                <Cell key={i} fill={entry.color} />
               ))}
             </Bar>
           </BarChart>
@@ -59,44 +69,41 @@ export default function BackendChart({ metrics }: { metrics: BackendMetrics }) {
       </div>
 
       {/* Requests breakdown */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-medium text-gray-700">Requests breakdown</h3>
-          <span className="text-xs text-gray-400">Error rate: {errorRate}%</span>
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Request breakdown</span>
+          <span className="text-[10px] font-mono text-[#8c959f]">Error rate: {errorRate}%</span>
         </div>
-        <ResponsiveContainer width="100%" height={160}>
-          <BarChart data={requestsData} barSize={64}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} />
-            <Tooltip
-              contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
-            />
-            <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+        <ResponsiveContainer width="100%" height={120}>
+          <BarChart data={requestsData} barSize={56}>
+            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <XAxis dataKey="name" tick={TICK} axisLine={false} tickLine={false} />
+            <YAxis tick={TICK} width={48} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: '#f6f8fa' }} />
+            <Bar dataKey="value" radius={[3, 3, 0, 0]}>
               {requestsData.map((entry, i) => (
-                <rect key={i} fill={entry.fill} />
+                <Cell key={i} fill={entry.color} />
               ))}
             </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
 
-      {/* RPS */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <h3 className="text-sm font-medium text-gray-700 mb-2">Throughput</h3>
-        <div className="flex items-end gap-2">
-          <span className="text-4xl font-bold text-gray-900">{metrics.rps?.toFixed(1)}</span>
-          <span className="text-gray-500 mb-1">requests/sec</span>
+      {/* Throughput */}
+      <div>
+        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">Throughput</span>
+        <div className="flex items-end gap-2 mb-2">
+          <span className="text-[28px] font-mono font-bold text-[#24292f] leading-none">{metrics.rps?.toFixed(1)}</span>
+          <span className="text-[13px] text-[#57606a] mb-0.5">req/sec</span>
         </div>
-        <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-1.5 bg-[#eaeef2] rounded-full overflow-hidden">
           <div
-            className="h-full bg-blue-500 rounded-full transition-all"
+            className="h-full bg-[#0969da] rounded-full transition-all"
             style={{ width: `${Math.min(100, (metrics.rps / 100) * 100)}%` }}
           />
         </div>
-        <p className="text-xs text-gray-400 mt-1">relative to 100 rps baseline</p>
+        <p className="text-[10px] font-mono text-[#8c959f] mt-1">relative to 100 rps baseline</p>
       </div>
-
     </div>
   );
 }
