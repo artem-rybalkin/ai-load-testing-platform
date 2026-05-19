@@ -2,12 +2,36 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # Changes vs base:
-#   - Removes internal port bindings (postgres, redis, rabbitmq not exposed)
-#   - Removes worker/ai/internal service ports
-#   - Adds resource limits
-#   - Uses ALLOWED_ORIGIN and API_KEYS from environment
+#   - Caddy handles all public traffic on 80/443 with automatic HTTPS (Let's Encrypt)
+#   - No internal ports exposed (postgres, redis, rabbitmq, workers inaccessible from internet)
+#   - UI/api/results-service ports removed — traffic flows through Caddy only
+#   - Resource limits on all services
+#   - Uses DOMAIN, ALLOWED_ORIGIN, API_KEYS from environment
+#
+# Required env vars:
+#   DOMAIN           e.g. example.com  (also needs api.example.com + data.example.com DNS)
+#   API_KEYS         comma-separated API keys
+#   API_KEY          single key for UI
+#   ALLOWED_ORIGIN   https://example.com
+#   GEMINI_API_KEY
 
 services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+    depends_on:
+      - ui
+      - api-service
+      - results-service
   postgres:
     ports: !reset []          # never expose DB to the internet
 
@@ -42,8 +66,7 @@ services:
           cpus: '0.5'
 
   results-service:
-    ports:
-      - "3004:3004"
+    ports: !reset []    # Caddy proxies data.${DOMAIN} → results-service:3004
     deploy:
       resources:
         limits:
@@ -54,6 +77,7 @@ services:
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
 
   api-service:
+    ports: !reset []    # Caddy proxies api.${DOMAIN} → api-service:3000
     deploy:
       resources:
         limits:
@@ -64,6 +88,18 @@ services:
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
 
   ui:
+    ports: !reset []    # Caddy proxies ${DOMAIN} → ui:3006
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
     environment:
       NEXT_PUBLIC_API_KEY: ${API_KEY}
+      NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+      NEXT_PUBLIC_RESULTS_URL: https://data.${DOMAIN}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+
+volumes:
+  caddy_data:    # TLS certificates — persists across restarts
+  caddy_config:

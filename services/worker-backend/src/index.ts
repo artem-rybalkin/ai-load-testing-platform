@@ -121,7 +121,7 @@ const runK6Test = async (
       setTimeout(() => { if (runningTests.has(testId)) k6.kill('SIGKILL'); }, GRACE_PERIOD_MS);
     }, MAX_TEST_DURATION_MS);
 
-    k6.on('close', async () => {
+    k6.on('close', async (code) => {
       clearInterval(liveInterval);
       clearTimeout(killTimer);
       runningTests.delete(testId);
@@ -131,12 +131,27 @@ const runK6Test = async (
       await unlink(scriptPath).catch(() => {});
       await unlink(jsonPath).catch(() => {});
 
-      const output  = stdout + stderr;
-      log.debug({ testId }, 'k6 full output received');
+      // k6 exit codes:
+      //   0  — all good
+      //   99 — threshold violations (test ran to completion; our analyzer handles SLO checks)
+      // else — script error, configuration failure, or crash
+      if (code !== 0 && code !== 99) {
+        log.warn({ testId, code }, 'k6 exited with non-zero code — parsing partial output');
+      }
+
+      const output = stdout + stderr;
+      log.debug({ testId, exitCode: code }, 'k6 full output received');
       const metrics = parseK6Output(output);
       metrics.statusCodes = parseK6StatusCodes(jsonContent);
       const stepMetrics = parseK6GroupMetrics(jsonContent);
       if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
+
+      // Only reject if we got nothing useful AND it was a hard failure (not a threshold violation)
+      if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
+        reject(new Error(`k6 exited with code ${code}: ${stderr.slice(-500)}`));
+        return;
+      }
+
       resolve(metrics);
     });
 

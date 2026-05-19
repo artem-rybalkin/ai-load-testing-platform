@@ -19,15 +19,31 @@ const SERVICE_IMPACT: Record<string, string> = {
   'results-service':'Results unavailable',
 };
 
+const STORAGE_KEY = 'systemHealthDismissed';
+
+const issueKey = (services: ServiceHealth[]) =>
+  services.map(s => s.name).sort().join(',');
+
 export default function SystemHealth() {
   const [issues, setIssues] = useState<ServiceHealth[]>([]);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissedKey, setDismissedKey] = useState<string>(() => {
+    try { return localStorage.getItem(STORAGE_KEY) ?? ''; } catch { return ''; }
+  });
 
   useEffect(() => {
     const check = async () => {
       try {
         const data = await getSystemHealth();
-        setIssues(data.services.filter(s => s.status !== 'ok'));
+        const newIssues = data.services.filter(s => s.status !== 'ok');
+        setIssues(newIssues);
+        // Auto-clear dismissal when the set of unhealthy services changes
+        if (newIssues.length > 0) {
+          const current = issueKey(newIssues);
+          setDismissedKey(prev => {
+            const stored = (() => { try { return localStorage.getItem(STORAGE_KEY) ?? ''; } catch { return ''; } })();
+            return current === stored ? prev : '';
+          });
+        }
       } catch { /* network error — don't surface */ }
     };
     check();
@@ -35,7 +51,14 @@ export default function SystemHealth() {
     return () => clearInterval(interval);
   }, []);
 
-  if (dismissed || issues.length === 0) return null;
+  const dismiss = () => {
+    const key = issueKey(issues);
+    try { localStorage.setItem(STORAGE_KEY, key); } catch { /* private browsing */ }
+    setDismissedKey(key);
+  };
+
+  const isDismissed = issues.length === 0 || dismissedKey === issueKey(issues);
+  if (isDismissed) return null;
 
   return (
     <div className="bg-[#fff8c5] border-b border-[#e3b341] px-4 py-2 flex items-start gap-3">
@@ -56,7 +79,7 @@ export default function SystemHealth() {
         </div>
       </div>
       <button
-        onClick={() => setDismissed(true)}
+        onClick={dismiss}
         className="text-[#9a6700] hover:text-[#7a5100] text-[14px] shrink-0 leading-none"
         aria-label="Dismiss"
       >

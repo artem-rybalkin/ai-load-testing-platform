@@ -1,0 +1,20 @@
+# Caddyfile — production HTTPS reverse proxy
+# Caddy auto-provisions TLS certificates from Let's Encrypt.
+# Set DOMAIN env var before starting (e.g. DOMAIN=example.com).
+#
+# DNS required:
+#   A    example.com       → your server IP
+#   A    api.example.com   → your server IP
+#   A    data.example.com  → your server IP
+
+{$DOMAIN} {
+    reverse_proxy ui:3006
+}
+
+api.{$DOMAIN} {
+    reverse_proxy api-service:3000
+}
+
+data.{$DOMAIN} {
+    reverse_proxy results-service:3004
+}

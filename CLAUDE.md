@@ -73,7 +73,8 @@ ai-load-testing-platform/
 ├── playwright.config.ts      # Playwright E2E config (baseURL: localhost:3006)
 ├── docker-compose.yml        # base services + infrastructure
 ├── docker-compose.dev.yml    # dev hot-reload overrides (tsx watch + WATCHPACK_POLLING)
-├── docker-compose.prod.yml   # production overrides (no internal ports, resource limits, auth)
+├── docker-compose.prod.yml   # production overrides (Caddy HTTPS, no internal ports, resource limits)
+├── Caddyfile                 # Caddy reverse proxy config (subdomain routing, auto TLS)
 ├── .env                      # GEMINI_API_KEY (never commit)
 ├── CLAUDE.md                 # this file
 ├── e2e/                      # Playwright E2E specs (require docker compose up)
@@ -602,9 +603,15 @@ On non-zero exit the script is rejected; the message is nacked and retried / DLQ
 **Deployment checklist:**
 1. Rotate `GEMINI_API_KEY` (never commit `.env`)
 2. Set strong random `API_KEYS` + `API_KEY`
-3. Set `ALLOWED_ORIGIN` to your domain
-4. Use `docker-compose.prod.yml` override
-5. Put a TLS-terminating reverse proxy (Nginx/Caddy) in front of ports 3000, 3004, 3006
+3. Set `DOMAIN=yourdomain.com` and add DNS A records for `yourdomain.com`, `api.yourdomain.com`, `data.yourdomain.com`
+4. Set `ALLOWED_ORIGIN=https://yourdomain.com`
+5. Run with `docker-compose.prod.yml` — Caddy handles HTTPS automatically
+
+**HTTPS via Caddy** (`Caddyfile` + `docker-compose.prod.yml`):
+- Caddy service listens on ports 80/443; auto-provisions TLS via Let's Encrypt
+- `yourdomain.com` → UI (:3006) | `api.yourdomain.com` → api-service (:3000) | `data.yourdomain.com` → results-service (:3004)
+- Direct service ports (3000, 3004, 3006) are NOT exposed in prod — only 80/443 via Caddy
+- TLS certificates stored in `caddy_data` Docker volume (persists across restarts)
 
 ## Environment Variables
 
@@ -620,6 +627,7 @@ NEXT_PUBLIC_API_URL=http://localhost:3000
 NEXT_PUBLIC_RESULTS_URL=http://localhost:3004
 
 # Security (required for cloud/production):
+DOMAIN=yourdomain.com         # used by Caddy for TLS + UI env var rewrites
 API_KEYS=key1,key2            # comma-separated; empty string = auth disabled (dev only)
 API_KEY=key1                  # single key passed to UI as NEXT_PUBLIC_API_KEY
 ALLOWED_ORIGIN=https://yourdomain.com  # CORS origin; defaults to * in dev
@@ -645,8 +653,9 @@ docker compose up --build
 # Start with hot-reload (dev mode) — Windows: uses WATCHPACK_POLLING for Next.js HMR
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 
-# Deploy to cloud/production (auth on, internal ports hidden, resource limits active)
-# Set API_KEYS, API_KEY, ALLOWED_ORIGIN, GEMINI_API_KEY in environment first
+# Deploy to cloud/production (Caddy HTTPS, auth on, internal ports hidden, resource limits)
+# Required env: DOMAIN, API_KEYS, API_KEY, ALLOWED_ORIGIN, GEMINI_API_KEY
+# DNS: A records for yourdomain.com, api.yourdomain.com, data.yourdomain.com → server IP
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Start without cache
@@ -798,6 +807,11 @@ All phases complete:
 - ✅ Type-aware icons in ActiveTests strip (⚡ backend, 🔗 flow, 🌐 browser)
 - ✅ Status-aware pending/running messages on result detail page
 
+### Phase 9 — Production Readiness
+- ✅ **Caddy HTTPS** (`Caddyfile` + `docker-compose.prod.yml`) — automatic TLS via Let's Encrypt; subdomain routing: `yourdomain.com` → UI, `api.yourdomain.com` → api-service, `data.yourdomain.com` → results-service
+- ✅ **k6 exit code handling** — explicit: `0` = success, `99` = threshold violation (test ran; resolve with metrics), other + no requests = hard failure (reject → DLQ retry)
+- ✅ **SystemHealth dismissal persisted** — `localStorage` keyed by sorted service name list; re-shows automatically when a different/new service goes down
+
 ### Phase 8 — Observability & Resilience
 - ✅ **`status_message` field** on `test_results` — ai-service writes real-time progress (retry count, errors, success) displayed in the pending block
 - ✅ **Worker health servers** — `worker-backend` (port 3002) and `worker-client` (port 3003) now expose `GET /health` via Fastify; checks DB + queue connection
@@ -815,8 +829,9 @@ All phases complete:
 - ✅ **No hardcoded fallback credentials** — all services fail fast on missing env vars
 - ✅ **envVar injection protection** — k6 `--env` args validated before spawn
 - ✅ **Input validation** — URL format, description length ≤ 500, steps count ≤ 20
-- ✅ **`docker-compose.prod.yml`** — removes internal port bindings, adds memory/CPU resource limits
+- ✅ **`docker-compose.prod.yml`** — removes all internal port bindings, adds memory/CPU resource limits
 - ✅ **UI auth** — all `fetch()` calls in `api.ts` send `X-API-Key` from `NEXT_PUBLIC_API_KEY`
+- ✅ **Template `target_url` snake_case bug** — results-service POST `/templates` now correctly reads `target_url` (was silently dropped as `targetUrl` mismatch)
 
 ### Phase 6 — UI Redesign (Command Center)
 - ✅ **Command Center design system:** GitHub-palette CSS vars in `globals.css` (Tailwind 4 CSS-first `@theme inline`)
@@ -832,12 +847,9 @@ All phases complete:
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)
-- k6 threshold violations cause non-zero exit code — handled by catching the exec error and parsing output anyway
 - Gemini rate limit: 5 RPM on free tier — 60s×attempt backoff retry implemented (both generateScript and compareDescriptions)
 - UI uses polling instead of WebSockets (planned improvement)
 - Flow `envVars` are stored in the RabbitMQ message while the test is in-flight — do not log them
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
 - No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
 - Containers run as root — add non-root user to each Dockerfile before production
-- No HTTPS termination built-in — use Nginx/Caddy reverse proxy in front of services
-- `SystemHealth` dismissal is in-memory only — re-appears on page reload even if user dismissed
