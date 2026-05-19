@@ -195,8 +195,9 @@ export default function ResultPage() {
 
   const m = result.metrics;
   const isBackend = result.type === 'backend' || result.type === 'flow';
-  const isRunning = result.status === 'running';
-  const isPending = result.status === 'pending';
+  const isRunning   = result.status === 'running';
+  const isPending   = result.status === 'pending';
+  const isTerminal  = result.status === 'cancelled' || result.status === 'failed';
   const pct = result.duration_seconds && remainingSecs !== null
     ? Math.min(100, ((result.duration_seconds - remainingSecs) / result.duration_seconds) * 100)
     : 0;
@@ -283,19 +284,36 @@ export default function ResultPage() {
         </BentoCard>
       )}
 
-      {/* Pending / no metrics state */}
-      {(isPending || !m) ? (
+      {/* Pending / running / terminal-no-metrics state */}
+      {(isPending || isRunning || (!m && isTerminal)) ? (
         <BentoCard>
           <div className="p-8 text-center">
-            <div className="animate-pulse">
+            {isTerminal ? (
               <p className="text-[#57606a] text-[13px]">
-                {isPending ? 'Waiting in queue…' : 'Test is running…'}
+                Test {result.status} — no metrics collected.
               </p>
-              <p className="text-[#8c959f] text-[11px] mt-1">
-                {isPending ? 'AI is generating the test script' : 'Page updates every 2 seconds'}
+            ) : (
+              <div className="animate-pulse">
+                <p className="text-[#57606a] text-[13px]">
+                  {isPending ? 'Waiting in queue…' : 'Test is running…'}
+                </p>
+                <p className="text-[#8c959f] text-[11px] mt-1">
+                  {isPending ? 'AI is generating the test script' : 'Page updates every 2 seconds'}
+                </p>
+              </div>
+            )}
+            {result.status_message && (
+              <p className={`text-[11px] font-mono mt-3 ${
+                result.status_message.includes('failed') || result.status_message.includes('unavailable')
+                  ? 'text-[#9a6700]'
+                  : result.status_message.includes('ready') || result.status_message.includes('starting')
+                    ? 'text-[#1f883d]'
+                    : 'text-[#57606a]'
+              }`}>
+                {result.status_message}
               </p>
-            </div>
-            {remainingSecs !== null && (
+            )}
+            {!isTerminal && remainingSecs !== null && (
               <div className="mt-4 max-w-xs mx-auto">
                 <p className="text-[12px] font-mono text-[#0969da] mb-2">
                   {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} remaining`}

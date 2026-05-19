@@ -43,6 +43,17 @@ export const connectQueue = async (): Promise<void> => {
   }
 };
 
+export const getWorkerConsumerCount = async (testType: string): Promise<number> => {
+  if (!channel) return 0;
+  try {
+    const queueName = (testType === 'backend' || testType === 'flow') ? QUEUES.BACKEND : QUEUES.CLIENT;
+    const info = await channel.checkQueue(queueName);
+    return info.consumerCount;
+  } catch {
+    return 0;
+  }
+};
+
 export const publishCancel = (testId: string): void => {
   if (!channel) throw new Error('Queue not connected');
   // Publish to fanout exchange — all worker replicas receive this

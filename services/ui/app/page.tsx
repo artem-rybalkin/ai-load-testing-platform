@@ -228,6 +228,7 @@ function HomeContent() {
       ...(opts.sessions                ? { sessions: Number(opts.sessions) }      : {}),
       ...(opts.duration                ? { duration: String(opts.duration) }      : {}),
       ...(opts.profile                 ? { profile: opts.profile as typeof f.profile } : {}),
+      ...(opts.rampUp                  ? { rampUp: String(opts.rampUp) }              : {}),
     }));
     if (t.thresholds) {
       const th = t.thresholds as Record<string, unknown>;
@@ -251,7 +252,7 @@ function HomeContent() {
     try {
       const options = form.type === 'client-side'
         ? { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals }
-        : { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus };
+        : { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}) };
       const savedThresholds = showThresholds ? buildThresholds() : null;
       await createTemplate({
         name: form.description || form.targetUrl || 'Unnamed test',
@@ -399,7 +400,7 @@ function HomeContent() {
                 <div>
                   <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Target URL</label>
                   <input
-                    type="url"
+                    type="text"
                     placeholder="https://example.com"
                     value={form.targetUrl}
                     onChange={e => setForm(f => ({ ...f, targetUrl: e.target.value }))}

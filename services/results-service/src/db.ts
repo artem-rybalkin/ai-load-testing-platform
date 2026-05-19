@@ -90,6 +90,7 @@ export const createSchema = async (p: Pool): Promise<void> => {
   await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS duration_seconds INTEGER`);
   await p.query(`ALTER TABLE live_metrics ADD COLUMN IF NOT EXISTS step_metrics JSONB`);
   await p.query(`ALTER TABLE test_scripts ADD COLUMN IF NOT EXISTS description TEXT`);
+  await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS status_message TEXT`);
 
   // Indexes
   await p.query(`CREATE INDEX IF NOT EXISTS live_metrics_test_id_idx

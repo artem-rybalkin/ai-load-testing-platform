@@ -62,6 +62,14 @@ const startConsumer = async (): Promise<void> => {
     let test: EnrichedTestRequest = JSON.parse(msg.content.toString());
     log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Processing script request');
 
+    const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+    const postMessage = (message: string) =>
+      fetch(`${resultsUrl}/results/${test.id}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      }).catch(() => {});
+
     try {
       const targetQueue = (test.type === 'backend' || test.type === 'flow') ? BACKEND_QUEUE : CLIENT_QUEUE;
 
@@ -87,7 +95,9 @@ const startConsumer = async (): Promise<void> => {
         }
       }
 
+      await postMessage('Generating test script with AI…');
       const script = await generateScript(test);
+      await postMessage('Script ready — starting test…');
       const enrichedTest: EnrichedTestRequest = { ...test, generatedScript: script };
 
       channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(enrichedTest)), { persistent: true });
@@ -97,14 +107,18 @@ const startConsumer = async (): Promise<void> => {
       log.error({ testId: test.id, err: (err as Error).message }, 'Script generation failed');
       const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
       if (retryCount < MAX_RETRIES) {
+        const attemptsLeft = MAX_RETRIES - retryCount;
+        await postMessage(`Gemini unavailable — retrying… (${attemptsLeft} attempt${attemptsLeft !== 1 ? 's' : ''} left)`);
         log.warn({ testId: test.id, retryCount: retryCount + 1 }, 'Retrying AI generation');
         channel.publish('', CONSUME_QUEUE, msg.content, {
           persistent: true,
           headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 }
         });
       } else {
+        await postMessage('Script generation failed after 3 attempts — test could not start');
         log.error({ testId: test.id }, 'Max retries exceeded, routing to DLQ');
         channel.sendToQueue(DLQ, msg.content, { persistent: true });
+        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST' }).catch(() => {});
       }
       channel.ack(msg);
     }

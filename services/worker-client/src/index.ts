@@ -12,12 +12,14 @@ declare global {
 import amqplib from 'amqplib';
 import puppeteer from 'puppeteer';
 import lighthouse from 'lighthouse';
+import Fastify from 'fastify';
 
 import { TestRequest, TestResult, ClientMetrics, LighthouseScore } from '@alt/shared';
 import { log } from './logger';
 
 const QUEUE              = 'client-tests';
 const CANCEL_EXCHANGE    = 'cancel-fanout';
+let queueConnected = false;
 const RESULTS_QUEUE      = 'test-results';
 const DLQ                = `${QUEUE}.dlq`;
 const MAX_RETRIES        = 3;
@@ -213,6 +215,7 @@ const start = async (): Promise<void> => {
   const { queue: cancelQueue } = await channel.assertQueue('', { exclusive: true, autoDelete: true });
   await channel.bindQueue(cancelQueue, CANCEL_EXCHANGE, '');
 
+  queueConnected = true;
   channel.prefetch(WORKER_CONCURRENCY);
   log.info({ queue: QUEUE, concurrency: WORKER_CONCURRENCY }, 'Worker-client listening');
 
@@ -236,6 +239,9 @@ const start = async (): Promise<void> => {
     log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Received client test');
 
     try {
+      const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+      fetch(`${resultsUrl}/results/${test.id}/running`, { method: 'POST' }).catch(() => {});
+
       const metrics = await runClientTest(test);
 
       // r2: check if cancelled while running
@@ -265,4 +271,21 @@ const start = async (): Promise<void> => {
   });
 };
 
+const startHealthServer = async () => {
+  const app = Fastify({ logger: false });
+  app.get('/health', async (_req, reply) => {
+    const healthy = queueConnected;
+    return reply.code(healthy ? 200 : 503).send({
+      status: healthy ? 'ok' : 'degraded',
+      service: 'worker-client',
+      checks: { queue: healthy ? 'ok' : 'disconnected' },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  const port = Number(process.env.PORT) || 3003;
+  await app.listen({ port, host: '0.0.0.0' });
+  log.info({ port }, 'Worker-client health server listening');
+};
+
+startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
 start().catch(err => log.error({ err: (err as Error).message }, 'Worker-client startup failed'));

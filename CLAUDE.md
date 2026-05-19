@@ -102,7 +102,8 @@ ai-load-testing-platform/
     │       └── logger.ts
     ├── worker-backend/       # @alt/worker-backend
     │   └── src/
-    │       ├── index.ts      # k6 runner, saveScript (with description), used_count on reuse
+    │       ├── index.ts      # k6 runner, saveScript (with description), used_count on reuse,
+    │       │                 #   Fastify health server on PORT (default 3002)
     │       ├── parser.ts     # parseK6Output, parseK6StatusCodes, aggregateWindow (per-step),
     │       │                 #   parseK6GroupMetrics (per-step group metrics)
     │       └── logger.ts
@@ -110,7 +111,8 @@ ai-load-testing-platform/
     │       └── parser.test.ts # unit tests for all parser functions
     ├── worker-client/        # @alt/worker-client
     │   └── src/
-    │       └── index.ts      # Puppeteer sessions, Web Vitals, Lighthouse, DLQ retry
+    │       └── index.ts      # Puppeteer sessions, Web Vitals, Lighthouse, DLQ retry,
+    │                         #   Fastify health server on PORT (default 3003)
     ├── results-service/      # @alt/results-service
     │   └── src/
     │       ├── index.ts      # startup: initDb → consumer → scheduler → cleanup → app
@@ -153,6 +155,7 @@ ai-load-testing-platform/
                 ├── BottomNav.tsx     # mobile bottom tab bar (5 items, lg:hidden)
                 ├── TopBar.tsx        # mobile top bar h-10 with page title (lg:hidden)
                 ├── ActiveTests.tsx   # inline strip (bg-[#ddf4ff]) showing running tests
+                ├── SystemHealth.tsx  # amber warning strip — polls /system/health every 15s
                 ├── BackendChart.tsx  # bar charts: response time distribution + request breakdown
                 ├── ClientChart.tsx   # radar chart for Web Vitals + Lighthouse gauge dials
                 ├── FlowStepChart.tsx # grouped bar chart: avg+p95 per step (flow results)
@@ -187,6 +190,7 @@ CREATE TABLE test_results (
   type             VARCHAR(20) NOT NULL,   -- 'backend' | 'client-side' | 'flow'
   target_url       TEXT NOT NULL,
   status           VARCHAR(20) NOT NULL,   -- 'pending'|'running'|'completed'|'failed'|'cancelled'
+  status_message   TEXT,                   -- real-time progress from ai-service (retry info, errors)
   metrics          JSONB,                  -- BackendMetrics | ClientMetrics (incl. stepMetrics[])
   script_id        UUID REFERENCES test_scripts(id),
   reused_script    BOOLEAN DEFAULT FALSE,
@@ -336,11 +340,15 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `GET  /results/trend?url=`      — chronological metric trend for a URL (p95 or LCP)
 - `GET  /results/:testId`         — single result with joined script
 - `POST /results/:testId/cancel`  — set status = cancelled in DB
+- `POST /results/:testId/running` — set status = running + started_at = NOW() (called by workers on start)
+- `POST /results/:testId/fail`    — set status = failed (called by ai-service on DLQ exhaustion)
+- `POST /results/:testId/message` — update status_message field (ai-service progress updates)
 - `POST /results/:testId/live`    — save live metric point with optional `stepMetrics` (called by worker-backend)
 - `GET  /results/:testId/live`    — all live points for a test (chronological), includes `stepMetrics`
 - `POST /results/:testId/baseline` — mark as baseline for regression comparisons
 - `DELETE /results/:testId/baseline` — clear baseline flag
 - `GET  /results/:testId/report.pdf` — download pdfkit PDF report
+- `GET  /system/health`           — aggregated health of all 5 services (calls each /health in parallel)
 
 **Scripts**
 - `GET  /scripts`      — all saved scripts (by used_count DESC)
@@ -546,6 +554,28 @@ The UI follows a "Command Center" aesthetic: GitHub-style color palette, collaps
 Before executing any k6 script, `validateScript(scriptPath)` spawns `k6 inspect`.
 On non-zero exit the script is rejected; the message is nacked and retried / DLQ'd.
 
+### Status Messages & Worker Health (ai-service/index.ts, api-service/index.ts)
+
+**Real-time status messages** — ai-service posts to `POST /results/:testId/message` at each key point:
+- `"Generating test script with AI…"` — before calling Gemini
+- `"Gemini unavailable — retrying… (N attempts left)"` — on 429/503 retry
+- `"Script ready — starting test…"` — after successful generation
+- `"Script generation failed after 3 attempts — test could not start"` — on DLQ + marks test failed
+
+**Worker availability check** — api-service calls `channel.checkQueue(queueName)` after publishing. If `consumerCount === 0`, posts a warning message: `"No browser (Puppeteer) worker is running — test will start when a worker comes online"`. Checked separately for backend (`backend-tests`) and browser (`client-tests`) queues. (`api-service/src/queue.ts` → `getWorkerConsumerCount`)
+
+**Worker health endpoints** — both workers now expose `GET /health` via a lightweight Fastify server:
+- `worker-backend` (port 3002): checks DB pool + RabbitMQ connection
+- `worker-client` (port 3003): checks RabbitMQ connection
+
+**System health aggregation** — `GET /system/health` on results-service calls all 4 service `/health` endpoints in parallel (3s timeout each), includes self-check, returns `{ healthy, services[] }`. HTTP 200 = all ok, 207 = partial degradation.
+
+**SystemHealth UI component** (`services/ui/app/components/SystemHealth.tsx`):
+- Polls `/system/health` every 15 seconds
+- Shows dismissible amber warning strip when any service is `degraded` or `unreachable`
+- Per-service impact text: "AI (Gemini) unreachable — New tests cannot be started", etc.
+- Auto-clears when all services recover
+
 ### Baseline Management
 `is_baseline` column on `test_results`. When a baseline exists for a URL:
 - `consumer.ts` queries `ORDER BY is_baseline DESC, created_at DESC`
@@ -638,7 +668,7 @@ docker compose down -v
 # Build shared types (required after any change to packages/shared/src/index.ts)
 npm run build:shared
 
-# Run unit + integration tests (195 tests)
+# Run unit + integration tests (202 tests)
 npm test
 
 # Run tests in watch mode
@@ -665,7 +695,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** 195 tests passing across 13 test files
+**Total:** 202 tests passing across 13 test files
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -679,7 +709,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
 |------|---------|-------|
-| `results-service/src/__tests__/api.test.ts` | all REST endpoints | 38 |
+| `results-service/src/__tests__/api.test.ts` | all REST endpoints + template regression (target_url, options, thresholds) | 45 |
 | `results-service/src/__tests__/consumer.test.ts` | `handleResult`, webhook firing, baseline ordering | 11 |
 | `results-service/src/__tests__/stale.test.ts` | `runStaleCleanup` | 10 |
 | `api-service/src/__tests__/scripts.test.ts` | `findExistingScript` + description field + no auto-increment | 9 |
@@ -737,11 +767,12 @@ All phases complete:
 - ✅ Dev hot-reload (docker-compose.dev.yml + tsx watch + WATCHPACK_POLLING for Windows)
 - ✅ Real-time charts during k6 execution (5s live metric windows)
 
-### Phase 3 — Test Coverage (195 tests)
+### Phase 3 — Test Coverage (202 tests)
 - ✅ Unit tests: parser, analyzer, options builder, api-service handler (routing branches)
-- ✅ Integration tests: all REST endpoints, consumer pipeline, stale cleanup, scheduler
+- ✅ Integration tests: all REST endpoints (incl. template target_url regression), consumer pipeline, stale cleanup, scheduler
 - ✅ UI tests: RTL component + page tests (home form, results list, analysis panel, active tests)
 - ✅ Playwright E2E: happy path, cancel flow, compare flow
+- ✅ `vitest.config.ts` env placeholders — `DATABASE_URL`/`RABBITMQ_URL` set so tests never fail on missing env vars
 
 ### Phase 4 — Multi-step Flow Testing
 - ✅ `FlowStep` / `StepMetrics` / `LiveStepMetric` types in `@alt/shared`; `'flow'` added to `TestType`
@@ -766,6 +797,17 @@ All phases complete:
 - ✅ **Semantic script reuse:** Gemini `compareDescriptions()` decides REUSE vs REGENERATE based on description match; `test_scripts.description` stores the generating prompt; legacy rows (null description) always regenerate
 - ✅ Type-aware icons in ActiveTests strip (⚡ backend, 🔗 flow, 🌐 browser)
 - ✅ Status-aware pending/running messages on result detail page
+
+### Phase 8 — Observability & Resilience
+- ✅ **`status_message` field** on `test_results` — ai-service writes real-time progress (retry count, errors, success) displayed in the pending block
+- ✅ **Worker health servers** — `worker-backend` (port 3002) and `worker-client` (port 3003) now expose `GET /health` via Fastify; checks DB + queue connection
+- ✅ **System health aggregation** — `GET /system/health` on results-service aggregates all 5 service health checks in parallel; used by UI
+- ✅ **SystemHealth UI strip** — amber dismissible banner when any service is down; per-service impact description; polls every 15s
+- ✅ **Worker availability warning** — api-service checks consumer count on target queue after publishing; sets `status_message` if 0 workers running
+- ✅ **DLQ → failed** — ai-service marks test as `failed` immediately when max retries exhausted (no more 30-min stale wait)
+- ✅ **browser test `running` status** — worker-client POSTs to `/results/:testId/running` when it starts processing (sets `started_at`, shows countdown in UI)
+- ✅ **Template `target_url` bug fixed** — results-service endpoint now accepts `target_url` (snake_case) matching what the UI sends (was silently dropped as camelCase mismatch)
+- ✅ **Template regression tests** — 7 new tests covering `target_url`, `description`, `options` (including `rampUp`), `thresholds` round-trip
 
 ### Phase 7 — Security Hardening
 - ✅ **API key authentication** on api-service + results-service (`X-API-Key` header, `API_KEYS` env var)
@@ -798,3 +840,4 @@ All phases complete:
 - No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
 - Containers run as root — add non-root user to each Dockerfile before production
 - No HTTPS termination built-in — use Nginx/Caddy reverse proxy in front of services
+- `SystemHealth` dismissal is in-memory only — re-appears on page reload even if user dismissed

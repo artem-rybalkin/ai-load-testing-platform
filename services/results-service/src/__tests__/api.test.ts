@@ -391,12 +391,79 @@ describe('templates', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('saves and returns target_url (regression: was silently dropped due to camelCase mismatch)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/templates',
+      payload: { ...templatePayload, target_url: 'https://example.com' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().template.target_url).toBe('https://example.com');
+  });
+
+  it('saves and returns description', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/templates',
+      payload: { ...templatePayload, description: 'load test 10 users 1 min' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().template.description).toBe('load test 10 users 1 min');
+  });
+
+  it('saves and returns all options fields including profile and rampUp', async () => {
+    const options = { vus: 10, duration: '2m', profile: 'spike', peakVus: 100, rampUp: '30s' };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/templates',
+      payload: { ...templatePayload, options },
+    });
+    expect(res.statusCode).toBe(201);
+    const saved = res.json().template.options;
+    expect(saved.vus).toBe(10);
+    expect(saved.duration).toBe('2m');
+    expect(saved.profile).toBe('spike');
+    expect(saved.peakVus).toBe(100);
+    expect(saved.rampUp).toBe('30s');
+  });
+
+  it('saves and returns thresholds', async () => {
+    const thresholds = { p95: 800, errorRate: 1 };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/templates',
+      payload: { ...templatePayload, thresholds },
+    });
+    expect(res.statusCode).toBe(201);
+    const saved = res.json().template.thresholds;
+    expect(saved.p95).toBe(800);
+    expect(saved.errorRate).toBe(1);
+  });
+
+  it('target_url is null when not provided', async () => {
+    const res = await app.inject({ method: 'POST', url: '/templates', payload: templatePayload });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().template.target_url).toBeNull();
+  });
+
   it('lists templates ordered by used_count DESC', async () => {
     await app.inject({ method: 'POST', url: '/templates', payload: templatePayload });
     await app.inject({ method: 'POST', url: '/templates', payload: { ...templatePayload, name: 'Second' } });
     const res = await app.inject({ method: 'GET', url: '/templates' });
     expect(res.statusCode).toBe(200);
     expect(res.json().templates).toHaveLength(2);
+  });
+
+  it('GET /templates returns target_url and description in list', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/templates',
+      payload: { ...templatePayload, target_url: 'https://api.example.com', description: 'smoke test' },
+    });
+    const res = await app.inject({ method: 'GET', url: '/templates' });
+    const t = res.json().templates[0];
+    expect(t.target_url).toBe('https://api.example.com');
+    expect(t.description).toBe('smoke test');
   });
 
   it('GET /templates/:id returns the template and increments used_count', async () => {
@@ -417,6 +484,11 @@ describe('templates', () => {
     const id = create.json().template.id;
     const del = await app.inject({ method: 'DELETE', url: `/templates/${id}` });
     expect(del.statusCode).toBe(204);
+  });
+
+  it('DELETE returns 204 even for non-existent id (idempotent)', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/templates/00000000-0000-0000-0000-000000000099' });
+    expect(res.statusCode).toBe(204);
   });
 });
 

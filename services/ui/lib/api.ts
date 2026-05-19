@@ -48,6 +48,7 @@ export interface TestResult {
   completed_at: string | null;
   created_at: string;
   perf_status?: string;
+  status_message?: string | null;
   analysis?: {
     perfStatus: string;
     diffs: Array<{
@@ -245,4 +246,20 @@ export const getTemplate = async (id: string): Promise<{ template: Template }> =
 
 export const deleteTemplate = async (id: string): Promise<void> => {
   await fetch(`${RESULTS_URL}/templates/${id}`, { method: 'DELETE', headers: authHeaders() });
+};
+
+export interface ServiceHealth {
+  name: string;
+  status: 'ok' | 'degraded' | 'unreachable';
+  checks: Record<string, string>;
+}
+
+export interface SystemHealth {
+  healthy: boolean;
+  services: ServiceHealth[];
+}
+
+export const getSystemHealth = async (): Promise<SystemHealth> => {
+  const res = await fetch(`${RESULTS_URL}/system/health`, { cache: 'no-store', headers: authHeaders() });
+  return res.json();
 };

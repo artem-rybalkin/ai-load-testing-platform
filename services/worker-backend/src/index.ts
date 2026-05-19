@@ -4,10 +4,13 @@ import { writeFile, unlink, readFile } from 'fs/promises';
 import { Pool } from 'pg';
 import * as os from 'os';
 import * as path from 'path';
+import Fastify from 'fastify';
 
 import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint } from '@alt/shared';
 import { parseK6Output, aggregateWindow, parseK6StatusCodes, parseK6GroupMetrics } from './parser';
 import { log } from './logger';
+
+let queueConnected = false;
 
 const QUEUE            = 'backend-tests';
 const CANCEL_EXCHANGE  = 'cancel-fanout';  // fanout — all replicas get every cancel
@@ -182,7 +185,8 @@ const handleRetry = (
 };
 
 const start = async (): Promise<void> => {
-  const url        = process.env.RABBITMQ_URL || 'amqp://alt_user:alt_password@localhost:5672';
+  const url        = process.env.RABBITMQ_URL;
+  if (!url) throw new Error('RABBITMQ_URL environment variable is required');
   const maxRetries = 20;
   const delay      = 10000;
 
@@ -209,6 +213,7 @@ const start = async (): Promise<void> => {
   const { queue: cancelQueue } = await channel.assertQueue('', { exclusive: true, autoDelete: true });
   await channel.bindQueue(cancelQueue, CANCEL_EXCHANGE, '');
 
+  queueConnected = true;
   channel.prefetch(WORKER_CONCURRENCY);
   log.info({ queue: QUEUE, concurrency: WORKER_CONCURRENCY }, 'Worker-backend listening');
 
@@ -284,4 +289,30 @@ const start = async (): Promise<void> => {
   });
 };
 
-start().catch(err => log.error({ err: (err as Error).message }, 'Worker-backend startup failed'));
+const startHealthServer = async () => {
+  const app = Fastify({ logger: false });
+  app.get('/health', async (_req, reply) => {
+    const checks: Record<string, string> = {};
+    let healthy = true;
+    try { await pool.query('SELECT 1'); checks.database = 'ok'; }
+    catch { checks.database = 'error'; healthy = false; }
+    checks.queue = queueConnected ? 'ok' : 'disconnected';
+    if (!queueConnected) healthy = false;
+    return reply.code(healthy ? 200 : 503).send({
+      status: healthy ? 'ok' : 'degraded',
+      service: 'worker-backend',
+      checks,
+      timestamp: new Date().toISOString(),
+    });
+  });
+  const port = Number(process.env.PORT) || 3002;
+  await app.listen({ port, host: '0.0.0.0' });
+  log.info({ port }, 'Worker-backend health server listening');
+};
+
+const startWithQueue = async () => {
+  await start();
+};
+
+startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
+startWithQueue().catch(err => log.error({ err: (err as Error).message }, 'Worker-backend startup failed'));

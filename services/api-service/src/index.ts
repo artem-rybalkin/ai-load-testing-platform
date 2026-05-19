@@ -2,7 +2,7 @@ import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 
 import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, SLOThresholds, FlowStep } from '@alt/shared';
-import { connectQueue, publishTest, publishCancel, isQueueConnected } from './queue';
+import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
 import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount } from './scripts';
 
 const parseDurationSeconds = (d: string): number => {
@@ -109,11 +109,25 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         }
       );
 
+      const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+      const warnIfNoWorker = async () => {
+        const consumers = await getWorkerConsumerCount(type);
+        if (consumers === 0) {
+          const label = type === 'client-side' ? 'browser (Puppeteer)' : 'backend (k6)';
+          fetch(`${resultsUrl}/results/${test.id}/message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: `No ${label} worker is running — test will start when a worker comes online` }),
+          }).catch(() => {});
+        }
+      };
+
       const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey);
 
       if (!existingScript) {
         // Cache miss — generate new script
         publishTest(test, false);
+        warnIfNoWorker();
         return { success: true, test, scriptReused: false };
       }
 
@@ -125,6 +139,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         test.scriptId = existingScript.id;
         test.reusedScript = true;
         publishTest(test, true);
+        warnIfNoWorker();
         return { success: true, test, scriptReused: true, scriptUsedCount: existingScript.usedCount };
       }
 
@@ -134,6 +149,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       test.cachedScriptDescription = existingScript.description;
       test.scriptId = existingScript.id;
       publishTest(test, false);
+      warnIfNoWorker();
       return { success: true, test, scriptReused: false };
     }
   );

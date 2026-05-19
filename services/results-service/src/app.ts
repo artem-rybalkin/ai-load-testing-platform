@@ -18,7 +18,7 @@ export const buildApp = async (
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
   if (apiKeys.length > 0) {
     app.addHook('onRequest', async (request, reply) => {
-      if (request.url === '/health' || request.url === '/results/pending') return;
+      if (request.url === '/health' || request.url === '/results/pending' || request.url.endsWith('/running') || request.url.endsWith('/fail') || request.url.endsWith('/message')) return;
       const key = request.headers['x-api-key'];
       if (!key || !apiKeys.includes(key as string)) {
         return reply.code(401).send({ error: 'Unauthorized' });
@@ -43,6 +43,86 @@ export const buildApp = async (
       timestamp: new Date().toISOString(),
     });
   });
+
+  app.get('/system/health', async (_request, reply) => {
+    const services = [
+      { name: 'api-service',      url: `${process.env.API_SERVICE_URL || 'http://api-service:3000'}/health` },
+      { name: 'ai-service',       url: `${process.env.AI_SERVICE_URL  || 'http://ai-service:3001'}/health` },
+      { name: 'worker-backend',   url: `${process.env.WORKER_BACKEND_URL || 'http://worker-backend:3002'}/health` },
+      { name: 'worker-client',    url: `${process.env.WORKER_CLIENT_URL  || 'http://worker-client:3003'}/health` },
+    ];
+
+    const results = await Promise.all(
+      services.map(async ({ name, url }) => {
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+          const body = await res.json().catch(() => ({}));
+          return { name, status: res.ok ? 'ok' : 'degraded', checks: (body as { checks?: Record<string, string> }).checks ?? {} };
+        } catch {
+          return { name, status: 'unreachable', checks: {} };
+        }
+      })
+    );
+
+    // Also include self
+    let selfOk = true;
+    const selfChecks: Record<string, string> = {};
+    try { await pool.query('SELECT 1'); selfChecks.database = 'ok'; } catch { selfChecks.database = 'error'; selfOk = false; }
+    selfChecks.queue = isConsumerConnected() ? 'ok' : 'disconnected';
+    if (!isConsumerConnected()) selfOk = false;
+    results.unshift({ name: 'results-service', status: selfOk ? 'ok' : 'degraded', checks: selfChecks });
+
+    const allHealthy = results.every(r => r.status === 'ok');
+    return reply.code(allHealthy ? 200 : 207).send({ healthy: allHealthy, services: results });
+  });
+
+  app.post<{ Params: { testId: string }; Body: { message: string } }>(
+    '/results/:testId/message',
+    async (request, reply) => {
+      try {
+        const { testId } = request.params;
+        await pool.query(
+          `UPDATE test_results SET status_message = $1 WHERE test_id = $2`,
+          [request.body.message, testId]
+        );
+        return { success: true };
+      } catch {
+        return reply.code(500).send({ error: 'Failed to update status message' });
+      }
+    }
+  );
+
+  app.post<{ Params: { testId: string } }>(
+    '/results/:testId/fail',
+    async (request, reply) => {
+      try {
+        const { testId } = request.params;
+        await pool.query(
+          `UPDATE test_results SET status = 'failed', completed_at = NOW() WHERE test_id = $1 AND status IN ('pending', 'running')`,
+          [testId]
+        );
+        return { success: true };
+      } catch (err) {
+        return reply.code(500).send({ error: 'Failed to mark test as failed' });
+      }
+    }
+  );
+
+  app.post<{ Params: { testId: string } }>(
+    '/results/:testId/running',
+    async (request, reply) => {
+      try {
+        const { testId } = request.params;
+        await pool.query(
+          `UPDATE test_results SET status = 'running', started_at = NOW() WHERE test_id = $1`,
+          [testId]
+        );
+        return { success: true };
+      } catch (err) {
+        return reply.code(500).send({ error: 'Failed to mark test as running' });
+      }
+    }
+  );
 
   app.get('/results', async (_request, reply) => {
     try {
@@ -363,15 +443,15 @@ export const buildApp = async (
     return { templates: rows };
   });
 
-  app.post<{ Body: { name: string; description?: string; type: string; targetUrl?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown> } }>(
+  app.post<{ Body: { name: string; description?: string; type: string; target_url?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown> } }>(
     '/templates',
     async (request, reply) => {
-      const { name, description, type, targetUrl, options, thresholds } = request.body;
+      const { name, description, type, target_url, options, thresholds } = request.body;
       if (!name || !type || !options) return reply.code(400).send({ error: 'name, type, options are required' });
       const { rows } = await pool.query(
         `INSERT INTO test_templates (name, description, type, target_url, options, thresholds)
          VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [name, description ?? null, type, targetUrl ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null]
+        [name, description ?? null, type, target_url ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null]
       );
       return reply.code(201).send({ template: rows[0] });
     }

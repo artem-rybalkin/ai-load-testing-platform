@@ -13,6 +13,10 @@ export default defineConfig({
     },
   },
   test: {
+    env: {
+      DATABASE_URL: 'postgresql://placeholder:placeholder@localhost:5432/placeholder',
+      RABBITMQ_URL: 'amqp://placeholder:placeholder@localhost:5672',
+    },
     include: [
       'services/*/src/__tests__/**/*.test.ts',
       'services/ui/__tests__/**/*.test.tsx',
