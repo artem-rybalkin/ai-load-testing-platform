@@ -98,7 +98,7 @@ export const buildApp = async (
       try {
         const { testId } = request.params;
         await pool.query(
-          `UPDATE test_results SET status = 'failed', completed_at = NOW() WHERE test_id = $1 AND status IN ('pending', 'running')`,
+          `UPDATE test_results SET status = 'failed', completed_at = NOW(), status_message = NULL WHERE test_id = $1 AND status IN ('pending', 'running')`,
           [testId]
         );
         return { success: true };
@@ -266,7 +266,7 @@ export const buildApp = async (
     async (request, reply) => {
       const { testId } = request.params;
       const { rowCount } = await pool.query(
-        `UPDATE test_results SET status = 'cancelled'
+        `UPDATE test_results SET status = 'cancelled', status_message = NULL
          WHERE test_id = $1 AND status IN ('pending', 'running')`,
         [testId]
       );

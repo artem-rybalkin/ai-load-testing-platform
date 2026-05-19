@@ -5,6 +5,7 @@
   "dependencies": {
     "@alt/shared": "*",
     "amqplib": "^0.10.0",
+    "fastify": "^5.8.5",
     "pg": "^8.20.0"
   },
   "devDependencies": {

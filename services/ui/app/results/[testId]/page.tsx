@@ -162,16 +162,20 @@ export default function ResultPage() {
   // Poll live metrics
   useEffect(() => {
     if (!result || (result.type !== 'backend' && result.type !== 'flow')) return;
-    if (result.status === 'completed' || result.status === 'failed') {
-      getLiveMetrics(testId).then(d => setLivePoints(d.points ?? [])).catch(() => {});
-      return;
-    }
-    const iv = setInterval(async () => {
+
+    const fetchLive = async () => {
       try {
         const data = await getLiveMetrics(testId);
         setLivePoints(data.points ?? []);
       } catch { /* ignore */ }
-    }, 3000);
+    };
+
+    // Always fetch immediately — avoids waiting 3s on first render or after status change
+    fetchLive();
+
+    if (result.status === 'completed' || result.status === 'failed') return;
+
+    const iv = setInterval(fetchLive, 3000);
     return () => clearInterval(iv);
   }, [testId, result?.status, result?.type]);
 

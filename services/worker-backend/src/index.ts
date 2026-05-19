@@ -93,6 +93,7 @@ const runK6Test = async (
       .flatMap(([k, v]) => ['--env', `${k}=${v}`]);
     const k6 = spawn('k6', ['run', '--out', `json=${jsonPath}`, ...envArgs, scriptPath]);
     runningTests.set(testId, k6);
+    setStartedAt(testId).catch(() => {}); // mark exact k6 start time for countdown
 
     let stdout = '';
     let stderr = '';
@@ -167,14 +168,14 @@ const runK6Test = async (
 };
 
 const updateStatus = async (testId: string, status: string): Promise<void> => {
-  if (status === 'running') {
-    await pool.query(
-      `UPDATE test_results SET status = $1, started_at = NOW() WHERE test_id = $2`,
-      [status, testId]
-    );
-  } else {
-    await pool.query(`UPDATE test_results SET status = $1 WHERE test_id = $2`, [status, testId]);
-  }
+  await pool.query(`UPDATE test_results SET status = $1 WHERE test_id = $2`, [status, testId]);
+};
+
+const setStartedAt = async (testId: string): Promise<void> => {
+  await pool.query(
+    `UPDATE test_results SET started_at = NOW() WHERE test_id = $1`,
+    [testId]
+  );
 };
 
 // r1: retry helper — republish with incremented counter or route to DLQ

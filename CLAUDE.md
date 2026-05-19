@@ -811,6 +811,10 @@ All phases complete:
 - ✅ **Caddy HTTPS** (`Caddyfile` + `docker-compose.prod.yml`) — automatic TLS via Let's Encrypt; subdomain routing: `yourdomain.com` → UI, `api.yourdomain.com` → api-service, `data.yourdomain.com` → results-service
 - ✅ **k6 exit code handling** — explicit: `0` = success, `99` = threshold violation (test ran; resolve with metrics), other + no requests = hard failure (reject → DLQ retry)
 - ✅ **SystemHealth dismissal persisted** — `localStorage` keyed by sorted service name list; re-shows automatically when a different/new service goes down
+- ✅ **`started_at` set on k6 spawn** — countdown timer starts from when k6 actually executes, not when the worker receives the message (script validation delay excluded)
+- ✅ **Live metrics immediate fetch** — effect fetches once immediately on mount/status-change then polls every 3s; previously the 3s wait reset on every 2s result poll, causing charts to never appear during the test
+- ✅ **`status_message` cleared on cancel/fail** — stale Gemini retry messages no longer shown after test is cancelled or fails
+- ✅ **Fastify added to worker packages** — `worker-backend` and `worker-client` `package.json` now declare `fastify` as a dependency; Dockerfiles use `--ignore-scripts && npm rebuild esbuild` to avoid parallel build race condition
 
 ### Phase 8 — Observability & Resilience
 - ✅ **`status_message` field** on `test_results` — ai-service writes real-time progress (retry count, errors, success) displayed in the pending block
@@ -847,7 +851,7 @@ All phases complete:
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)
-- Gemini rate limit: 5 RPM on free tier — 60s×attempt backoff retry implemented (both generateScript and compareDescriptions)
+- Gemini rate limit: **20 requests/day** on free tier (`gemini-2.5-flash`); `compareDescriptions()` also consumes quota so each new-description test costs 2 calls. Paid key removes daily cap. Backoff retry (60s/120s/180s) handles 429 automatically.
 - UI uses polling instead of WebSockets (planned improvement)
 - Flow `envVars` are stored in the RabbitMQ message while the test is in-flight — do not log them
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
