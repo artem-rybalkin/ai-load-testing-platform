@@ -1,5 +1,9 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 const RESULTS_URL = process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004';
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
+
+const authHeaders = (): Record<string, string> =>
+  API_KEY ? { 'X-API-Key': API_KEY } : {};
 
 export interface FlowStep {
   name: string;
@@ -61,24 +65,24 @@ export interface TestResult {
 export const createTest = async (data: TestRequest) => {
   const res = await fetch(`${API_URL}/tests`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(data)
   });
   return res.json();
 };
 
 export const getResults = async (): Promise<{ results: TestResult[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/results`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
 export const getResult = async (testId: string): Promise<{ result: TestResult }> => {
-  const res = await fetch(`${RESULTS_URL}/results/${testId}`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/results/${testId}`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
 export const getScripts = async () => {
-  const res = await fetch(`${RESULTS_URL}/scripts`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/scripts`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 export interface ActiveTest {
@@ -90,7 +94,7 @@ export interface ActiveTest {
 }
 
 export const getActiveTests = async (): Promise<{ active: ActiveTest[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results/active`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/results/active`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
@@ -104,24 +108,24 @@ export interface LiveMetricPoint {
 }
 
 export const getLiveMetrics = async (testId: string): Promise<{ points: LiveMetricPoint[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results/${testId}/live`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/results/${testId}/live`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
 export const cancelTest = async (testId: string): Promise<void> => {
-  await fetch(`${API_URL}/tests/${testId}/cancel`, { method: 'POST' });
+  await fetch(`${API_URL}/tests/${testId}/cancel`, { method: 'POST', headers: authHeaders() });
 };
 
 export const setBaseline = async (testId: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'POST' });
+  await fetch(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'POST', headers: authHeaders() });
 };
 
 export const clearBaseline = async (testId: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'DELETE' });
+  await fetch(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'DELETE', headers: authHeaders() });
 };
 
 export const compareResults = async (a: string, b: string): Promise<{ resultA: TestResult; resultB: TestResult }> => {
-  const res = await fetch(`${RESULTS_URL}/results/compare?a=${a}&b=${b}`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/results/compare?a=${a}&b=${b}`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
@@ -134,7 +138,7 @@ export interface TrendPoint {
 }
 
 export const getTrend = async (url: string): Promise<{ url: string; trend: TrendPoint[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results/trend?url=${encodeURIComponent(url)}`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/results/trend?url=${encodeURIComponent(url)}`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
@@ -146,21 +150,21 @@ export interface Webhook {
 }
 
 export const getWebhooks = async (): Promise<{ webhooks: Webhook[] }> => {
-  const res = await fetch(`${RESULTS_URL}/webhooks`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/webhooks`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
 export const createWebhook = async (url: string, events?: string[]): Promise<{ webhook: Webhook }> => {
   const res = await fetch(`${RESULTS_URL}/webhooks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ url, events })
   });
   return res.json();
 };
 
 export const deleteWebhook = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/webhooks/${id}`, { method: 'DELETE' });
+  await fetch(`${RESULTS_URL}/webhooks/${id}`, { method: 'DELETE', headers: authHeaders() });
 };
 
 export interface Schedule {
@@ -178,14 +182,14 @@ export interface Schedule {
 }
 
 export const getSchedules = async (): Promise<{ schedules: Schedule[] }> => {
-  const res = await fetch(`${RESULTS_URL}/schedules`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/schedules`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
 export const createSchedule = async (data: Omit<Schedule, 'id' | 'last_run_at' | 'created_at'>): Promise<{ schedule: Schedule }> => {
   const res = await fetch(`${RESULTS_URL}/schedules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(data),
   });
   return res.json();
@@ -194,18 +198,18 @@ export const createSchedule = async (data: Omit<Schedule, 'id' | 'last_run_at' |
 export const updateSchedule = async (id: string, data: Partial<Omit<Schedule, 'id' | 'created_at'>>): Promise<{ schedule: Schedule }> => {
   const res = await fetch(`${RESULTS_URL}/schedules/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(data),
   });
   return res.json();
 };
 
 export const deleteSchedule = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/schedules/${id}`, { method: 'DELETE' });
+  await fetch(`${RESULTS_URL}/schedules/${id}`, { method: 'DELETE', headers: authHeaders() });
 };
 
 export const runSchedule = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/schedules/${id}/run`, { method: 'POST' });
+  await fetch(`${RESULTS_URL}/schedules/${id}/run`, { method: 'POST', headers: authHeaders() });
 };
 
 export interface Template {
@@ -221,24 +225,24 @@ export interface Template {
 }
 
 export const getTemplates = async (): Promise<{ templates: Template[] }> => {
-  const res = await fetch(`${RESULTS_URL}/templates`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/templates`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
 export const createTemplate = async (data: Omit<Template, 'id' | 'used_count' | 'created_at'>): Promise<{ template: Template }> => {
   const res = await fetch(`${RESULTS_URL}/templates`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(data),
   });
   return res.json();
 };
 
 export const getTemplate = async (id: string): Promise<{ template: Template }> => {
-  const res = await fetch(`${RESULTS_URL}/templates/${id}`, { cache: 'no-store' });
+  const res = await fetch(`${RESULTS_URL}/templates/${id}`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
 export const deleteTemplate = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/templates/${id}`, { method: 'DELETE' });
+  await fetch(`${RESULTS_URL}/templates/${id}`, { method: 'DELETE', headers: authHeaders() });
 };

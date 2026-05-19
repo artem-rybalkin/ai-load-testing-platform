@@ -36,11 +36,12 @@ Generate k6 stages for a prolonged steady-state test:
 - Ramp down to 0 over 30s
 Focus on memory leaks and degradation over time. Set a strict p(95) < 500ms threshold.`;
 
-    default: // 'load'
-      return `Load profile: LOAD TEST (constant)
-Virtual Users: ${vus}
-Duration: ${duration}
-Ramp up from 0 to ${vus} VUs over 30s, hold for the duration, then ramp down.`;
+    default: { // 'load'
+      const rampLine = opts.rampUp
+        ? `Ramp up from 0 to ${vus} VUs over ${opts.rampUp}, hold for ${duration}, then ramp down over 10s.`
+        : `Start immediately at ${vus} VUs for ${duration}. No ramp-up. Use options = { vus: ${vus}, duration: '${duration}' } (flat, no stages).`;
+      return `Load profile: LOAD TEST\nVirtual Users: ${vus}\nDuration: ${duration}\n${rampLine}`;
+    }
   }
 };
 

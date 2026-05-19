@@ -71,8 +71,9 @@ ai-load-testing-platform/
 ├── tsconfig.json             # base TypeScript config
 ├── vitest.config.ts          # Vitest config (unit + integration + UI tests)
 ├── playwright.config.ts      # Playwright E2E config (baseURL: localhost:3006)
-├── docker-compose.yml        # production services + infrastructure
+├── docker-compose.yml        # base services + infrastructure
 ├── docker-compose.dev.yml    # dev hot-reload overrides (tsx watch + WATCHPACK_POLLING)
+├── docker-compose.prod.yml   # production overrides (no internal ports, resource limits, auth)
 ├── .env                      # GEMINI_API_KEY (never commit)
 ├── CLAUDE.md                 # this file
 ├── e2e/                      # Playwright E2E specs (require docker compose up)
@@ -551,18 +552,47 @@ On non-zero exit the script is rejected; the message is nacked and retried / DLQ
 - Regression diffs are computed against the baseline, not the previous run
 - UI shows amber "baseline" badge; Set/Clear buttons on result detail page
 
+### Security (Phase 7)
+
+**API Key Authentication** (`api-service/src/index.ts`, `results-service/src/app.ts`):
+- `onRequest` hook checks `X-API-Key` header against `API_KEYS` env var (comma-separated list)
+- Returns `401` on missing/invalid key; `/health` and internal `/results/pending` are exempt
+- Empty `API_KEYS` disables auth entirely — safe for local dev, required for cloud
+
+**CORS**: `ALLOWED_ORIGIN` env var replaces hardcoded `*` in both services. Defaults to `*` in dev.
+
+**No hardcoded credentials**: all services throw `Error('... environment variable is required')` at startup if `DATABASE_URL` or `RABBITMQ_URL` are absent — no fallback to `alt_password` defaults.
+
+**envVar injection safety** (`worker-backend/src/index.ts`): keys validated against `/^[A-Z_][A-Z0-9_]*$/i`, values stripped of `\n`/`\0`, length-capped (key ≤ 64, value ≤ 1024) before passing to k6 spawn.
+
+**Input validation** (`api-service/src/index.ts`): `targetUrl` validated with `new URL()`, `description` ≤ 500 chars, `steps` ≤ 20.
+
+**Production compose** (`docker-compose.prod.yml`): removes all internal port bindings (Postgres 5432, Redis 6379, RabbitMQ 5672/15672), adds memory/CPU limits per service.
+
+**Deployment checklist:**
+1. Rotate `GEMINI_API_KEY` (never commit `.env`)
+2. Set strong random `API_KEYS` + `API_KEY`
+3. Set `ALLOWED_ORIGIN` to your domain
+4. Use `docker-compose.prod.yml` override
+5. Put a TLS-terminating reverse proxy (Nginx/Caddy) in front of ports 3000, 3004, 3006
+
 ## Environment Variables
 
 ```bash
-# .env (root, never commit)
+# .env (root — NEVER commit, add to .gitignore)
 GEMINI_API_KEY=your_key_here
 
 # Set automatically by docker-compose:
-RABBITMQ_URL=amqp://alt_user:alt_password@rabbitmq:5672
-DATABASE_URL=postgresql://alt_user:alt_password@postgres:5432/alt_db
+RABBITMQ_URL=amqp://user:password@rabbitmq:5672
+DATABASE_URL=postgresql://user:password@postgres:5432/alt_db
 RESULTS_URL=http://results-service:3004
 NEXT_PUBLIC_API_URL=http://localhost:3000
 NEXT_PUBLIC_RESULTS_URL=http://localhost:3004
+
+# Security (required for cloud/production):
+API_KEYS=key1,key2            # comma-separated; empty string = auth disabled (dev only)
+API_KEY=key1                  # single key passed to UI as NEXT_PUBLIC_API_KEY
+ALLOWED_ORIGIN=https://yourdomain.com  # CORS origin; defaults to * in dev
 
 # Worker tuning (optional, have defaults):
 WORKER_CONCURRENCY=1          # worker-backend (default 1)
@@ -579,11 +609,15 @@ STALE_PENDING_MINUTES=30      # pending tests older than this → failed
 ## Common Commands
 
 ```bash
-# Start all services (production)
+# Start all services — dev (auth disabled, internal ports exposed on localhost)
 docker compose up --build
 
 # Start with hot-reload (dev mode) — Windows: uses WATCHPACK_POLLING for Next.js HMR
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+# Deploy to cloud/production (auth on, internal ports hidden, resource limits active)
+# Set API_KEYS, API_KEY, ALLOWED_ORIGIN, GEMINI_API_KEY in environment first
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Start without cache
 docker compose build --no-cache
@@ -733,6 +767,15 @@ All phases complete:
 - ✅ Type-aware icons in ActiveTests strip (⚡ backend, 🔗 flow, 🌐 browser)
 - ✅ Status-aware pending/running messages on result detail page
 
+### Phase 7 — Security Hardening
+- ✅ **API key authentication** on api-service + results-service (`X-API-Key` header, `API_KEYS` env var)
+- ✅ **CORS** restricted via `ALLOWED_ORIGIN` env var (default `*` for dev, set domain for prod)
+- ✅ **No hardcoded fallback credentials** — all services fail fast on missing env vars
+- ✅ **envVar injection protection** — k6 `--env` args validated before spawn
+- ✅ **Input validation** — URL format, description length ≤ 500, steps count ≤ 20
+- ✅ **`docker-compose.prod.yml`** — removes internal port bindings, adds memory/CPU resource limits
+- ✅ **UI auth** — all `fetch()` calls in `api.ts` send `X-API-Key` from `NEXT_PUBLIC_API_KEY`
+
 ### Phase 6 — UI Redesign (Command Center)
 - ✅ **Command Center design system:** GitHub-palette CSS vars in `globals.css` (Tailwind 4 CSS-first `@theme inline`)
 - ✅ **Collapsible sidebar:** `Sidebar.tsx` — 220px ↔ 48px icon-rail toggle, state in `localStorage`, active item highlighted
@@ -752,3 +795,6 @@ All phases complete:
 - UI uses polling instead of WebSockets (planned improvement)
 - Flow `envVars` are stored in the RabbitMQ message while the test is in-flight — do not log them
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
+- No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
+- Containers run as root — add non-root user to each Dockerfile before production
+- No HTTPS termination built-in — use Nginx/Caddy reverse proxy in front of services

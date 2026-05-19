@@ -184,7 +184,6 @@ function HomeContent() {
     else if (/\bload\b/i.test(desc)) updates.profile = 'load';
     if (Object.keys(updates).length > 0) {
       setForm(f => ({ ...f, ...updates }));
-      setShowAdvanced(true);
     }
   };
 

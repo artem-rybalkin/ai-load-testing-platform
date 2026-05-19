@@ -11,7 +11,20 @@ export const buildApp = async (
 ): Promise<FastifyInstance> => {
   const app = Fastify({ logger: opts.logger ?? false });
 
-  await app.register(cors, { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] });
+  const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
+  await app.register(cors, { origin: allowedOrigin, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] });
+
+  // API key authentication — exempt /health and internal /results/pending
+  const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+  if (apiKeys.length > 0) {
+    app.addHook('onRequest', async (request, reply) => {
+      if (request.url === '/health' || request.url === '/results/pending') return;
+      const key = request.headers['x-api-key'];
+      if (!key || !apiKeys.includes(key as string)) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+      }
+    });
+  }
 
   app.get('/health', async (_request, reply) => {
     const checks: Record<string, string> = {};

@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, LiveMetricPoint, TestResult, TrendPoint } from '@/lib/api';
 import Link from 'next/link';
-import BackendChart from '@/app/components/BackendChart';
-import ClientChart from '@/app/components/ClientChart';
-import FlowStepChart from '@/app/components/FlowStepChart';
-import AnalysisPanel from '@/app/components/AnalysisPanel';
-import RealtimeChart from '@/app/components/RealtimeChart';
-import TrendChart from '@/app/components/TrendChart';
+import dynamic from 'next/dynamic';
+const BackendChart  = dynamic(() => import('@/app/components/BackendChart'),  { ssr: false });
+const ClientChart   = dynamic(() => import('@/app/components/ClientChart'),   { ssr: false });
+const FlowStepChart = dynamic(() => import('@/app/components/FlowStepChart'), { ssr: false });
+const AnalysisPanel = dynamic(() => import('@/app/components/AnalysisPanel'), { ssr: false });
+const RealtimeChart = dynamic(() => import('@/app/components/RealtimeChart'), { ssr: false });
+const TrendChart    = dynamic(() => import('@/app/components/TrendChart'),    { ssr: false });
 
 interface StepMetric { name: string; avgResponseTime: number; p95ResponseTime: number; requestsTotal: number; requestsFailed: number }
 
@@ -272,6 +273,16 @@ export default function ResultPage() {
         </div>
       )}
 
+      {/* Live chart — shown while running (before metrics arrive) and after completion */}
+      {isBackend && livePoints.length > 0 && (isPending || !m) && (
+        <BentoCard className="mb-3">
+          <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
+          <div className="p-3">
+            <RealtimeChart points={livePoints} startedAt={result.started_at} />
+          </div>
+        </BentoCard>
+      )}
+
       {/* Pending / no metrics state */}
       {(isPending || !m) ? (
         <BentoCard>
@@ -340,11 +351,11 @@ export default function ResultPage() {
             </>
           )}
 
-          {/* ── Live / timeline chart ── */}
+          {/* ── Live / timeline chart (also shown pre-metrics via the block above) ── */}
           {isBackend && livePoints.length > 0 && (
             <div className="col-span-full">
               <BentoCard>
-                <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
+                <CardHeader title="Test Timeline" />
                 <div className="p-3">
                   <RealtimeChart points={livePoints} startedAt={result.started_at} />
                 </div>

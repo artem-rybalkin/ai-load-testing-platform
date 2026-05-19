@@ -79,7 +79,8 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
 };
 
 export const startConsumer = async (): Promise<void> => {
-  const url = process.env.RABBITMQ_URL || 'amqp://alt_user:alt_password@localhost:5672';
+  const url = process.env.RABBITMQ_URL;
+  if (!url) throw new Error('RABBITMQ_URL environment variable is required');
   const maxRetries = 20;
   const delay = 10000;
 

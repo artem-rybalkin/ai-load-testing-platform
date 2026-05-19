@@ -10,9 +10,8 @@ export const stepsToKey = (steps: FlowStep[]): string => {
   return `flow:${hash}`;
 };
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://alt_user:alt_password@localhost:5432/alt_db'
-});
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export const checkDbHealth = (): Promise<void> => pool.query('SELECT 1').then(() => undefined);
 

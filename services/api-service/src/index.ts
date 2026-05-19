@@ -18,10 +18,23 @@ const parseDurationSeconds = (d: string): number => {
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({ logger: false });
 
+  const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
   await app.register(cors, {
-    origin: '*',
+    origin: allowedOrigin,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
+
+  // API key authentication — exempt /health
+  const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+  if (apiKeys.length > 0) {
+    app.addHook('onRequest', async (request, reply) => {
+      if (request.url === '/health') return;
+      const key = request.headers['x-api-key'];
+      if (!key || !apiKeys.includes(key as string)) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+      }
+    });
+  }
 
   app.get('/health', async (_request, reply) => {
     const checks: Record<string, string> = {};
@@ -49,15 +62,24 @@ export const buildApp = async (): Promise<FastifyInstance> => {
 
       const validTypes: TestType[] = ['backend', 'client-side', 'flow'];
       if (!validTypes.includes(type)) {
-        return reply.code(400).send({
-          error: `Invalid test type. Use: ${validTypes.join(', ')}`,
-        });
+        return reply.code(400).send({ error: `Invalid test type. Use: ${validTypes.join(', ')}` });
+      }
+      if (description && description.length > 500) {
+        return reply.code(400).send({ error: 'Description must be 500 characters or fewer' });
+      }
+      if (steps && steps.length > 20) {
+        return reply.code(400).send({ error: 'Flow tests support a maximum of 20 steps' });
       }
 
       // For flow tests, targetUrl defaults to first step's URL
       const effectiveTargetUrl = (type === 'flow' && steps?.length)
         ? (targetUrl || steps[0].url)
         : targetUrl;
+
+      // Validate URL format
+      try { new URL(effectiveTargetUrl); } catch {
+        return reply.code(400).send({ error: 'Invalid targetUrl — must be a valid URL' });
+      }
 
       const backendOpts = type === 'backend' ? (options as BackendTestOptions) : undefined;
       const flowCacheKey = (type === 'flow' && steps?.length) ? stepsToKey(steps as FlowStep[]) : undefined;

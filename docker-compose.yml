@@ -62,6 +62,8 @@ services:
       REDIS_URL: redis://redis:6379
       DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
       RESULTS_URL: http://results-service:3004
+      API_KEYS: ${API_KEYS:-}          # comma-separated keys; empty = auth disabled (dev only)
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -144,6 +146,8 @@ services:
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       STALE_RUNNING_MINUTES: 15      # mark running tests failed after 15 min
       STALE_PENDING_MINUTES: 30      # mark pending tests failed after 30 min
+      API_KEYS: ${API_KEYS:-}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
     depends_on:
       postgres:
         condition: service_healthy
@@ -162,6 +166,7 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:3000
       NEXT_PUBLIC_RESULTS_URL: http://localhost:3004
+      NEXT_PUBLIC_API_KEY: ${API_KEY:-}
       TURBOPACK: "0"
     depends_on:
       - api-service

@@ -1,9 +1,8 @@
 import { Pool } from 'pg';
 import { log } from './logger';
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://alt_user:alt_password@localhost:5432/alt_db'
-});
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export const createSchema = async (p: Pool): Promise<void> => {
   await p.query(`

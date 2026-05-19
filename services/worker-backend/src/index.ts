@@ -20,9 +20,8 @@ const MAX_TEST_DURATION_MS = parseInt(process.env.K6_MAX_DURATION_MS ?? '600000'
 const GRACE_PERIOD_MS      = 30000;
 const WORKER_CONCURRENCY   = parseInt(process.env.WORKER_CONCURRENCY ?? '1');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://alt_user:alt_password@localhost:5432/alt_db'
-});
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // Track in-progress k6 processes for cancellation
 const runningTests  = new Map<string, ChildProcess>();
@@ -85,7 +84,10 @@ const runK6Test = async (
   });
 
   return new Promise((resolve, reject) => {
-    const envArgs = Object.entries(envVars ?? {}).flatMap(([k, v]) => ['--env', `${k}=${v}`]);
+    const SAFE_KEY = /^[A-Z_][A-Z0-9_]*$/i;
+    const envArgs = Object.entries(envVars ?? {})
+      .filter(([k, v]) => SAFE_KEY.test(k) && !v.includes('\n') && !v.includes('\0') && k.length <= 64 && v.length <= 1024)
+      .flatMap(([k, v]) => ['--env', `${k}=${v}`]);
     const k6 = spawn('k6', ['run', '--out', `json=${jsonPath}`, ...envArgs, scriptPath]);
     runningTests.set(testId, k6);
 
