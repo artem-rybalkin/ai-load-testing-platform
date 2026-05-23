@@ -13,6 +13,7 @@ import amqplib from 'amqplib';
 import puppeteer from 'puppeteer';
 import lighthouse from 'lighthouse';
 import Fastify from 'fastify';
+import * as os from 'os';
 
 import { TestRequest, TestResult, ClientMetrics, LighthouseScore } from '@alt/shared';
 import { log } from './logger';
@@ -20,6 +21,18 @@ import { log } from './logger';
 const QUEUE              = 'client-tests';
 const CANCEL_EXCHANGE    = 'cancel-fanout';
 let queueConnected = false;
+
+// Rolling CPU usage sampled every 5 seconds
+let cpuPercent = 0;
+let _lastCpu = process.cpuUsage();
+let _lastCpuTime = Date.now();
+setInterval(() => {
+  const delta = process.cpuUsage(_lastCpu);
+  const elapsed = (Date.now() - _lastCpuTime) * 1000;
+  cpuPercent = elapsed > 0 ? Math.min(100, Math.round(((delta.user + delta.system) / elapsed) * 100)) : 0;
+  _lastCpu = process.cpuUsage();
+  _lastCpuTime = Date.now();
+}, 5000);
 const RESULTS_QUEUE      = 'test-results';
 const DLQ                = `${QUEUE}.dlq`;
 const MAX_RETRIES        = 3;
@@ -274,11 +287,22 @@ const start = async (): Promise<void> => {
 const startHealthServer = async () => {
   const app = Fastify({ logger: false });
   app.get('/health', async (_req, reply) => {
-    const healthy = queueConnected;
-    return reply.code(healthy ? 200 : 503).send({
-      status: healthy ? 'ok' : 'degraded',
+    const checks: Record<string, string> = {};
+    checks.queue = queueConnected ? 'ok' : 'disconnected';
+
+    const mem = process.memoryUsage();
+    const memoryMb = Math.round(mem.rss / 1024 / 1024);
+    const memoryPercent = Math.round(mem.rss / os.totalmem() * 100);
+    const activeTests = runningBrowsers.size;
+    const saturated = activeTests >= WORKER_CONCURRENCY && WORKER_CONCURRENCY > 0;
+    if (saturated) checks.capacity = 'saturated';
+
+    const status = !queueConnected ? 'degraded' : saturated ? 'saturated' : 'ok';
+    return reply.code(queueConnected ? 200 : 503).send({
+      status,
       service: 'worker-client',
-      checks: { queue: healthy ? 'ok' : 'disconnected' },
+      checks,
+      metrics: { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: WORKER_CONCURRENCY },
       timestamp: new Date().toISOString(),
     });
   });

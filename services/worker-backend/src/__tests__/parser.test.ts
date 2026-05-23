@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseK6Output, aggregateWindow, parseK6StatusCodes } from '../parser';
+import { parseK6Output, aggregateWindow, parseK6Errors } from '../parser';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ describe('aggregateWindow', () => {
     expect(result!.vus).toBe(10);                    // max(5, 10)
     expect(result!.avgResponseTime).toBe(250);        // avg(200, 300)
     expect(result!.errorRate).toBeCloseTo(50, 1);     // avg(0, 1) * 100
-    expect(result!.rps).toBeCloseTo(2 / 5, 2);        // 2 reqs / 5s window
+    expect(result!.rps).toBeCloseTo(2 / 2, 2);        // 2 reqs / 2s window
   });
 
   it('skips malformed JSON lines and processes the rest', () => {
@@ -204,7 +204,7 @@ describe('aggregateWindow', () => {
     expect(result!.avgResponseTime).toBe(150);
   });
 
-  it('calculates rps as request count divided by 5-second window', () => {
+  it('calculates rps as request count divided by 2-second window', () => {
     const lines = [
       makeJsonPoint('vus', 5),
       ...Array.from({ length: 20 }, () => makeJsonPoint('http_reqs', 1)),
@@ -213,7 +213,7 @@ describe('aggregateWindow', () => {
     const result = aggregateWindow(lines);
 
     expect(result).not.toBeNull();
-    expect(result!.rps).toBeCloseTo(20 / 5, 2);
+    expect(result!.rps).toBeCloseTo(20 / 2, 2);
   });
 
   it('returns zero errorRate when no http_req_failed points', () => {
@@ -250,11 +250,14 @@ describe('aggregateWindow', () => {
   });
 });
 
-// ─── parseK6StatusCodes ───────────────────────────────────────────────────────
+// ─── parseK6Errors ───────────────────────────────────────────────────────────
 
-describe('parseK6StatusCodes', () => {
+describe('parseK6Errors', () => {
   const makeHttpReqPoint = (status: string) =>
     JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, time: new Date().toISOString(), tags: { status } } });
+
+  const makeFailedPoint = (errorCode: string) =>
+    JSON.stringify({ type: 'Point', metric: 'http_req_failed', data: { value: 1, time: new Date().toISOString(), tags: { error_code: errorCode } } });
 
   it('counts requests by status code', () => {
     const json = [
@@ -263,14 +266,30 @@ describe('parseK6StatusCodes', () => {
       makeHttpReqPoint('500'),
     ].join('\n');
 
-    const result = parseK6StatusCodes(json);
+    const { statusCodes, errorBreakdown } = parseK6Errors(json);
 
-    expect(result['200']).toBe(2);
-    expect(result['500']).toBe(1);
+    expect(statusCodes['200']).toBe(2);
+    expect(statusCodes['500']).toBe(1);
+    expect(errorBreakdown.success).toBe(2);
+    expect(errorBreakdown.serverError).toBe(1);
   });
 
-  it('returns empty object for empty input', () => {
-    expect(parseK6StatusCodes('')).toEqual({});
+  it('categorizes timeout errors from error_code', () => {
+    const json = [makeFailedPoint('1020'), makeFailedPoint('1210')].join('\n');
+    const { errorBreakdown } = parseK6Errors(json);
+    expect(errorBreakdown.timeout).toBe(2);
+  });
+
+  it('categorizes network errors from error_code', () => {
+    const json = [makeFailedPoint('1010'), makeFailedPoint('1050')].join('\n');
+    const { errorBreakdown } = parseK6Errors(json);
+    expect(errorBreakdown.networkError).toBe(2);
+  });
+
+  it('returns empty breakdown for empty input', () => {
+    const { statusCodes, errorBreakdown } = parseK6Errors('');
+    expect(statusCodes).toEqual({});
+    expect(errorBreakdown.success).toBe(0);
   });
 
   it('skips non-http_reqs metrics and malformed lines', () => {
@@ -280,17 +299,18 @@ describe('parseK6StatusCodes', () => {
       makeHttpReqPoint('404'),
     ].join('\n');
 
-    const result = parseK6StatusCodes(json);
+    const { statusCodes } = parseK6Errors(json);
 
-    expect(Object.keys(result)).toEqual(['404']);
+    expect(Object.keys(statusCodes)).toEqual(['404']);
   });
 
   it('ignores points without status tag', () => {
     const noStatus = JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, tags: {} } });
-    expect(parseK6StatusCodes(noStatus)).toEqual({});
+    const { statusCodes } = parseK6Errors(noStatus);
+    expect(statusCodes).toEqual({});
   });
 
-  it('counts many different status codes correctly', () => {
+  it('counts many different status codes and categorizes correctly', () => {
     const lines = [
       makeHttpReqPoint('200'), makeHttpReqPoint('200'), makeHttpReqPoint('200'),
       makeHttpReqPoint('201'),
@@ -299,13 +319,16 @@ describe('parseK6StatusCodes', () => {
       makeHttpReqPoint('503'),
     ].join('\n');
 
-    const result = parseK6StatusCodes(lines);
+    const { statusCodes, errorBreakdown } = parseK6Errors(lines);
 
-    expect(result['200']).toBe(3);
-    expect(result['201']).toBe(1);
-    expect(result['400']).toBe(2);
-    expect(result['500']).toBe(1);
-    expect(result['503']).toBe(1);
-    expect(Object.keys(result)).toHaveLength(5);
+    expect(statusCodes['200']).toBe(3);
+    expect(statusCodes['201']).toBe(1);
+    expect(statusCodes['400']).toBe(2);
+    expect(statusCodes['500']).toBe(1);
+    expect(statusCodes['503']).toBe(1);
+    expect(Object.keys(statusCodes)).toHaveLength(5);
+    expect(errorBreakdown.success).toBe(4);
+    expect(errorBreakdown.clientError).toBe(2);
+    expect(errorBreakdown.serverError).toBe(2);
   });
 });

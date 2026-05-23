@@ -13,7 +13,7 @@
 #   API_KEYS         comma-separated API keys
 #   API_KEY          single key for UI
 #   ALLOWED_ORIGIN   https://example.com
-#   GEMINI_API_KEY
+#   ANTHROPIC_API_KEY
 
 services:
   caddy:

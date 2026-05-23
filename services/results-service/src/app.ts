@@ -18,7 +18,7 @@ export const buildApp = async (
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
   if (apiKeys.length > 0) {
     app.addHook('onRequest', async (request, reply) => {
-      if (request.url === '/health' || request.url === '/results/pending' || request.url.endsWith('/running') || request.url.endsWith('/fail') || request.url.endsWith('/message')) return;
+      if (request.url === '/health' || request.url === '/system/ai-status' || request.url === '/results/pending' || request.url.endsWith('/running') || request.url.endsWith('/fail') || request.url.endsWith('/message')) return;
       const key = request.headers['x-api-key'];
       if (!key || !apiKeys.includes(key as string)) {
         return reply.code(401).send({ error: 'Unauthorized' });
@@ -44,6 +44,23 @@ export const buildApp = async (
     });
   });
 
+  app.get('/system/ai-status', async (_request, reply) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT status_message, created_at FROM test_results
+         WHERE created_at > NOW() - INTERVAL '2 hours'
+           AND (status_message ILIKE '%gemini unavailable%'
+             OR status_message ILIKE '%quota exceeded%'
+             OR status_message ILIKE '%generation failed after%')
+         ORDER BY created_at DESC LIMIT 1`
+      );
+      if (rows.length === 0) return { quotaExceeded: false };
+      return { quotaExceeded: true, message: rows[0].status_message as string, since: rows[0].created_at as string };
+    } catch {
+      return { quotaExceeded: false };
+    }
+  });
+
   app.get('/system/health', async (_request, reply) => {
     const services = [
       { name: 'api-service',      url: `${process.env.API_SERVICE_URL || 'http://api-service:3000'}/health` },
@@ -56,8 +73,14 @@ export const buildApp = async (
       services.map(async ({ name, url }) => {
         try {
           const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-          const body = await res.json().catch(() => ({}));
-          return { name, status: res.ok ? 'ok' : 'degraded', checks: (body as { checks?: Record<string, string> }).checks ?? {} };
+          const body = await res.json().catch(() => ({})) as { status?: string; checks?: Record<string, string>; metrics?: Record<string, number> };
+          const status = body.status ?? (res.ok ? 'ok' : 'degraded');
+          return {
+            name,
+            status,
+            checks: body.checks ?? {},
+            ...(body.metrics ? { metrics: body.metrics } : {}),
+          };
         } catch {
           return { name, status: 'unreachable', checks: {} };
         }

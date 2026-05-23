@@ -1,4 +1,4 @@
-import { BackendMetrics, LiveMetricPoint, LiveStepMetric, StepMetrics } from '@alt/shared';
+import { BackendMetrics, ErrorBreakdown, LiveMetricPoint, LiveStepMetric, StepMetrics } from '@alt/shared';
 
 const toMs = (val: number, unit: string | undefined): number => {
   if (unit === 's')  return Math.round(val * 1000);
@@ -14,7 +14,13 @@ export const parseK6Output = (output: string): BackendMetrics => {
 
   const getPercentile = (metric: string, p: string): number => {
     const m = output.match(new RegExp(`${metric}[^\\n]*\\bp\\(${p}\\)=([\\d.]+)(ms|s|µs)?`));
-    return m ? toMs(parseFloat(m[1]), m[2]) : 0;
+    if (m) return toMs(parseFloat(m[1]), m[2]);
+    // k6 default output uses "med=" for p50 instead of "p(50)="
+    if (p === '50') {
+      const med = output.match(new RegExp(`${metric}[^\\n]*\\bmed=([\\d.]+)(ms|s|µs)?`));
+      return med ? toMs(parseFloat(med[1]), med[2]) : 0;
+    }
+    return 0;
   };
 
   const getCount = (metric: string): number => {
@@ -46,18 +52,43 @@ export const parseK6Output = (output: string): BackendMetrics => {
   };
 };
 
-export const parseK6StatusCodes = (jsonContent: string): Record<string, number> => {
-  const counts: Record<string, number> = {};
+export const parseK6Errors = (jsonContent: string): {
+  statusCodes: Record<string, number>;
+  errorBreakdown: ErrorBreakdown;
+} => {
+  const statusCodes: Record<string, number> = {};
+  const breakdown: ErrorBreakdown = { success: 0, clientError: 0, serverError: 0, timeout: 0, networkError: 0 };
+
   for (const line of jsonContent.split('\n')) {
     if (!line.trim()) continue;
     try {
       const obj = JSON.parse(line);
-      if (obj.type !== 'Point' || obj.metric !== 'http_reqs') continue;
-      const status: string = obj.data?.tags?.status;
-      if (status) counts[status] = (counts[status] ?? 0) + 1;
+      if (obj.type !== 'Point') continue;
+
+      if (obj.metric === 'http_reqs') {
+        const status: string = obj.data?.tags?.status ?? '';
+        if (status) {
+          statusCodes[status] = (statusCodes[status] ?? 0) + 1;
+          const code = parseInt(status, 10);
+          if (code >= 200 && code < 300) breakdown.success++;
+          else if (code >= 400 && code < 500) breakdown.clientError++;
+          else if (code >= 500) breakdown.serverError++;
+        }
+      }
+
+      // Non-HTTP failures: error_code tag on http_req_failed
+      if (obj.metric === 'http_req_failed' && obj.data?.value === 1) {
+        const errorCode: string = obj.data?.tags?.error_code ?? '';
+        const code = parseInt(errorCode, 10);
+        if (code >= 1020 && code < 1030) breakdown.timeout++;       // connection timeout
+        else if (code === 1210) breakdown.timeout++;                 // read/response timeout
+        else if ((code >= 1010 && code < 1020) || code === 1050) breakdown.networkError++; // conn refused / DNS
+        else if (errorCode && !obj.data?.tags?.status) breakdown.networkError++; // other network errors
+      }
     } catch { /* skip malformed */ }
   }
-  return counts;
+
+  return { statusCodes, errorBreakdown: breakdown };
 };
 
 export const parseK6GroupMetrics = (jsonContent: string): StepMetrics[] => {
@@ -111,7 +142,7 @@ interface K6JsonPoint {
   data: { value: number; time: string; tags?: Record<string, string> };
 }
 
-const LIVE_WINDOW_SEC = 5;
+const LIVE_WINDOW_SEC = 2;
 
 export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timestamp'> | null => {
   const durations: number[] = [];

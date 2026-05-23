@@ -127,3 +127,34 @@ describe('buildK6Options', () => {
     }
   });
 });
+
+// ─── buildK6Options — httpOptions ─────────────────────────────────────────────
+
+describe('buildK6Options — httpOptions', () => {
+  it('includes http2: true when httpOptions.http2 is set', () => {
+    const result = buildK6Options({ vus: 5, duration: '30s', httpOptions: { http2: true } });
+    const parsed = JSON.parse(result);
+    expect(parsed.http2).toBe(true);
+  });
+
+  it('includes discardResponseBodies when set', () => {
+    const result = buildK6Options({ vus: 5, duration: '30s', httpOptions: { discardResponseBodies: true } });
+    const parsed = JSON.parse(result);
+    expect(parsed.discardResponseBodies).toBe(true);
+  });
+
+  it('does not include http2 or discardResponseBodies when httpOptions is absent', () => {
+    const result = buildK6Options({ vus: 5, duration: '30s' });
+    const parsed = JSON.parse(result);
+    expect(parsed.http2).toBeUndefined();
+    expect(parsed.discardResponseBodies).toBeUndefined();
+  });
+
+  it('combines httpOptions with load profile stages', () => {
+    const result = buildK6Options({ vus: 5, duration: '30s', profile: 'soak', httpOptions: { http2: true, discardResponseBodies: true } });
+    const parsed = JSON.parse(result);
+    expect(Array.isArray(parsed.stages)).toBe(true);
+    expect(parsed.http2).toBe(true);
+    expect(parsed.discardResponseBodies).toBe(true);
+  });
+});

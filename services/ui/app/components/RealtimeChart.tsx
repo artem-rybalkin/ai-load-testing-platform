@@ -97,7 +97,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`avg_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
-                dot={false} name={`avg_${toKey(name)}`} connectNulls />
+                dot={false} isAnimationActive={false} name={`avg_${toKey(name)}`} connectNulls />
             )) : (
               <Line type="monotone" dataKey="avgResponseTime"
                 stroke="#0969da" strokeWidth={1.5} dot={false} name="Avg response" />
@@ -137,7 +137,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`err_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
-                dot={false} name={`err_${toKey(name)}`} connectNulls />
+                dot={false} isAnimationActive={false} name={`err_${toKey(name)}`} connectNulls />
             )) : (
               <>
                 <Line yAxisId="vus" type="monotone" dataKey="vus"
@@ -171,7 +171,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`rps_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
-                dot={false} name={`rps_${toKey(name)}`} connectNulls />
+                dot={false} isAnimationActive={false} name={`rps_${toKey(name)}`} connectNulls />
             )) : (
               <Line type="monotone" dataKey="rps"
                 stroke="#7c3aed" strokeWidth={1.5} dot={false} name="RPS" />

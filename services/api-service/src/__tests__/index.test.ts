@@ -9,6 +9,7 @@ vi.mock('../queue', () => ({
   publishCancel: vi.fn(),
   isQueueConnected: vi.fn().mockReturnValue(true),
   connectQueue: vi.fn().mockResolvedValue(undefined),
+  getWorkerConsumerCount: vi.fn().mockResolvedValue(1),
 }));
 
 vi.mock('../scripts', () => ({
@@ -228,5 +229,52 @@ describe('GET /health', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json().status).toBe('degraded');
     expect(res.json().checks.queue).toBe('disconnected');
+  });
+});
+
+// ─── POST /tests — parameterization passthrough ───────────────────────────────
+
+describe('POST /tests — parameterization', () => {
+  const flowBody = {
+    type: 'flow',
+    targetUrl: 'http://example.com',
+    description: 'login flow',
+    options: { vus: 2, duration: '30s' },
+    steps: [{ name: 'Login', url: 'http://example.com/login', method: 'POST' }],
+  };
+
+  it('passes testData through to the published test', async () => {
+    const testData = [{ username: 'user1', password: 'pass1' }];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...flowBody, testData },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mockPublishTest).toHaveBeenCalledWith(
+      expect.objectContaining({ testData }),
+      false
+    );
+  });
+
+  it('passes csvData and csvFilename through to the published test', async () => {
+    const csvData = Buffer.from('username,password\nuser1,pass1').toString('base64');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...flowBody, csvData, csvFilename: 'users.csv' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mockPublishTest).toHaveBeenCalledWith(
+      expect.objectContaining({ csvData, csvFilename: 'users.csv' }),
+      false
+    );
+  });
+
+  it('publishes without testData when not provided', async () => {
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: flowBody });
+    expect(res.statusCode).toBe(200);
+    const published = mockPublishTest.mock.calls[0][0] as { testData?: unknown };
+    expect(published.testData).toBeUndefined();
   });
 });

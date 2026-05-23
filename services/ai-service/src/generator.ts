@@ -1,10 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-import { TestRequest } from '@alt/shared';
+import { TestRequest, ExtractRule } from '@alt/shared';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-const profileInstructions = (opts: { vus: number; duration: string; profile?: string; peakVus?: number }): string => {
+const profileInstructions = (opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string }): string => {
   const { vus, duration, profile = 'load', peakVus } = opts;
   const peak = peakVus ?? vus * 10;
 
@@ -46,8 +46,17 @@ Focus on memory leaks and degradation over time. Set a strict p(95) < 500ms thre
 };
 
 const BACKEND_PROMPT = (test: TestRequest): string => {
-  const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number };
+  const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; http2?: boolean; discardResponseBodies?: boolean } };
   const fallback = profileInstructions(opts);
+  const http = opts.httpOptions;
+  const httpSection = http ? `
+HTTP options to apply:
+${http.http2 ? '- Set options.http2 = true (force HTTP/2)' : ''}
+${http.discardResponseBodies ? '- Set options.discardResponseBodies = true (skip response body parsing)' : ''}
+${http.timeout ? `- Use const params = { timeout: '${http.timeout}' }; pass params to every http.request() call` : ''}
+${http.keepAlive === false ? '- Add header Connection: close to params.headers to disable keep-alive' : ''}
+`.trim() : '';
+
   return `
 You are a performance testing expert. Generate a k6 load test script.
 
@@ -60,7 +69,7 @@ use EXACTLY what the user described — ignore the fallback parameters below.
 
 Fallback parameters (use only when the user request gives no load shape info):
 ${fallback}
-
+${httpSection ? `\n${httpSection}` : ''}
 Requirements:
 - Use k6 JavaScript API
 - Include realistic think time between requests (sleep 1-3s)
@@ -90,10 +99,21 @@ Requirements:
 - Return ONLY the JavaScript code, no markdown, no explanation
 `;
 
+const renderExtractLine = (varName: string, rule: ExtractRule): string => {
+  switch (rule.source) {
+    case 'header':   return `  - ${varName} ← header["${rule.expression}"]`;
+    case 'cookie':   return `  - ${varName} ← cookie["${rule.expression}"]`;
+    case 'regex':    return `  - ${varName} ← regex: ${rule.expression}`;
+    default:         return `  - ${varName} ← jsonpath: ${rule.expression}`;
+  }
+};
+
 const FLOW_PROMPT = (test: TestRequest): string => {
   const steps = test.steps!;
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number };
   const fallback = profileInstructions(opts);
+
+  const hasExtractions = steps.some(s => s.extract && Object.keys(s.extract).length > 0);
 
   const stepDefs = steps.map((s, i) => {
     const lines: string[] = [
@@ -106,10 +126,63 @@ const FLOW_PROMPT = (test: TestRequest): string => {
       lines.push(`    Headers: ${JSON.stringify(s.headers)}`);
     }
     if (s.extract && Object.keys(s.extract).length > 0) {
-      lines.push(`    Extract into variables: ${JSON.stringify(s.extract)}`);
+      lines.push('    Extract variables:');
+      for (const [varName, rule] of Object.entries(s.extract)) {
+        lines.push(renderExtractLine(varName, rule));
+      }
     }
     return lines.join('\n');
   }).join('\n\n');
+
+  // Parameterization instructions
+  const testDataColumns = test.testData && test.testData.length > 0
+    ? Object.keys(test.testData[0])
+    : null;
+  const csvColumns = test.csvData
+    ? (() => {
+        try {
+          const firstLine = Buffer.from(test.csvData, 'base64').toString('utf-8').split('\n')[0];
+          return firstLine.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+        } catch { return null; }
+      })()
+    : null;
+
+  const paramSection = testDataColumns
+    ? `
+Parameterization — inline data table (columns: ${testDataColumns.join(', ')}):
+- REQUIRED: import { SharedArray } from 'k6/data';
+- At top level (outside export default): const data = new SharedArray('testData', function() { return JSON.parse(open('./data.json')); });
+- Inside export default: const row = data[(__VU - 1) % data.length];
+- Use row.${testDataColumns[0]}, row.${testDataColumns[1] ?? testDataColumns[0]}, etc. in requests
+`
+    : csvColumns
+    ? `
+Parameterization — CSV file (columns: ${csvColumns.join(', ')}):
+- REQUIRED: import { SharedArray } from 'k6/data';
+- At top level: const data = new SharedArray('csvData', function() {
+    const lines = open('./data.csv').split('\\n').filter(l => l.trim());
+    return lines.slice(1).map(line => {
+      const cols = line.split(',');
+      return { ${csvColumns.map((c, i) => `${c}: cols[${i}]`).join(', ')} };
+    });
+  });
+- Inside export default: const row = data[(__VU - 1) % data.length];
+- Use row.${csvColumns[0]}, row.${csvColumns[1] ?? csvColumns[0]}, etc. in requests
+`
+    : '';
+
+  const extractionInstructions = hasExtractions ? `
+Extraction rules (for steps with "Extract variables"):
+- jsonpath: access response.json() fields directly (e.g. response.json().data.id). No library needed.
+- header: response.headers['Header-Name'] — use exact header name as specified
+- cookie: response.cookies['name'][0].value
+- regex: const m = response.body.match(/pattern/); use m[1] as the captured value
+
+Error handling — MANDATORY for ALL extractions:
+- After every extraction: if (!value) { exec.test.abort('<varName> not found in step N response'); }
+- This prevents VUs from continuing with missing correlation data
+- Import: import exec from 'k6/execution';
+` : '';
 
   return `
 You are a performance testing expert. Generate a k6 multi-step flow test script.
@@ -117,10 +190,10 @@ You are a performance testing expert. Generate a k6 multi-step flow test script.
 User request: "${test.description}"
 
 ${fallback}
-
+${paramSection}
 Flow steps to test (IN ORDER):
 ${stepDefs}
-
+${extractionInstructions}
 Requirements:
 - Use k6 JavaScript API with group() for EACH step
 - Each step MUST be wrapped in: group('Step N: name', function() { ... })
@@ -133,6 +206,7 @@ Requirements:
 Structure:
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
+${hasExtractions ? "import exec from 'k6/execution';" : ''}
 
 export const options = { stages: [...], thresholds: {...} };
 
@@ -151,7 +225,6 @@ export const compareDescriptions = async (
   newDescription: string,
   storedDescription: string
 ): Promise<'REUSE' | 'REGENERATE'> => {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   const prompt = `You are a load test script classifier.
 
 Stored description (used to generate the existing k6 script):
@@ -173,6 +246,7 @@ Reply with exactly one word: REUSE or REGENERATE`;
   const maxRetries = 3;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
       const result = await model.generateContent(prompt);
       const verdict = result.response.text().trim().toUpperCase();
       if (verdict === 'REUSE' || verdict === 'REGENERATE') return verdict;
@@ -194,7 +268,7 @@ Reply with exactly one word: REUSE or REGENERATE`;
 };
 
 export const generateScript = async (test: TestRequest): Promise<string> => {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
   const prompt = test.type === 'flow'
     ? FLOW_PROMPT(test)
     : test.type === 'backend'

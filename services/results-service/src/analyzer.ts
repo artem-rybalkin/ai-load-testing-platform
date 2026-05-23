@@ -47,14 +47,15 @@ const analyzeBackend = (
     p95ResponseTime: thresholds?.p95  ?? BACKEND_THRESHOLDS.p95ResponseTime,
     avgResponseTime: thresholds?.avg  ?? BACKEND_THRESHOLDS.avgResponseTime,
     errorRate:       thresholds?.errorRate ?? BACKEND_THRESHOLDS.errorRate,
+    serverErrorRate: thresholds?.serverErrorRate ?? 1,
+    timeoutRate:     thresholds?.timeoutRate ?? 1,
   };
 
   const thresholdViolations: string[] = [];
   const diffs: MetricDiff[] = [];
 
-  const currentErrorRate = current.requestsTotal > 0
-    ? (current.requestsFailed / current.requestsTotal) * 100
-    : 0;
+  const total = current.requestsTotal;
+  const currentErrorRate = total > 0 ? (current.requestsFailed / total) * 100 : 0;
 
   if (current.p95ResponseTime > t.p95ResponseTime) {
     thresholdViolations.push(`p95 response time ${Math.round(current.p95ResponseTime)}ms exceeds threshold ${t.p95ResponseTime}ms`);
@@ -64,6 +65,18 @@ const analyzeBackend = (
   }
   if (currentErrorRate > t.errorRate) {
     thresholdViolations.push(`error rate ${currentErrorRate.toFixed(2)}% exceeds threshold ${t.errorRate}%`);
+  }
+
+  // Granular error category thresholds
+  if (current.errorBreakdown && total > 0) {
+    const serverRate = (current.errorBreakdown.serverError / total) * 100;
+    const timeoutRate = (current.errorBreakdown.timeout / total) * 100;
+    if (serverRate > t.serverErrorRate) {
+      thresholdViolations.push(`server error rate (5xx) ${serverRate.toFixed(2)}% exceeds threshold ${t.serverErrorRate}%`);
+    }
+    if (timeoutRate > t.timeoutRate) {
+      thresholdViolations.push(`timeout rate ${timeoutRate.toFixed(2)}% exceeds threshold ${t.timeoutRate}%`);
+    }
   }
 
   // Порівнюємо з попереднім тестом

@@ -1,0 +1,127 @@
+name: Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/testdb
+      RABBITMQ_URL: amqp://guest:guest@localhost:5672
+      API_KEYS: test-key-1,test-key-2
+      ALLOWED_ORIGIN: "*"
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 60s
+        ports:
+          - 5672:5672
+          - 15672:15672
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: |
+          npm run build:shared
+          npx tsc --noEmit -p services/api-service/tsconfig.json
+          npx tsc --noEmit -p services/results-service/tsconfig.json
+          npx tsc --noEmit -p services/worker-backend/tsconfig.json
+          npx tsc --noEmit -p services/ai-service/tsconfig.json
+
+      - name: Unit + Integration tests
+        run: npm test -- --coverage --reporter=verbose
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'dummy-key-for-tests' }}
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: false
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Start services
+        run: |
+          cp .env.example .env 2>/dev/null || echo "GEMINI_API_KEY=dummy" > .env
+          docker compose up -d
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'dummy-key-for-tests' }}
+
+      - name: Wait for services to be healthy
+        run: |
+          timeout 120 bash -c 'until curl -sf http://localhost:3000/health; do sleep 2; done'
+          timeout 120 bash -c 'until curl -sf http://localhost:3004/health; do sleep 2; done'
+          echo "All services healthy"
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          PLAYWRIGHT_TEST_BASE_URL: http://localhost:3006
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v

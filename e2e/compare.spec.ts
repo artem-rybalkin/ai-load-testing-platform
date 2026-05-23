@@ -45,13 +45,13 @@ test.describe('Compare flow', () => {
     await page.goto('/results');
     await page.waitForLoadState('networkidle');
 
-    // Both tests should appear in the list
-    await expect(page.locator(`a[href="/results/${idA}"]`)).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator(`a[href="/results/${idB}"]`)).toBeVisible({ timeout: 5_000 });
+    // Both tests should appear in the list (use first() — results page may have multiple links per row)
+    await expect(page.locator(`a[href="/results/${idA}"]`).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`a[href="/results/${idB}"]`).first()).toBeVisible({ timeout: 5_000 });
 
     // Select both via checkboxes (table row containing the testId link)
-    const rowA = page.locator(`tr:has(a[href="/results/${idA}"])`);
-    const rowB = page.locator(`tr:has(a[href="/results/${idB}"])`);
+    const rowA = page.locator(`tr:has(a[href="/results/${idA}"])`).first();
+    const rowB = page.locator(`tr:has(a[href="/results/${idB}"])`).first();
 
     await rowA.locator('input[type="checkbox"]').click();
     await rowB.locator('input[type="checkbox"]').click();

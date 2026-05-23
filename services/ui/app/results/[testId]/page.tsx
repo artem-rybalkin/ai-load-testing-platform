@@ -175,7 +175,7 @@ export default function ResultPage() {
 
     if (result.status === 'completed' || result.status === 'failed') return;
 
-    const iv = setInterval(fetchLive, 3000);
+    const iv = setInterval(fetchLive, 2000);
     return () => clearInterval(iv);
   }, [testId, result?.status, result?.type]);
 
@@ -397,21 +397,55 @@ export default function ResultPage() {
               <div className="col-span-1 lg:col-span-3">
                 <MetricCell label="p99 Response" value={Math.round(m.p99ResponseTime ?? 0)} unit="ms" />
               </div>
-              {m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0 && (
+              {((m as any).errorBreakdown || (m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0)) && (
                 <div className="col-span-1 lg:col-span-3">
                   <BentoCard>
                     <div className="p-3">
-                      <div className="text-[10px] font-mono font-semibold text-[#57606a] uppercase tracking-wide mb-2">Status codes</div>
-                      <div className="space-y-0.5">
-                        {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
-                          <div key={code} className="flex items-center justify-between text-[12px] font-mono">
-                            <span className={code.startsWith('2') ? 'text-[#1f883d]' : code.startsWith('4') || code.startsWith('5') ? 'text-[#cf222e]' : 'text-[#57606a]'}>
-                              {code}
-                            </span>
-                            <span className="text-[#57606a]">×{count}</span>
+                      <div className="text-[10px] font-mono font-semibold text-[#57606a] uppercase tracking-wide mb-2">Error Breakdown</div>
+                      {(m as any).errorBreakdown ? (() => {
+                        const eb = (m as any).errorBreakdown;
+                        const total = eb.success + eb.clientError + eb.serverError + eb.timeout + eb.networkError;
+                        const pct = (n: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '0%';
+                        const rows = [
+                          { label: '✓ Success',    count: eb.success,      cls: 'text-[#1f883d]' },
+                          { label: '⚠ Client 4xx', count: eb.clientError,  cls: 'text-[#9a6700]' },
+                          { label: '✗ Server 5xx', count: eb.serverError,  cls: 'text-[#cf222e]' },
+                          { label: '⏱ Timeout',    count: eb.timeout,      cls: 'text-[#cf222e]' },
+                          { label: '✗ Network',    count: eb.networkError, cls: 'text-[#cf222e]' },
+                        ];
+                        return (
+                          <div className="space-y-0.5">
+                            {rows.filter(r => r.count > 0 || r.label.includes('Success')).map(r => (
+                              <div key={r.label} className="flex items-center justify-between text-[11px] font-mono">
+                                <span className={r.cls}>{r.label}</span>
+                                <span className="text-[#57606a]">{r.count.toLocaleString()} <span className="text-[#8c959f]">({pct(r.count)})</span></span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        );
+                      })() : (
+                        <div className="space-y-0.5">
+                          {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
+                            <div key={code} className="flex items-center justify-between text-[12px] font-mono">
+                              <span className={code.startsWith('2') ? 'text-[#1f883d]' : code.startsWith('4') || code.startsWith('5') ? 'text-[#cf222e]' : 'text-[#57606a]'}>{code}</span>
+                              <span className="text-[#57606a]">×{count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(m as any).errorBreakdown && m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0 && (
+                        <details className="mt-2">
+                          <summary className="text-[10px] text-[#8c959f] cursor-pointer hover:text-[#57606a]">Raw status codes</summary>
+                          <div className="space-y-0.5 mt-1">
+                            {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
+                              <div key={code} className="flex items-center justify-between text-[11px] font-mono">
+                                <span className={code.startsWith('2') ? 'text-[#1f883d]' : 'text-[#cf222e]'}>{code}</span>
+                                <span className="text-[#8c959f]">×{count}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
                     </div>
                   </BentoCard>
                 </div>

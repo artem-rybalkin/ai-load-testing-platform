@@ -4,7 +4,9 @@ import Sidebar from "@/app/components/Sidebar";
 import BottomNav from "@/app/components/BottomNav";
 import TopBar from "@/app/components/TopBar";
 import ActiveTests from "@/app/components/ActiveTests";
+import WorkerHealth from "@/app/components/WorkerHealth";
 import SystemHealth from "@/app/components/SystemHealth";
+import AIStatus from "@/app/components/AIStatus";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,6 +33,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="flex-1 min-w-0 flex flex-col">
             <TopBar />
             <ActiveTests />
+            <WorkerHealth />
+            <AIStatus />
             <SystemHealth />
             <main className="flex-1 pb-14 lg:pb-0">
               {children}

@@ -80,7 +80,9 @@ const startConsumer = async (): Promise<void> => {
           // falls through to generateScript below; clear scriptId so worker overwrites the row
           test = { ...test, scriptId: undefined };
         } else {
-          const verdict = await compareDescriptions(test.description, test.cachedScriptDescription);
+          // Skip Gemini comparison if descriptions are identical (saves quota)
+          const same = test.description.trim().toLowerCase() === test.cachedScriptDescription.trim().toLowerCase();
+          const verdict = same ? 'REUSE' : await compareDescriptions(test.description, test.cachedScriptDescription);
           log.info({ testId: test.id, verdict }, 'Description comparison result');
           if (verdict === 'REUSE') {
             const reused: EnrichedTestRequest = { ...test, generatedScript: test.cachedScript, reusedScript: true };

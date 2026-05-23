@@ -11,12 +11,12 @@ const SERVICE_LABELS: Record<string, string> = {
   'worker-client':   'Browser Worker',
 };
 
-const SERVICE_IMPACT: Record<string, string> = {
-  'ai-service':     'New tests cannot be started',
-  'worker-backend': 'Backend & flow tests will queue',
-  'worker-client':  'Browser tests will queue',
-  'api-service':    'Test creation unavailable',
-  'results-service':'Results unavailable',
+const SERVICE_IMPACT: Record<string, (s: ServiceHealth) => string> = {
+  'ai-service':     () => 'New tests cannot be started',
+  'worker-backend': s => s.status === 'saturated' ? 'At capacity — new tests queuing' : 'Backend & flow tests will queue',
+  'worker-client':  s => s.status === 'saturated' ? 'At capacity — new tests queuing' : 'Browser tests will queue',
+  'api-service':    () => 'Test creation unavailable',
+  'results-service':() => 'Results unavailable',
 };
 
 const STORAGE_KEY = 'systemHealthDismissed';
@@ -72,7 +72,7 @@ export default function SystemHealth() {
               {' '}
               <span className="text-[#bf8700]">{s.status}</span>
               {SERVICE_IMPACT[s.name] && (
-                <span className="text-[#9a6700] font-normal"> — {SERVICE_IMPACT[s.name]}</span>
+                <span className="text-[#9a6700] font-normal"> — {SERVICE_IMPACT[s.name](s)}</span>
               )}
             </span>
           ))}

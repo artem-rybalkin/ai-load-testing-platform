@@ -58,7 +58,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
     '/tests',
     async (request, reply) => {
-      const { type, targetUrl, description, options, thresholds, steps, envVars } = request.body;
+      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename } = request.body;
 
       const validTypes: TestType[] = ['backend', 'client-side', 'flow'];
       if (!validTypes.includes(type)) {
@@ -93,6 +93,9 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         thresholds,
         steps,
         envVars,
+        testData,
+        csvData,
+        csvFilename,
         scriptCacheKey: flowCacheKey,
         createdAt: new Date().toISOString(),
       };

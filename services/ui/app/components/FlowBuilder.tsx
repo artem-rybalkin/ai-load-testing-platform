@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
-import { FlowStep } from '@/lib/api';
+import { FlowStep, ExtractRule, ExtractSource } from '@/lib/api';
 
 interface EnvVar { key: string; value: string }
 
@@ -10,7 +10,18 @@ interface Props {
   envVars: EnvVar[];
   onChange: (steps: FlowStep[]) => void;
   onEnvVarsChange: (vars: EnvVar[]) => void;
+  testData: Array<Record<string, string>>;
+  onTestDataChange: (rows: Array<Record<string, string>>) => void;
+  csvFile: { name: string; data: string } | null;
+  onCsvChange: (file: { name: string; data: string } | null) => void;
 }
+
+const SOURCE_PLACEHOLDERS: Record<ExtractSource, string> = {
+  jsonpath: '$.data.token',
+  header:   'X-Auth-Token',
+  cookie:   'session',
+  regex:    'value="([^"]+)"',
+};
 
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
 
@@ -71,8 +82,9 @@ const parseHar = (raw: string): FlowStep[] => {
   }
 };
 
-export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange }: Props) {
+export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange, testData, onTestDataChange, csvFile, onCsvChange }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const csvRef  = useRef<HTMLInputElement>(null);
 
   const update = (i: number, patch: Partial<FlowStep>) => {
     const next = steps.map((s, idx) => idx === i ? { ...s, ...patch } : s);
@@ -91,13 +103,14 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange 
   const setExtractKey = (stepIdx: number, oldKey: string, newKey: string) => {
     const s = steps[stepIdx];
     const entries = Object.entries(s.extract ?? {});
-    const updated: Record<string, string> = {};
+    const updated: Record<string, ExtractRule> = {};
     for (const [k, v] of entries) updated[k === oldKey ? newKey : k] = v;
     update(stepIdx, { extract: updated });
   };
 
-  const setExtractVal = (stepIdx: number, key: string, val: string) => {
-    update(stepIdx, { extract: { ...steps[stepIdx].extract, [key]: val } });
+  const setExtractRule = (stepIdx: number, key: string, patch: Partial<ExtractRule>) => {
+    const current = steps[stepIdx].extract?.[key] ?? { source: 'jsonpath' as ExtractSource, expression: '' };
+    update(stepIdx, { extract: { ...steps[stepIdx].extract, [key]: { ...current, ...patch } } });
   };
 
   const removeExtract = (stepIdx: number, key: string) => {
@@ -106,7 +119,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange 
   };
 
   const addExtract = (stepIdx: number) => {
-    update(stepIdx, { extract: { ...steps[stepIdx].extract, '': '' } });
+    update(stepIdx, { extract: { ...steps[stepIdx].extract, '': { source: 'jsonpath', expression: '' } } });
   };
 
   const handleHar = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -120,6 +133,45 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange 
     };
     reader.readAsText(file);
     if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const text = ev.target?.result as string;
+      onCsvChange({ name: file.name, data: btoa(unescape(encodeURIComponent(text))) });
+    };
+    reader.readAsText(file);
+    if (csvRef.current) csvRef.current.value = '';
+  };
+
+  const columns = testData.length > 0 ? Object.keys(testData[0]) : [];
+
+  const addDataRow = () => {
+    const empty: Record<string, string> = {};
+    columns.forEach(c => { empty[c] = ''; });
+    onTestDataChange([...testData, empty]);
+  };
+
+  const removeDataRow = (i: number) => onTestDataChange(testData.filter((_, idx) => idx !== i));
+
+  const addDataColumn = () => {
+    const col = `col${columns.length + 1}`;
+    onTestDataChange(testData.map(row => ({ ...row, [col]: '' })));
+  };
+
+  const renameColumn = (oldCol: string, newCol: string) => {
+    onTestDataChange(testData.map(row => {
+      const newRow: Record<string, string> = {};
+      for (const [k, v] of Object.entries(row)) newRow[k === oldCol ? newCol : k] = v;
+      return newRow;
+    }));
+  };
+
+  const updateCell = (rowIdx: number, col: string, val: string) => {
+    onTestDataChange(testData.map((row, i) => i === rowIdx ? { ...row, [col]: val } : row));
   };
 
   const updateEnvVar = (i: number, field: 'key' | 'value', val: string) => {
@@ -196,22 +248,32 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange 
                 <span className="text-xs text-gray-500 font-medium">Extract variables from response</span>
                 <button type="button" onClick={() => addExtract(i)} className="text-xs text-blue-600 hover:underline">+ add</button>
               </div>
-              {Object.entries(step.extract ?? {}).map(([key, val]) => (
-                <div key={key} className="flex gap-1 mb-1">
+              {Object.entries(step.extract ?? {}).map(([key, rule]) => (
+                <div key={key} className="flex gap-1 mb-1 items-center">
                   <input
                     type="text"
                     placeholder="varName"
                     value={key}
                     onChange={e => setExtractKey(i, key, e.target.value)}
-                    className="w-28 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none"
+                    className="w-24 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none"
                   />
-                  <span className="text-gray-400 text-xs self-center">←</span>
+                  <span className="text-gray-400 text-xs">←</span>
+                  <select
+                    value={rule.source}
+                    onChange={e => setExtractRule(i, key, { source: e.target.value as ExtractSource })}
+                    className="border border-gray-200 rounded px-1 py-0.5 text-xs bg-white focus:outline-none"
+                  >
+                    <option value="jsonpath">body</option>
+                    <option value="header">header</option>
+                    <option value="cookie">cookie</option>
+                    <option value="regex">regex</option>
+                  </select>
                   <input
                     type="text"
-                    placeholder="JSON path, e.g. token"
-                    value={val}
-                    onChange={e => setExtractVal(i, key, e.target.value)}
-                    className="flex-1 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none"
+                    placeholder={SOURCE_PLACEHOLDERS[rule.source]}
+                    value={rule.expression}
+                    onChange={e => setExtractRule(i, key, { expression: e.target.value })}
+                    className="flex-1 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none font-mono"
                   />
                   <button type="button" onClick={() => removeExtract(i, key)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
                 </div>
@@ -258,6 +320,90 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange 
         {envVars.length === 0 && (
           <p className="text-xs text-gray-400">No variables. Click + add if your flow requires credentials.</p>
         )}
+      </div>
+
+      {/* Test data — inline table or CSV */}
+      <div className="border border-gray-200 rounded-xl p-4 bg-white">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-medium text-gray-700">Test data (parameterization)</span>
+        </div>
+        <p className="text-xs text-gray-400 mb-3">
+          Distribute different data to each VU. Use <code className="bg-gray-100 px-1 rounded">row.columnName</code> in the generated script.
+        </p>
+
+        {/* Inline table */}
+        {!csvFile && (
+          <>
+            {testData.length > 0 && (
+              <div className="overflow-x-auto mb-2">
+                <table className="text-xs w-full border-collapse">
+                  <thead>
+                    <tr>
+                      {columns.map(col => (
+                        <th key={col} className="border border-gray-200 px-1 py-0.5">
+                          <input
+                            type="text"
+                            value={col}
+                            onChange={e => renameColumn(col, e.target.value)}
+                            className="w-full bg-transparent text-center font-semibold text-gray-600 focus:outline-none"
+                          />
+                        </th>
+                      ))}
+                      <th className="w-6" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {testData.map((row, ri) => (
+                      <tr key={ri}>
+                        {columns.map(col => (
+                          <td key={col} className="border border-gray-200 px-1 py-0.5">
+                            <input
+                              type="text"
+                              value={row[col] ?? ''}
+                              onChange={e => updateCell(ri, col, e.target.value)}
+                              className="w-full bg-transparent focus:outline-none font-mono"
+                            />
+                          </td>
+                        ))}
+                        <td className="pl-1">
+                          <button type="button" onClick={() => removeDataRow(ri)} className="text-gray-400 hover:text-red-500">✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => {
+                if (testData.length === 0) onTestDataChange([{ col1: '', col2: '' }]);
+                else addDataRow();
+              }} className="text-xs text-blue-600 hover:underline">+ add row</button>
+              {testData.length > 0 && (
+                <button type="button" onClick={addDataColumn} className="text-xs text-blue-600 hover:underline">+ add column</button>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* CSV upload */}
+        <div className={`${testData.length > 0 ? 'mt-3 pt-3 border-t border-gray-100' : ''}`}>
+          {csvFile ? (
+            <div className="flex items-center gap-2 text-xs text-gray-600">
+              <span>📄 {csvFile.name}</span>
+              <button type="button" onClick={() => onCsvChange(null)} className="text-gray-400 hover:text-red-500">✕</button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => csvRef.current?.click()}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              {testData.length > 0 ? 'Or upload CSV instead' : 'Upload CSV file'}
+            </button>
+          )}
+          <input ref={csvRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleCsvUpload} />
+        </div>
       </div>
     </div>
   );

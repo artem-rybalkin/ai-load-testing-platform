@@ -9,12 +9,12 @@ import Link from 'next/link';
 interface EnvVar { key: string; value: string }
 
 interface Thresholds {
-  p95: string; avg: string; errorRate: string;
+  p95: string; avg: string; errorRate: string; serverErrorRate: string; timeoutRate: string;
   lcp: string; fcp: string; ttfb: string; cls: string;
 }
 
 const DEFAULT_THRESHOLDS: Thresholds = {
-  p95: '1000', avg: '500', errorRate: '1',
+  p95: '1000', avg: '500', errorRate: '1', serverErrorRate: '1', timeoutRate: '1',
   lcp: '2500', fcp: '1800', ttfb: '800', cls: '0.1',
 };
 
@@ -143,9 +143,15 @@ function HomeContent() {
     duration: '30s',
     rampUp: '',
     collectWebVitals: true,
-    profile: 'load' as 'load' | 'spike' | 'capacity' | 'soak'
+    profile: 'load' as 'load' | 'spike' | 'capacity' | 'soak',
+    httpKeepAlive: true,
+    httpTimeout: '',
+    httpHttp2: false,
+    httpDiscardBodies: false,
   });
   const [flowSteps, setFlowSteps] = useState<FlowStep[]>([]);
+  const [flowTestData, setFlowTestData] = useState<Array<Record<string, string>>>([]);
+  const [flowCsvFile, setFlowCsvFile] = useState<{ name: string; data: string } | null>(null);
   const [flowEnvVars, setFlowEnvVars] = useState<EnvVar[]>([]);
 
   const DURATION_OPTIONS = ['30s', '1m', '2m', '5m', '10m', '30m'];
@@ -269,6 +275,16 @@ function HomeContent() {
     }
   };
 
+  const buildHttpOptions = () => {
+    if (form.type === 'client-side') return undefined;
+    const opts: Record<string, unknown> = {};
+    if (!form.httpKeepAlive) opts.keepAlive = false;
+    if (form.httpTimeout)    opts.timeout = form.httpTimeout;
+    if (form.httpHttp2)      opts.http2 = true;
+    if (form.httpDiscardBodies) opts.discardResponseBodies = true;
+    return Object.keys(opts).length > 0 ? opts : undefined;
+  };
+
   const buildThresholds = () => {
     if (!showThresholds) return undefined;
     if (form.type === 'client-side') {
@@ -280,9 +296,11 @@ function HomeContent() {
       };
     }
     return {
-      ...(thresholds.p95       ? { p95:       Number(thresholds.p95)       } : {}),
-      ...(thresholds.avg       ? { avg:       Number(thresholds.avg)       } : {}),
-      ...(thresholds.errorRate ? { errorRate: Number(thresholds.errorRate) } : {}),
+      ...(thresholds.p95             ? { p95:             Number(thresholds.p95)             } : {}),
+      ...(thresholds.avg             ? { avg:             Number(thresholds.avg)             } : {}),
+      ...(thresholds.errorRate       ? { errorRate:       Number(thresholds.errorRate)       } : {}),
+      ...(thresholds.serverErrorRate ? { serverErrorRate: Number(thresholds.serverErrorRate) } : {}),
+      ...(thresholds.timeoutRate     ? { timeoutRate:     Number(thresholds.timeoutRate)     } : {}),
     };
   };
 
@@ -305,17 +323,21 @@ function HomeContent() {
           type: 'flow',
           targetUrl: flowSteps[0]?.url ?? '',
           description: form.description || `Flow test (${flowSteps.length} steps)`,
-          options: { vus: form.vus, duration: form.duration, ...(form.rampUp ? { rampUp: form.rampUp } : {}) },
+          options: { vus: form.vus, duration: form.duration, ...(form.rampUp ? { rampUp: form.rampUp } : {}), ...(buildHttpOptions() ? { httpOptions: buildHttpOptions() } : {}) },
           steps: flowSteps,
           envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
+          testData: flowTestData.length > 0 ? flowTestData : undefined,
+          csvData: flowCsvFile?.data,
+          csvFilename: flowCsvFile?.name,
           thresholds: buildThresholds(),
         });
         if (res.test?.id) router.push(`/results/${res.test.id}`);
         return;
       }
 
+      const httpOpts = buildHttpOptions();
       const options = form.type === 'backend'
-        ? { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}) }
+        ? { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}), ...(httpOpts ? { httpOptions: httpOpts } : {}) }
         : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals };
 
       const res = await createTest({
@@ -392,6 +414,10 @@ function HomeContent() {
                   envVars={flowEnvVars}
                   onChange={setFlowSteps}
                   onEnvVarsChange={setFlowEnvVars}
+                  testData={flowTestData}
+                  onTestDataChange={setFlowTestData}
+                  csvFile={flowCsvFile}
+                  onCsvChange={setFlowCsvFile}
                 />
               )}
 
@@ -522,6 +548,43 @@ function HomeContent() {
                         />
                       </div>
                     )}
+
+                    {/* HTTP settings — backend/flow only */}
+                    {form.type !== 'client-side' && (
+                      <div className="pt-2 border-t border-[#eaeef2]">
+                        <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-2">HTTP Settings</label>
+                        <div className="space-y-2">
+                          <label className="flex items-center gap-2 text-[12px] text-[#24292f] cursor-pointer">
+                            <input type="checkbox" checked={form.httpKeepAlive}
+                              onChange={e => setForm(f => ({ ...f, httpKeepAlive: e.target.checked }))}
+                              className="rounded-sm border-[#d0d7de]"
+                            />
+                            Keep-alive connections
+                          </label>
+                          <label className="flex items-center gap-2 text-[12px] text-[#24292f] cursor-pointer">
+                            <input type="checkbox" checked={form.httpHttp2}
+                              onChange={e => setForm(f => ({ ...f, httpHttp2: e.target.checked }))}
+                              className="rounded-sm border-[#d0d7de]"
+                            />
+                            Force HTTP/2
+                          </label>
+                          <label className="flex items-center gap-2 text-[12px] text-[#24292f] cursor-pointer">
+                            <input type="checkbox" checked={form.httpDiscardBodies}
+                              onChange={e => setForm(f => ({ ...f, httpDiscardBodies: e.target.checked }))}
+                              className="rounded-sm border-[#d0d7de]"
+                            />
+                            Discard response bodies <span className="text-[#8c959f]">(faster, saves memory)</span>
+                          </label>
+                          <div>
+                            <label className="block text-[11px] text-[#57606a] mb-1">Request timeout <span className="text-[#8c959f]">(e.g. 30s, 1m)</span></label>
+                            <input type="text" placeholder="30s" value={form.httpTimeout}
+                              onChange={e => setForm(f => ({ ...f, httpTimeout: e.target.value }))}
+                              className={inputCls}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -545,9 +608,11 @@ function HomeContent() {
                       { key: 'ttfb', label: 'TTFB ms' },
                       { key: 'cls',  label: 'CLS'     },
                     ] : [
-                      { key: 'p95',       label: 'p95 ms'  },
-                      { key: 'avg',       label: 'Avg ms'  },
-                      { key: 'errorRate', label: 'Err %'   },
+                      { key: 'p95',             label: 'p95 ms'     },
+                      { key: 'avg',             label: 'Avg ms'     },
+                      { key: 'errorRate',       label: 'Err %'      },
+                      { key: 'serverErrorRate', label: '5xx err %'  },
+                      { key: 'timeoutRate',     label: 'Timeout %'  },
                     ] as const).map(({ key, label }) => (
                       <div key={key}>
                         <label className="block text-[10px] text-[#57606a] mb-1">{label} max</label>

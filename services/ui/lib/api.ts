@@ -5,13 +5,20 @@ const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
 const authHeaders = (): Record<string, string> =>
   API_KEY ? { 'X-API-Key': API_KEY } : {};
 
+export type ExtractSource = 'jsonpath' | 'header' | 'cookie' | 'regex';
+
+export interface ExtractRule {
+  source: ExtractSource;
+  expression: string;
+}
+
 export interface FlowStep {
   name: string;
   url: string;
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   body?: string;
   headers?: Record<string, string>;
-  extract?: Record<string, string>;
+  extract?: Record<string, ExtractRule>;
 }
 
 export interface TestRequest {
@@ -24,11 +31,20 @@ export interface TestRequest {
     rampUp?: string;
     sessions?: number;
     collectWebVitals?: boolean;
+    httpOptions?: {
+      keepAlive?: boolean;
+      timeout?: string;
+      http2?: boolean;
+      discardResponseBodies?: boolean;
+    };
   };
   steps?: FlowStep[];
   envVars?: Record<string, string>;
+  testData?: Array<Record<string, string>>;
+  csvData?: string;
+  csvFilename?: string;
   thresholds?: {
-    p95?: number; avg?: number; errorRate?: number;
+    p95?: number; avg?: number; errorRate?: number; serverErrorRate?: number; timeoutRate?: number;
     lcp?: number; fcp?: number; ttfb?: number; cls?: number;
   };
 }
@@ -248,10 +264,19 @@ export const deleteTemplate = async (id: string): Promise<void> => {
   await fetch(`${RESULTS_URL}/templates/${id}`, { method: 'DELETE', headers: authHeaders() });
 };
 
+export interface WorkerMetrics {
+  cpuPercent: number;
+  memoryMb: number;
+  memoryPercent: number;
+  activeTests: number;
+  maxTests: number;
+}
+
 export interface ServiceHealth {
   name: string;
-  status: 'ok' | 'degraded' | 'unreachable';
+  status: 'ok' | 'degraded' | 'saturated' | 'unreachable';
   checks: Record<string, string>;
+  metrics?: WorkerMetrics;
 }
 
 export interface SystemHealth {
@@ -261,5 +286,16 @@ export interface SystemHealth {
 
 export const getSystemHealth = async (): Promise<SystemHealth> => {
   const res = await fetch(`${RESULTS_URL}/system/health`, { cache: 'no-store', headers: authHeaders() });
+  return res.json();
+};
+
+export interface AIStatus {
+  quotaExceeded: boolean;
+  message?: string;
+  since?: string;
+}
+
+export const getAIStatus = async (): Promise<AIStatus> => {
+  const res = await fetch(`${RESULTS_URL}/system/ai-status`, { cache: 'no-store' });
   return res.json();
 };

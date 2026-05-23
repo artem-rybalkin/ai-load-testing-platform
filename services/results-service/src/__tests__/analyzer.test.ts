@@ -319,3 +319,53 @@ describe('analyzeResult — custom SLO thresholds', () => {
     expect(result.thresholdViolations[0]).toMatch(/LCP/);
   });
 });
+
+// ─── Error breakdown thresholds ───────────────────────────────────────────────
+
+describe('analyzeResult — error breakdown thresholds', () => {
+  it('fails when server error rate exceeds threshold', () => {
+    const curr = backend({
+      requestsTotal: 100,
+      requestsFailed: 5,
+      errorBreakdown: { success: 90, clientError: 5, serverError: 5, timeout: 0, networkError: 0 },
+    });
+
+    const result = analyzeResult(curr, null, { serverErrorRate: 3 });
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations.some(v => /server error/i.test(v) && /5xx/.test(v))).toBe(true);
+  });
+
+  it('fails when timeout rate exceeds threshold', () => {
+    const curr = backend({
+      requestsTotal: 100,
+      requestsFailed: 4,
+      errorBreakdown: { success: 96, clientError: 0, serverError: 0, timeout: 4, networkError: 0 },
+    });
+
+    const result = analyzeResult(curr, null, { timeoutRate: 2 });
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations.some(v => /timeout/i.test(v))).toBe(true);
+  });
+
+  it('passes when error breakdown is within thresholds', () => {
+    const curr = backend({
+      requestsTotal: 100,
+      errorBreakdown: { success: 98, clientError: 1, serverError: 1, timeout: 0, networkError: 0 },
+    });
+
+    const result = analyzeResult(curr, null, { serverErrorRate: 3, timeoutRate: 2 });
+
+    expect(result.thresholdViolations.filter(v => /server error|timeout/i.test(v))).toHaveLength(0);
+  });
+
+  it('ignores error breakdown checks when errorBreakdown is absent', () => {
+    const curr = backend({ requestsTotal: 100 }); // no errorBreakdown field
+
+    const result = analyzeResult(curr, null, { serverErrorRate: 0.1 });
+
+    // Should not throw or produce breakdown violations when field is absent
+    expect(result.thresholdViolations.every(v => !/server error|timeout/i.test(v))).toBe(true);
+  });
+});

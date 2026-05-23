@@ -9,7 +9,11 @@ test.describe('Cancel flow', () => {
   test('cancels a running test and shows cancelled status', async ({ page }) => {
     await page.goto('/');
 
-    await page.fill('input[type="url"]', 'http://localhost:3000/health');
+    await page.fill('input[type="text"][placeholder*="example"]', 'http://localhost:3000/health');
+
+    // Open Advanced settings to access load profile (now hidden by default)
+    const advancedBtn = page.getByText(/advanced settings/i);
+    await advancedBtn.click();
 
     // Use soak profile so the test runs long enough to cancel
     await page.getByRole('button', { name: /soak/i }).click();
@@ -25,7 +29,7 @@ test.describe('Cancel flow', () => {
 
     await cancelBtn.click();
 
-    // Status should update to "cancelled"
-    await expect(page.getByText(/cancelled/i)).toBeVisible({ timeout: 15_000 });
+    // Status should update to "cancelled" (use first() to handle multiple matches)
+    await expect(page.getByText(/cancelled/i).first()).toBeVisible({ timeout: 15_000 });
   });
 });

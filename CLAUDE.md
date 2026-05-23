@@ -100,16 +100,19 @@ ai-load-testing-platform/
     │   └── src/
     │       ├── index.ts      # RabbitMQ consumer: comparison branch + generation
     │       ├── generator.ts  # generateScript (BACKEND/CLIENT/FLOW_PROMPT) + compareDescriptions
-    │       └── logger.ts
-    ├── worker-backend/       # @alt/worker-backend
-    │   └── src/
-    │       ├── index.ts      # k6 runner, saveScript (with description), used_count on reuse,
-    │       │                 #   Fastify health server on PORT (default 3002)
-    │       ├── parser.ts     # parseK6Output, parseK6StatusCodes, aggregateWindow (per-step),
-    │       │                 #   parseK6GroupMetrics (per-step group metrics)
+    │       │                 #   renderExtractLine, parameterization instructions (SharedArray)
     │       └── logger.ts
     │   └── src/__tests__/
-    │       └── parser.test.ts # unit tests for all parser functions
+    │       └── generator.test.ts # FLOW_PROMPT extraction rules, parameterization, compareDescriptions
+    ├── worker-backend/       # @alt/worker-backend
+    │   └── src/
+    │       ├── index.ts      # k6 runner, per-test runDir, data file writing (data.json/data.csv),
+    │       │                 #   saveScript (with description), Fastify health server (port 3002)
+    │       ├── parser.ts     # parseK6Output, parseK6Errors (replaces parseK6StatusCodes),
+    │       │                 #   aggregateWindow (per-step), parseK6GroupMetrics
+    │       └── logger.ts
+    │   └── src/__tests__/
+    │       └── parser.test.ts # unit tests for all parser functions incl. error categorization
     ├── worker-client/        # @alt/worker-client
     │   └── src/
     │       └── index.ts      # Puppeteer sessions, Web Vitals, Lighthouse, DLQ retry,
@@ -156,14 +159,16 @@ ai-load-testing-platform/
                 ├── BottomNav.tsx     # mobile bottom tab bar (5 items, lg:hidden)
                 ├── TopBar.tsx        # mobile top bar h-10 with page title (lg:hidden)
                 ├── ActiveTests.tsx   # inline strip (bg-[#ddf4ff]) showing running tests
-                ├── SystemHealth.tsx  # amber warning strip — polls /system/health every 15s
+                ├── SystemHealth.tsx  # amber warning strip — polls /system/health every 15s; handles saturated
+                ├── WorkerHealth.tsx  # compact CPU/memory/active-test bars per worker (polls /system/health)
                 ├── BackendChart.tsx  # bar charts: response time distribution + request breakdown
                 ├── ClientChart.tsx   # radar chart for Web Vitals + Lighthouse gauge dials
                 ├── FlowStepChart.tsx # grouped bar chart: avg+p95 per step (flow results)
                 ├── AnalysisPanel.tsx # perf status badge + threshold violations + regression diffs
                 ├── RealtimeChart.tsx # 3-panel live metrics (response time, error rate, throughput)
                 ├── TrendChart.tsx    # p95/LCP trend line across runs for same URL
-                └── FlowBuilder.tsx   # multi-step flow editor + HAR import
+                └── FlowBuilder.tsx   # multi-step flow editor + HAR import + extract source selector
+                                    #   + inline data table (parameterization) + CSV file upload
 ```
 
 ## Database Schema
@@ -265,11 +270,14 @@ type TestType    = 'backend' | 'client-side' | 'flow'
 type TestStatus  = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak'
 
+type ExtractSource = 'jsonpath' | 'header' | 'cookie' | 'regex'
+interface ExtractRule { source: ExtractSource; expression: string }
+
 interface FlowStep {
   name: string; url: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
   body?: string; headers?: Record<string, string>
-  extract?: Record<string, string>  // variable_name → jsonpath field name
+  extract?: Record<string, ExtractRule>  // variable_name → extraction rule (source + expression)
 }
 
 interface StepMetrics {
@@ -280,9 +288,11 @@ interface StepMetrics {
 interface LiveStepMetric { name: string; avgResponseTime: number; rps: number; errorRate: number }
 
 interface SLOThresholds {
-  p95?: number; avg?: number; errorRate?: number
+  p95?: number; avg?: number; errorRate?: number; serverErrorRate?: number; timeoutRate?: number
   lcp?: number; fcp?: number; ttfb?: number; cls?: number
 }
+
+interface ErrorBreakdown { success, clientError, serverError, timeout, networkError: number }
 
 interface TestRequest {
   id: string; type: TestType; targetUrl: string; description: string
@@ -290,6 +300,9 @@ interface TestRequest {
   thresholds?: SLOThresholds
   steps?: FlowStep[]               // for 'flow' type
   envVars?: Record<string, string> // passed to k6 as --env, never stored in DB
+  testData?: Array<Record<string, string>> // inline data table — NOT stored in DB
+  csvData?: string                 // base64-encoded CSV — NOT stored in DB
+  csvFilename?: string
   createdAt: string
 }
 
@@ -302,7 +315,8 @@ interface EnrichedTestRequest extends TestRequest {
   cachedScriptDescription?: string | null  // stored description of the cached script
 }
 
-interface BackendTestOptions { vus, duration, rampUp?, profile?: LoadProfile, peakVus? }
+interface HttpOptions { keepAlive?, timeout?, http2?, discardResponseBodies?: boolean }
+interface BackendTestOptions { vus, duration, rampUp?, profile?: LoadProfile, peakVus?, httpOptions?: HttpOptions }
 interface ClientTestOptions  { sessions, duration, collectWebVitals }
 
 interface BackendMetrics {
@@ -310,8 +324,12 @@ interface BackendMetrics {
   requestsTotal, requestsFailed, avgResponseTime
   p50ResponseTime, p95ResponseTime, p99ResponseTime, rps
   statusCodes?: Record<string, number>
+  errorBreakdown?: ErrorBreakdown  // categorized: success/4xx/5xx/timeout/network
   stepMetrics?: StepMetrics[]      // only for 'flow' type tests
 }
+
+interface WorkerMetrics { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: number }
+interface ServiceHealth { name, status: 'ok'|'degraded'|'saturated'|'unreachable'; checks: Record<string,string>; metrics?: WorkerMetrics }
 
 interface LighthouseScore { performance, accessibility, bestPractices, seo } // 0-100
 interface ClientMetrics   { type: 'client', lcp, fid, cls, ttfb, fcp, lighthouseScore? }
@@ -325,7 +343,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 ### api-service (port 3000)
 - `GET  /health` — deep health check (DB + RabbitMQ); 503 if any dep is down
 - `POST /tests`  — create test
-  - body: `{ type, targetUrl, description, options, thresholds?, steps?, envVars? }`
+  - body: `{ type, targetUrl, description, options, thresholds?, steps?, envVars?, testData?, csvData?, csvFilename? }`
   - `type` = `'backend'` | `'client-side'` | `'flow'`
   - for flow: `steps[]` required, `targetUrl` defaults to `steps[0].url`
   - `envVars` passed to k6 as `--env KEY=VALUE` flags, **not stored in DB**
@@ -677,7 +695,7 @@ docker compose down -v
 # Build shared types (required after any change to packages/shared/src/index.ts)
 npm run build:shared
 
-# Run unit + integration tests (202 tests)
+# Run unit + integration tests (~242 tests)
 npm test
 
 # Run tests in watch mode
@@ -704,16 +722,17 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** 202 tests passing across 13 test files
+**Total:** ~242 tests passing across 14 test files
 
 ### Unit Tests
 | File | Subject | Tests |
 |------|---------|-------|
-| `worker-backend/src/__tests__/parser.test.ts` | `parseK6Output`, `aggregateWindow` (per-step), `parseK6StatusCodes` | 15 |
-| `results-service/src/__tests__/analyzer.test.ts` | `analyzeResult` thresholds + regression | 14 |
-| `api-service/src/__tests__/options.test.ts` | `buildK6Options`, `replaceK6Options` | 12 |
-| `api-service/src/__tests__/index.test.ts` | POST /tests three-way routing, cancel, health | 13 |
+| `worker-backend/src/__tests__/parser.test.ts` | `parseK6Output`, `aggregateWindow` (per-step), `parseK6Errors` (error categorization) | 25 |
+| `results-service/src/__tests__/analyzer.test.ts` | `analyzeResult` thresholds + regression + error breakdown thresholds | 34 |
+| `api-service/src/__tests__/options.test.ts` | `buildK6Options`, `replaceK6Options`, `httpOptions` (http2, discard) | 16 |
+| `api-service/src/__tests__/index.test.ts` | POST /tests routing, parameterization passthrough, cancel, health | 19 |
 | `results-service/src/__tests__/scheduler.test.ts` | `startScheduler`, `triggerSchedule` (mocked cron) | 12 |
+| `ai-service/src/__tests__/generator.test.ts` | `FLOW_PROMPT` ExtractRule rendering, parameterization, `compareDescriptions` | 12 |
 
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
@@ -849,6 +868,22 @@ All phases complete:
 - ✅ **Remaining pages:** compare, schedules, templates, webhooks — GitHub-style cards, no shadows, tight `rounded-md`
 - ✅ **29/29 UI tests passing** after updating mocks and component text to match new design
 
+### Phase 10 — Parameterization & Correlation
+- ✅ **`ExtractRule` type** — `FlowStep.extract` changed from `Record<string,string>` to `Record<string, ExtractRule>` with `source: 'jsonpath'|'header'|'cookie'|'regex'` + `expression`
+- ✅ **FlowBuilder extract source selector** — dropdown per extract row with context-sensitive placeholder; backwards-compatible (jsonpath is default)
+- ✅ **Extraction error handling in FLOW_PROMPT** — AI instructed to import `exec` from `k6/execution` and call `exec.test.abort()` when extracted variable is empty; prevents VUs from continuing with missing correlation data
+- ✅ **Header/cookie/regex extraction** — `FLOW_PROMPT` renders each rule explicitly and instructs Gemini on how to implement each source type
+- ✅ **Inline data table (parameterization)** — FlowBuilder "Test data" section with add/remove rows+columns; stored as `testData?: Array<Record<string,string>>` on `TestRequest` — NOT persisted in DB (like envVars)
+- ✅ **CSV file upload** — FlowBuilder CSV upload; base64-encoded in `csvData` on `TestRequest` — NOT persisted in DB
+- ✅ **`SharedArray` generation** — `FLOW_PROMPT` generates `SharedArray` + `open('./data.json')` or `open('./data.csv')` with round-robin VU distribution `data[(__VU-1) % data.length]` when data is provided
+- ✅ **Per-test run directory** — worker-backend switches from flat tmpdir files to `os.tmpdir()/k6-run-{testId}/`; avoids file collisions at `WORKER_CONCURRENCY > 1`; writes `data.json`/`data.csv` alongside script; cleanup via `rm -rf runDir`
+- ✅ **HTTP options** — `BackendTestOptions.httpOptions?: { keepAlive, timeout, http2, discardResponseBodies }`; injected into k6 options via `buildK6Options()`; UI "HTTP Settings" sub-section in Advanced accordion
+- ✅ **Error categorization** — `parseK6StatusCodes` → `parseK6Errors` returning `{ statusCodes, errorBreakdown: { success, clientError, serverError, timeout, networkError } }`; uses k6 `error_code` tags for timeout/network errors
+- ✅ **Error breakdown UI card** — result page shows counts + percentages per error category; raw status codes in collapsible `<details>`
+- ✅ **SLO thresholds for error categories** — `serverErrorRate` and `timeoutRate` in `SLOThresholds`; checked by analyzer; inputs in UI threshold panel
+- ✅ **Load generator health monitoring** — workers expose CPU%, memory MB/%, active/max test count via `/health`; `GET /system/health` passes `metrics` through; `WorkerHealth` component shows compact resource bars per worker; saturated status triggers amber SystemHealth strip
+- ✅ **Generator tests** — new `ai-service/src/__tests__/generator.test.ts` covering `ExtractRule` rendering, parameterization `SharedArray`, `compareDescriptions` verdicts (12 tests)
+
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)
 - Gemini rate limit: **20 requests/day** on free tier (`gemini-2.5-flash`); `compareDescriptions()` also consumes quota so each new-description test costs 2 calls. Paid key removes daily cap. Backoff retry (60s/120s/180s) handles 429 automatically.
@@ -857,3 +892,6 @@ All phases complete:
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
 - No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
 - Containers run as root — add non-root user to each Dockerfile before production
+- **Re-run from results list** — add a "Re-run" button on each result row that pre-fills the test form with the same URL, description, options, and reuses the cached script directly (skip AI generation entirely)
+- **External k6 script upload** — allow users to paste or upload a custom k6 `.js` script in the test form instead of AI generation; bypass ai-service and send directly to worker queue
+- **Download generated script** — add a download button on the result detail page for the Gemini-generated k6/Puppeteer script (currently only shown as text in a pre block)

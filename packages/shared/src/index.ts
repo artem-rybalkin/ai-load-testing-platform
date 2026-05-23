@@ -3,13 +3,30 @@ export type TestType = 'backend' | 'client-side' | 'flow';
 export type TestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface SLOThresholds {
-  p95?: number;       // ms — default 1000
-  avg?: number;       // ms — default 500
-  errorRate?: number; // % — default 1
-  lcp?: number;       // ms — default 2500
-  fcp?: number;       // ms — default 1800
-  ttfb?: number;      // ms — default 800
-  cls?: number;       // score — default 0.1
+  p95?: number;            // ms — default 1000
+  avg?: number;            // ms — default 500
+  errorRate?: number;      // % — default 1
+  serverErrorRate?: number;// % server (5xx) errors — default 1
+  timeoutRate?: number;    // % timeout errors — default 1
+  lcp?: number;            // ms — default 2500
+  fcp?: number;            // ms — default 1800
+  ttfb?: number;           // ms — default 800
+  cls?: number;            // score — default 0.1
+}
+
+export interface ErrorBreakdown {
+  success: number;      // 2xx
+  clientError: number;  // 4xx
+  serverError: number;  // 5xx
+  timeout: number;      // connection/read timeout (error_code 1020, 1210)
+  networkError: number; // connection refused, DNS failure (error_code 1010, 1050)
+}
+
+export type ExtractSource = 'jsonpath' | 'header' | 'cookie' | 'regex';
+
+export interface ExtractRule {
+  source: ExtractSource; // 'jsonpath' is the default/backwards-compatible mode
+  expression: string;    // JSONPath expression, header name, cookie name, or regex pattern
 }
 
 export interface FlowStep {
@@ -18,7 +35,7 @@ export interface FlowStep {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   body?: string;
   headers?: Record<string, string>;
-  extract?: Record<string, string>; // variable_name → jsonpath expression
+  extract?: Record<string, ExtractRule>; // variable_name → extraction rule
 }
 
 export interface StepMetrics {
@@ -38,10 +55,20 @@ export interface TestRequest {
   thresholds?: SLOThresholds;
   steps?: FlowStep[];
   envVars?: Record<string, string>;
+  testData?: Array<Record<string, string>>; // inline data table — NOT stored in DB
+  csvData?: string;                          // base64-encoded CSV content
+  csvFilename?: string;                      // original filename hint
   createdAt: string;
 }
 
 export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak';
+
+export interface HttpOptions {
+  keepAlive?: boolean;             // default true in k6
+  timeout?: string;                // per-request timeout, e.g. "30s"
+  http2?: boolean;                 // force HTTP/2 where server supports
+  discardResponseBodies?: boolean; // skip body parsing — saves memory on large responses
+}
 
 export interface BackendTestOptions {
   vus: number;
@@ -49,6 +76,7 @@ export interface BackendTestOptions {
   rampUp?: string;
   profile?: LoadProfile;
   peakVus?: number;
+  httpOptions?: HttpOptions;
 }
 
 export interface ClientTestOptions {
@@ -90,6 +118,7 @@ export interface BackendMetrics {
   p99ResponseTime: number;
   rps: number;
   statusCodes?: Record<string, number>;
+  errorBreakdown?: ErrorBreakdown;
   stepMetrics?: StepMetrics[];
 }
 

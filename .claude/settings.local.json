@@ -11,7 +11,12 @@
       "Bash(node -e \"const {PostgreSqlContainer} = require\\('@testcontainers/postgresql'\\); new PostgreSqlContainer\\(\\)\")",
       "Bash(node -e \"const pkg = require\\('c:/Users/Artem/ai-load-testing-platform/node_modules/@testcontainers/postgresql/package.json'\\); console.log\\(pkg.version\\)\")",
       "Bash(node -e \"const {PostgreSqlContainer} = require\\('@testcontainers/postgresql'\\); new PostgreSqlContainer\\('postgres:16-alpine'\\)\")",
-      "Bash(node -e \"require\\('vitest'\\)\")"
+      "Bash(node -e \"require\\('vitest'\\)\")",
+      "Bash(curl -s http://localhost:3006 -o /dev/null -w \"%{http_code}\")",
+      "Bash(curl -s http://localhost:3000/health)",
+      "Bash(curl -s http://localhost:3004/health)",
+      "Bash(curl -s http://localhost:3004/system/health)",
+      "Bash(npx playwright *)"
     ]
   }
 }

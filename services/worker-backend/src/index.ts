@@ -1,16 +1,28 @@
 import amqplib from 'amqplib';
 import { spawn, ChildProcess } from 'child_process';
-import { writeFile, unlink, readFile } from 'fs/promises';
+import { writeFile, unlink, readFile, mkdir, rm } from 'fs/promises';
 import { Pool } from 'pg';
 import * as os from 'os';
 import * as path from 'path';
 import Fastify from 'fastify';
 
 import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint } from '@alt/shared';
-import { parseK6Output, aggregateWindow, parseK6StatusCodes, parseK6GroupMetrics } from './parser';
+import { parseK6Output, aggregateWindow, parseK6Errors, parseK6GroupMetrics } from './parser';
 import { log } from './logger';
 
 let queueConnected = false;
+
+// Rolling CPU usage sampled every 5 seconds
+let cpuPercent = 0;
+let _lastCpu = process.cpuUsage();
+let _lastCpuTime = Date.now();
+setInterval(() => {
+  const delta = process.cpuUsage(_lastCpu);
+  const elapsed = (Date.now() - _lastCpuTime) * 1000; // µs
+  cpuPercent = elapsed > 0 ? Math.min(100, Math.round(((delta.user + delta.system) / elapsed) * 100)) : 0;
+  _lastCpu = process.cpuUsage();
+  _lastCpuTime = Date.now();
+}, 5000);
 
 const QUEUE            = 'backend-tests';
 const CANCEL_EXCHANGE  = 'cancel-fanout';  // fanout — all replicas get every cancel
@@ -18,7 +30,7 @@ const RESULTS_QUEUE    = 'test-results';
 const DLQ              = `${QUEUE}.dlq`;
 const MAX_RETRIES   = 3;
 const RESULTS_URL   = process.env.RESULTS_URL || 'http://results-service:3004';
-const LIVE_INTERVAL_MS     = 5000;
+const LIVE_INTERVAL_MS     = 2000;
 const MAX_TEST_DURATION_MS = parseInt(process.env.K6_MAX_DURATION_MS ?? '600000'); // 10 min
 const GRACE_PERIOD_MS      = 30000;
 const WORKER_CONCURRENCY   = parseInt(process.env.WORKER_CONCURRENCY ?? '1');
@@ -74,15 +86,28 @@ const validateScript = (scriptPath: string): Promise<void> =>
 const runK6Test = async (
   testId: string,
   script: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  testData?: Array<Record<string, string>>,
+  csvData?: string,
 ): Promise<BackendMetrics> => {
-  const scriptPath = path.join(os.tmpdir(), `k6-${testId}.js`);
-  const jsonPath   = `/tmp/k6-live-${testId}.json`;
+  // Per-test directory avoids file collisions when WORKER_CONCURRENCY > 1
+  const runDir    = path.join(os.tmpdir(), `k6-run-${testId}`);
+  await mkdir(runDir, { recursive: true });
+  const scriptPath = path.join(runDir, 'script.js');
+  const jsonPath   = path.join(runDir, 'live.json');
 
   await writeFile(scriptPath, script);
 
+  // Write parameterization data files so k6 open('./data.json') / open('./data.csv') resolves them
+  if (testData && testData.length > 0) {
+    await writeFile(path.join(runDir, 'data.json'), JSON.stringify(testData));
+  }
+  if (csvData) {
+    await writeFile(path.join(runDir, 'data.csv'), Buffer.from(csvData, 'base64'));
+  }
+
   await validateScript(scriptPath).catch(async (err) => {
-    await unlink(scriptPath).catch(() => {});
+    await rm(runDir, { recursive: true, force: true }).catch(() => {});
     throw err;
   });
 
@@ -129,8 +154,7 @@ const runK6Test = async (
       await readAndPost();
 
       const jsonContent = await readFile(jsonPath, 'utf-8').catch(() => '');
-      await unlink(scriptPath).catch(() => {});
-      await unlink(jsonPath).catch(() => {});
+      await rm(runDir, { recursive: true, force: true }).catch(() => {});
 
       // k6 exit codes:
       //   0  — all good
@@ -143,7 +167,9 @@ const runK6Test = async (
       const output = stdout + stderr;
       log.debug({ testId, exitCode: code }, 'k6 full output received');
       const metrics = parseK6Output(output);
-      metrics.statusCodes = parseK6StatusCodes(jsonContent);
+      const { statusCodes, errorBreakdown } = parseK6Errors(jsonContent);
+      metrics.statusCodes = statusCodes;
+      metrics.errorBreakdown = errorBreakdown;
       const stepMetrics = parseK6GroupMetrics(jsonContent);
       if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
 
@@ -160,8 +186,7 @@ const runK6Test = async (
       clearInterval(liveInterval);
       clearTimeout(killTimer);
       runningTests.delete(testId);
-      await unlink(scriptPath).catch(() => {});
-      await unlink(jsonPath).catch(() => {});
+      await rm(runDir, { recursive: true, force: true }).catch(() => {});
       reject(err);
     });
   });
@@ -266,7 +291,7 @@ const start = async (): Promise<void> => {
     try {
       await updateStatus(test.id, 'running');
 
-      const metrics = await runK6Test(test.id, test.generatedScript!, test.envVars);
+      const metrics = await runK6Test(test.id, test.generatedScript!, test.envVars, test.testData, test.csvData);
 
       // r2: check if the test was cancelled while running
       if (cancelledTests.has(test.id)) {
@@ -314,10 +339,20 @@ const startHealthServer = async () => {
     catch { checks.database = 'error'; healthy = false; }
     checks.queue = queueConnected ? 'ok' : 'disconnected';
     if (!queueConnected) healthy = false;
+
+    const mem = process.memoryUsage();
+    const memoryMb = Math.round(mem.rss / 1024 / 1024);
+    const memoryPercent = Math.round(mem.rss / os.totalmem() * 100);
+    const activeTests = runningTests.size;
+    const saturated = activeTests >= WORKER_CONCURRENCY && WORKER_CONCURRENCY > 0;
+    if (saturated) checks.capacity = 'saturated';
+
+    const status = !healthy ? 'degraded' : saturated ? 'saturated' : 'ok';
     return reply.code(healthy ? 200 : 503).send({
-      status: healthy ? 'ok' : 'degraded',
+      status,
       service: 'worker-backend',
       checks,
+      metrics: { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: WORKER_CONCURRENCY },
       timestamp: new Date().toISOString(),
     });
   });

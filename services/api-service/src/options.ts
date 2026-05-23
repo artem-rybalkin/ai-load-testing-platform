@@ -1,8 +1,14 @@
 import { BackendTestOptions } from '@alt/shared';
 
 export const buildK6Options = (opts: BackendTestOptions): string => {
-  const { vus, duration, profile = 'load', peakVus } = opts;
+  const { vus, duration, profile = 'load', peakVus, httpOptions } = opts;
   const peak = peakVus ?? vus * 10;
+
+  // HTTP-level k6 options derived from httpOptions
+  const httpK6 = {
+    ...(httpOptions?.http2               ? { http2: true }                    : {}),
+    ...(httpOptions?.discardResponseBodies ? { discardResponseBodies: true } : {}),
+  };
 
   const obj = (() => {
     switch (profile) {
@@ -43,7 +49,9 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
     }
   })();
 
-  return JSON.stringify(obj, null, 2);
+  // Ensure consistent percentile output: k6 default uses "med=" for p50 and omits p99
+  const summaryTrendStats = ['avg', 'min', 'med', 'max', 'p(50)', 'p(90)', 'p(95)', 'p(99)'];
+  return JSON.stringify({ ...obj, ...httpK6, summaryTrendStats }, null, 2);
 };
 
 export const replaceK6Options = (script: string, newOptionsJson: string): string => {
