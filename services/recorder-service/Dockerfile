@@ -1,6 +1,7 @@
 FROM node:20-alpine
 
 # ── System deps: Chromium + Xvfb virtual display + noVNC browser viewer ───────
+# py3-websockify is the websockify proxy bundled with novnc on Alpine
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -11,7 +12,12 @@ RUN apk add --no-cache \
     xvfb \
     x11vnc \
     novnc \
-    python3
+    python3 \
+    py3-websockify
+
+# Pre-create the X11 Unix socket directory with correct sticky-bit permissions
+# (required because Xvfb runs as non-root and cannot create /tmp/.X11-unix itself)
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
 # Tell puppeteer-core to skip its own Chromium download
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
@@ -31,7 +37,9 @@ RUN npm install
 COPY packages/shared ./packages/shared
 COPY services/recorder-service ./services/recorder-service
 
+# Build shared types first, then the recorder-service itself
 RUN npm run build --workspace=packages/shared
+RUN npm run build --workspace=services/recorder-service
 
 # Hand ownership to the built-in non-root node user (UID 1000).
 # Chromium works correctly as non-root with --no-sandbox flags.

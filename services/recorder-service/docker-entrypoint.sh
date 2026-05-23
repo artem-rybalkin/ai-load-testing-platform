@@ -1,16 +1,43 @@
 #!/bin/sh
-# Start Xvfb virtual display so non-headless Chromium has a screen to render on
+# Entrypoint for recorder-service in Docker.
+# Starts Xvfb virtual display + x11vnc VNC server + noVNC WebSocket proxy,
+# then starts the recorder Node.js service.
+# X11/VNC failures are non-fatal — the recorder still works, just without a visible browser.
+
+# ── 1. Start Xvfb virtual display ────────────────────────────────────────────
 Xvfb :99 -screen 0 1280x800x24 -ac &
 XVFB_PID=$!
 
-# Give Xvfb a moment to initialise
-sleep 1
+# Wait for X11 socket to appear (max 10 seconds)
+i=0
+while [ ! -e /tmp/.X11-unix/X99 ] && [ $i -lt 50 ]; do
+  sleep 0.2
+  i=$((i+1))
+done
 
-# Start VNC server (no password, localhost only — noVNC proxies it to HTTP)
-x11vnc -display :99 -nopw -listen localhost -forever -quiet &
+if [ ! -e /tmp/.X11-unix/X99 ]; then
+  echo "Warning: Xvfb did not start — recording browser will run headlessly"
+else
+  # ── 2. Start x11vnc VNC server ─────────────────────────────────────────────
+  x11vnc -display :99 -nopw -listen 0.0.0.0 -forever -quiet -bg 2>/dev/null || true
 
-# Start noVNC WebSocket → VNC proxy on port 6080
-/usr/share/novnc/utils/launch.sh --vnc localhost:5900 --listen 6080 &
+  # ── 3. Start websockify (noVNC WebSocket-to-VNC proxy) ────────────────────
+  # Alpine installs noVNC web files to /usr/share/webapps/novnc
+  NOVNC_WEB=""
+  for d in /usr/share/webapps/novnc /usr/share/novnc; do
+    if [ -d "$d" ]; then
+      NOVNC_WEB="$d"
+      break
+    fi
+  done
 
-# Start the recorder-service Node.js process
+  if [ -n "$NOVNC_WEB" ]; then
+    python3 -m websockify --web="$NOVNC_WEB" 6080 localhost:5900 &
+    echo "noVNC started at http://0.0.0.0:6080 (web files: $NOVNC_WEB)"
+  else
+    echo "Warning: noVNC web files not found — VNC viewer will not be available on port 6080"
+  fi
+fi
+
+# ── 4. Start recorder-service ─────────────────────────────────────────────────
 exec node dist/index.js
