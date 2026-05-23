@@ -28,20 +28,42 @@ export interface RecordingSessionInternal {
   pending: Map<string, PendingRequest>;
   completed: RecordedRequest[];
   stepCount: number;
+  ignorePatterns: RegExp[]; // compiled from user-supplied pattern strings
   onStep: (() => void) | null; // called when a new step is captured
 }
 
-// ─── Static assets we skip ────────────────────────────────────────────────────
+// ─── Static assets we always skip ────────────────────────────────────────────
 
 const SKIP_EXTENSIONS = /\.(js|mjs|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|webp|avif|mp4|mp3|pdf)(\?.*)?$/i;
 const SKIP_CONTENT_TYPES = /^(text\/css|application\/javascript|font\/|image\/)/i;
 const SKIP_SCHEMES = /^(chrome-extension:|data:|blob:|about:)/i;
 
-function shouldSkip(url: string, contentType: string): boolean {
+function shouldSkip(url: string, contentType: string, ignorePatterns: RegExp[]): boolean {
   if (SKIP_SCHEMES.test(url)) return true;
   if (SKIP_EXTENSIONS.test(url)) return true;
   if (contentType && SKIP_CONTENT_TYPES.test(contentType)) return true;
+  // User-defined ignore list: match anywhere in the URL (substring or regex)
+  for (const pattern of ignorePatterns) {
+    if (pattern.test(url)) return true;
+  }
   return false;
+}
+
+/** Compile user pattern strings into RegExp objects.
+ *  Plain strings become substring matches; patterns wrapped in / / are treated as regex. */
+export function compileIgnorePatterns(patterns: string[]): RegExp[] {
+  return patterns
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => {
+      const regexMatch = p.match(/^\/(.+)\/([gimsuy]*)$/);
+      if (regexMatch) {
+        try { return new RegExp(regexMatch[1], regexMatch[2]); } catch { return null; }
+      }
+      // Plain string → escape and use as substring match
+      return new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    })
+    .filter((r): r is RegExp => r !== null);
 }
 
 // ─── Convert captured requests → FlowStep[] ──────────────────────────────────
@@ -83,6 +105,7 @@ export function toFlowSteps(requests: RecordedRequest[]): FlowStep[] {
 export async function startSession(
   sessionId: string,
   onStep: () => void,
+  ignorePatterns: RegExp[] = [],
 ): Promise<RecordingSessionInternal> {
   const chromiumPath =
     process.env.PUPPETEER_EXECUTABLE_PATH ||
@@ -118,7 +141,7 @@ export async function startSession(
   // ── CDP: capture outgoing requests ────────────────────────────────────────
   cdp.on('Network.requestWillBeSent', (event) => {
     const { url, method, headers, postData } = event.request;
-    if (shouldSkip(url, '')) return;
+    if (shouldSkip(url, '', ignorePatterns)) return;
 
     pending.set(event.requestId, {
       requestId: event.requestId,
@@ -135,7 +158,7 @@ export async function startSession(
 
   cdp.on('Network.responseReceived', (event) => {
     const { url, status, headers, mimeType } = event.response;
-    if (shouldSkip(url, mimeType ?? '')) {
+    if (shouldSkip(url, mimeType ?? '', ignorePatterns)) {
       pending.delete(event.requestId);
       return;
     }
@@ -191,6 +214,7 @@ export async function startSession(
     pending,
     completed,
     stepCount: 0,
+    ignorePatterns,
     onStep,
   };
 

@@ -313,11 +313,11 @@ export interface RecordingSession {
   error?: string;
 }
 
-export const startRecording = async (targetUrl?: string): Promise<RecordingSession> => {
+export const startRecording = async (targetUrl?: string, ignorePatterns?: string[]): Promise<RecordingSession> => {
   const res = await fetch(`${RECORDER_URL}/recordings/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ targetUrl }),
+    body: JSON.stringify({ targetUrl, ignorePatterns }),
   });
   if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
   return res.json();

@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { RecordingSession } from '@alt/shared';
-import { startSession, stopSession, toFlowSteps, RecordingSessionInternal } from './recorder';
+import { startSession, stopSession, toFlowSteps, compileIgnorePatterns, RecordingSessionInternal } from './recorder';
 import { detectCorrelations } from './correlator';
 import { log } from './logger';
 
@@ -28,12 +28,13 @@ const app = Fastify({ logger: false });
   }));
 
   // ── POST /recordings/start ──────────────────────────────────────────────────
-  app.post<{ Body: { targetUrl?: string } }>('/recordings/start', async (request, reply) => {
+  app.post<{ Body: { targetUrl?: string; ignorePatterns?: string[] } }>('/recordings/start', async (request, reply) => {
     const sessionId = crypto.randomUUID();
+    const ignorePatterns = compileIgnorePatterns(request.body?.ignorePatterns ?? []);
 
     let session: RecordingSessionInternal;
     try {
-      session = await startSession(sessionId, () => { /* step callback — status polled by client */ });
+      session = await startSession(sessionId, () => { /* step callback — status polled by client */ }, ignorePatterns);
     } catch (err) {
       log.error({ err, sessionId }, 'Failed to start recording session');
       return reply.code(500).send({ error: 'Failed to launch recording browser — is DISPLAY set or noVNC running?' });

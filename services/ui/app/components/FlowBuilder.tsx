@@ -89,6 +89,9 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
   // ── Flow Recording state ────────────────────────────────────────────────────
   const [recording, setRecording] = useState<RecordingSession | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [ignorePatterns, setIgnorePatterns] = useState<string[]>([]);
+  const [ignoreInput, setIgnoreInput] = useState('');
+  const [showIgnore, setShowIgnore] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Poll recorder-service every second while a session is active
@@ -109,13 +112,21 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
   const handleStartRecording = async () => {
     setRecordingError(null);
     try {
-      const session = await startRecording(steps[0]?.url);
+      const session = await startRecording(steps[0]?.url, ignorePatterns.length ? ignorePatterns : undefined);
       setRecording(session);
       // Open the noVNC browser viewer in a new tab so the user can interact
       window.open(session.noVncUrl, '_blank', 'noopener,noreferrer');
     } catch (err) {
       setRecordingError(err instanceof Error ? err.message : 'Failed to start recording — is recorder-service running?');
     }
+  };
+
+  const addIgnorePattern = () => {
+    const v = ignoreInput.trim();
+    if (v && !ignorePatterns.includes(v)) {
+      setIgnorePatterns(prev => [...prev, v]);
+    }
+    setIgnoreInput('');
   };
 
   const handleStopRecording = async () => {
@@ -232,7 +243,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
   return (
     <div className="space-y-4">
-      {/* HAR import + Record button row */}
+      {/* HAR import + Record button + Clear all row */}
       <div className="flex items-center gap-2 flex-wrap">
         <button
           type="button"
@@ -242,7 +253,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
           Import from HAR
         </button>
 
-        {/* 🔴 Record button — third option alongside HAR import */}
+        {/* 🔴 Record button */}
         <button
           type="button"
           onClick={recording ? handleStopRecording : handleStartRecording}
@@ -262,9 +273,88 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               : '🔴 Record'}
         </button>
 
-        <span className="text-xs text-[#57606a]">or build steps manually below</span>
+        {/* Ignore list toggle — only shown when not recording */}
+        {!recording && (
+          <button
+            type="button"
+            onClick={() => setShowIgnore(v => !v)}
+            className={`px-2 py-1.5 text-xs rounded-md border transition-colors ${
+              showIgnore || ignorePatterns.length > 0
+                ? 'border-[#0969da] text-[#0969da] bg-[#ddf4ff]'
+                : 'border-[#d0d7de] text-[#57606a] hover:bg-[#f3f4f6]'
+            }`}
+            title="Configure URL patterns to ignore during recording"
+          >
+            🚫 Ignore{ignorePatterns.length > 0 ? ` (${ignorePatterns.length})` : ''}
+          </button>
+        )}
+
+        {/* Clear all steps */}
+        {steps.length > 0 && (
+          <button
+            type="button"
+            onClick={() => { if (confirm('Clear all steps?')) onChange([]); }}
+            className="ml-auto px-3 py-1.5 text-xs font-medium border border-[#d0d7de] text-[#cf222e] rounded-md hover:bg-[#fff0ee] hover:border-[#cf222e]"
+          >
+            Clear all
+          </button>
+        )}
+
+        <span className={`text-xs text-[#57606a] ${steps.length > 0 ? '' : 'ml-auto'}`}>or build steps manually below</span>
         <input ref={fileRef} type="file" accept=".har,application/json" className="hidden" onChange={handleHar} />
       </div>
+
+      {/* Ignore list panel */}
+      {showIgnore && !recording && (
+        <div className="p-3 border border-[#d0d7de] rounded-md bg-[#f6f8fa] text-[12px] space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-[#24292f]">🚫 Ignore list — URLs matching these patterns won&apos;t be recorded</span>
+            <button onClick={() => setShowIgnore(false)} className="text-[#57606a] hover:text-[#24292f]">✕</button>
+          </div>
+          <p className="text-[#57606a]">
+            Enter a substring (e.g. <code className="bg-[#eaeef2] px-1 rounded">analytics</code>, <code className="bg-[#eaeef2] px-1 rounded">localhost:3007</code>) or a regex wrapped in slashes (e.g. <code className="bg-[#eaeef2] px-1 rounded">/\.(png|gif)$/i</code>).
+          </p>
+          {/* Tag list */}
+          {ignorePatterns.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {ignorePatterns.map(p => (
+                <span key={p} className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#eaeef2] rounded font-mono text-[11px] text-[#24292f]">
+                  {p}
+                  <button
+                    type="button"
+                    onClick={() => setIgnorePatterns(prev => prev.filter(x => x !== p))}
+                    className="text-[#57606a] hover:text-[#cf222e] leading-none"
+                  >×</button>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={() => setIgnorePatterns([])}
+                className="text-[11px] text-[#57606a] hover:text-[#cf222e] underline ml-1"
+              >clear all</button>
+            </div>
+          )}
+          {/* Add input */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={ignoreInput}
+              onChange={e => setIgnoreInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addIgnorePattern(); } }}
+              placeholder="analytics.google.com or /hotjar|segment/i"
+              className="flex-1 border border-[#d0d7de] rounded px-2 py-1 text-[12px] font-mono bg-white focus:outline-none focus:border-[#0969da]"
+            />
+            <button
+              type="button"
+              onClick={addIgnorePattern}
+              disabled={!ignoreInput.trim()}
+              className="px-3 py-1 text-[12px] bg-[#0969da] text-white rounded hover:bg-[#0550ae] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Recording active overlay */}
       {recording && recording.status === 'active' && (
