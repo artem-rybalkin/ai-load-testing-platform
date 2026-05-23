@@ -4,7 +4,7 @@
   "main": "dist/index.js",
   "dependencies": {
     "@alt/shared": "*",
-    "@fastify/cors": "^8.5.0",
+    "@fastify/cors": "^11.2.0",
     "@google/generative-ai": "^0.21.0",
     "fastify": "^5.8.5",
     "pino": "^9.0.0",
