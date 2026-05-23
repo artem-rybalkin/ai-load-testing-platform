@@ -171,7 +171,7 @@ services:
       LOG_LEVEL: info
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       CHROMIUM_PATH: /usr/bin/chromium-browser
-      NOVNC_URL: http://localhost:6080
+      NOVNC_URL: http://localhost:6080/vnc.html
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
     # No hard dependencies — recorder is optional; platform works without it
 
