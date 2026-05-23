@@ -1,0 +1,49 @@
+FROM node:20-alpine
+
+# ── System deps: Chromium + Xvfb virtual display + noVNC browser viewer ───────
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    xvfb \
+    x11vnc \
+    novnc \
+    python3
+
+# Tell puppeteer-core to skip its own Chromium download
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+ENV DISPLAY=:99
+
+WORKDIR /app
+
+COPY package.json ./
+COPY tsconfig.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY services/recorder-service/package.json ./services/recorder-service/
+
+RUN npm install
+
+COPY packages/shared ./packages/shared
+COPY services/recorder-service ./services/recorder-service
+
+RUN npm run build --workspace=packages/shared
+
+# Hand ownership to the built-in non-root node user (UID 1000).
+# Chromium works correctly as non-root with --no-sandbox flags.
+RUN chown -R node:node /app
+
+COPY services/recorder-service/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+WORKDIR /app/services/recorder-service
+
+USER node
+
+EXPOSE 3007 6080
+
+CMD ["/docker-entrypoint.sh"]

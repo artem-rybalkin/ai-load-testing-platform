@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { createTest, getTemplates, createTemplate, getResults, getActiveTests, Template, FlowStep, TestResult, ActiveTest } from '@/lib/api';
+import { createTest, getResult, getTemplates, createTemplate, getResults, getActiveTests, Template, FlowStep, TestResult, ActiveTest } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
 import Link from 'next/link';
 
@@ -121,6 +121,17 @@ function QuickStatsPanel({ active, recent }: { active: ActiveTest[]; recent: Tes
   );
 }
 
+const DURATION_OPTIONS = ['30s', '1m', '2m', '5m', '10m', '30m'];
+const toSecs = (d: string) => {
+  const m = d.match(/^(\d+)(s|m|h)$/);
+  if (!m) return 0;
+  return parseInt(m[1]) * (m[2] === 'h' ? 3600 : m[2] === 'm' ? 60 : 1);
+};
+const snapDuration = (secs: number) =>
+  DURATION_OPTIONS.reduce((best, opt) =>
+    Math.abs(toSecs(opt) - secs) < Math.abs(toSecs(best) - secs) ? opt : best
+  );
+
 function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -133,6 +144,7 @@ function HomeContent() {
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
   const [recent, setRecent] = useState<TestResult[]>([]);
   const [active, setActive] = useState<ActiveTest[]>([]);
+  const [rerunFrom, setRerunFrom] = useState<string | null>(null);
   const [form, setForm] = useState({
     type: 'backend' as 'backend' | 'client-side' | 'flow',
     targetUrl: '',
@@ -153,17 +165,6 @@ function HomeContent() {
   const [flowTestData, setFlowTestData] = useState<Array<Record<string, string>>>([]);
   const [flowCsvFile, setFlowCsvFile] = useState<{ name: string; data: string } | null>(null);
   const [flowEnvVars, setFlowEnvVars] = useState<EnvVar[]>([]);
-
-  const DURATION_OPTIONS = ['30s', '1m', '2m', '5m', '10m', '30m'];
-  const toSecs = (d: string) => {
-    const m = d.match(/^(\d+)(s|m|h)$/);
-    if (!m) return 0;
-    return parseInt(m[1]) * (m[2] === 'h' ? 3600 : m[2] === 'm' ? 60 : 1);
-  };
-  const snapDuration = (secs: number) =>
-    DURATION_OPTIONS.reduce((best, opt) =>
-      Math.abs(toSecs(opt) - secs) < Math.abs(toSecs(best) - secs) ? opt : best
-    );
 
   const applyDescriptionParams = (desc: string) => {
     const updates: Partial<typeof form> = {};
@@ -197,6 +198,24 @@ function HomeContent() {
     getTemplates().then(d => setTemplates(d.templates ?? [])).catch(() => {});
     getResults().then(d => setRecent(d.results?.slice(0, 10) ?? [])).catch(() => {});
     getActiveTests().then(d => setActive(d.active ?? [])).catch(() => {});
+
+    const rerun = searchParams.get('rerun');
+    if (rerun) {
+      getResult(rerun).then(({ result }) => {
+        if (!result) return;
+        const type = result.type as 'backend' | 'client-side' | 'flow';
+        setForm(f => ({
+          ...f,
+          type,
+          targetUrl: result.target_url,
+          ...(result.script_description ? { description: result.script_description } : {}),
+          ...(result.duration_seconds   ? { duration: snapDuration(result.duration_seconds) } : {}),
+        }));
+        setRerunFrom(result.target_url);
+        setShowAdvanced(true);
+      }).catch(() => {});
+      return;
+    }
 
     const type = searchParams.get('type') as 'backend' | 'client-side' | null;
     const targetUrl = searchParams.get('targetUrl');
@@ -380,6 +399,21 @@ function HomeContent() {
             )}
           </div>
 
+          {rerunFrom && (
+            <div className="flex items-center justify-between px-3 py-2 mb-3 bg-[#ddf4ff] border border-[#c8e1ff] rounded-md text-[12px]">
+              <span className="text-[#0969da]">
+                ↻ Pre-filled from previous run of <span className="font-mono">{rerunFrom}</span> — script will be reused
+              </span>
+              <button
+                onClick={() => setRerunFrom(null)}
+                className="text-[#57606a] hover:text-[#24292f] ml-3 flex-shrink-0"
+                aria-label="Dismiss re-run notice"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
             <div className="p-4 space-y-4">
 
@@ -522,7 +556,7 @@ function HomeContent() {
                         <select value={form.duration} onChange={e => setForm(f => ({ ...f, duration: e.target.value }))}
                           className={inputCls}
                         >
-                          {['30s', '1m', '2m', '5m', '10m', '30m'].map(d => (
+                          {DURATION_OPTIONS.map(d => (
                             <option key={d} value={d}>{d}</option>
                           ))}
                         </select>

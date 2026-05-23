@@ -1,6 +1,6 @@
 FROM node:20-alpine
 
-# Системні залежності для Chromium
+# System dependencies for Chromium
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -9,7 +9,7 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont
 
-# Говоримо Puppeteer використовувати встановлений Chromium
+# Tell Puppeteer to use the system-installed Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
@@ -27,7 +27,14 @@ COPY services/worker-client ./services/worker-client
 
 RUN npm run build --workspace=packages/shared
 
+# Hand ownership to the built-in non-root node user (UID 1000).
+# Running Chromium as non-root is the correct approach; the existing
+# --no-sandbox / --disable-setuid-sandbox launch flags remain valid.
+RUN chown -R node:node /app
+
 WORKDIR /app/services/worker-client
+
+USER node
 
 EXPOSE 3003
 

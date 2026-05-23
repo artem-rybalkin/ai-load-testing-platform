@@ -1,6 +1,6 @@
 FROM node:20-alpine
 
-# Встановлюємо k6
+# Install k6
 RUN apk add --no-cache curl bash
 RUN curl -fsSL https://dl.k6.io/key.gpg | cat > /etc/apk/keys/k6.rsa.pub 2>/dev/null || true
 RUN echo "https://dl.k6.io/rpm/stable" >> /etc/apk/repositories || true
@@ -24,7 +24,14 @@ COPY services/worker-backend ./services/worker-backend
 
 RUN npm run build --workspace=packages/shared
 
+# Hand ownership to the built-in non-root node user (UID 1000).
+# k6 at /usr/local/bin/k6 is world-executable; per-test run dirs are
+# created inside /tmp which is world-writable, so no extra chown needed.
+RUN chown -R node:node /app
+
 WORKDIR /app/services/worker-backend
+
+USER node
 
 EXPOSE 3002
 

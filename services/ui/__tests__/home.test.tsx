@@ -25,16 +25,21 @@ vi.mock('@/lib/api', () => ({
   createTemplate: vi.fn().mockResolvedValue({}),
   getResults: vi.fn().mockResolvedValue({ results: [] }),
   getActiveTests: vi.fn().mockResolvedValue({ active: [] }),
+  getResult: vi.fn().mockResolvedValue({ result: null }),
 }));
 
-import { createTest, getTemplates } from '@/lib/api';
+import { createTest, getTemplates, getResult } from '@/lib/api';
 const mockCreateTest = vi.mocked(createTest);
 const mockGetTemplates = vi.mocked(getTemplates);
+const mockGetResult = vi.mocked(getResult);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockCreateTest.mockResolvedValue({ test: { id: 'new-test-id' } });
   mockGetTemplates.mockResolvedValue({ templates: [] });
+  mockGetResult.mockResolvedValue({ result: null } as never);
+  // Ensure no rerun param bleeds between tests
+  stableSearchParams.delete('rerun');
 });
 
 afterEach(() => cleanup());
@@ -123,5 +128,56 @@ describe('Home page — template dropdown', () => {
     await waitFor(() => screen.getByDisplayValue('Load from template…'));
     fireEvent.change(screen.getByDisplayValue('Load from template…'), { target: { value: 'tmpl-1' } });
     expect((screen.getByPlaceholderText('https://example.com') as HTMLInputElement).value).toBe('http://template.com');
+  });
+});
+
+describe('Home page — re-run from results list', () => {
+  const makeRerunResult = (overrides = {}) => ({
+    id: 'row-1',
+    test_id: 'rerun-test-id',
+    type: 'backend',
+    target_url: 'https://rerun.example.com',
+    status: 'completed',
+    metrics: { p95ResponseTime: 400, rps: 10 },
+    script: null,
+    script_description: 'load test with 10 users for 1 minute',
+    reused_script: false,
+    is_baseline: false,
+    duration_seconds: 60,
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    perf_status: 'passed',
+    ...overrides,
+  });
+
+  it('pre-fills URL and description when rerun param is set', async () => {
+    stableSearchParams.set('rerun', 'rerun-test-id');
+    mockGetResult.mockResolvedValueOnce({ result: makeRerunResult() } as never);
+    render(<Home />);
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('https://example.com')).toHaveValue('https://rerun.example.com');
+    });
+    const descInput = screen.getByPlaceholderText(/e\.g\. load test/i) as HTMLInputElement;
+    expect(descInput.value).toBe('load test with 10 users for 1 minute');
+  });
+
+  it('shows the re-run banner with the target URL', async () => {
+    stableSearchParams.set('rerun', 'rerun-test-id');
+    mockGetResult.mockResolvedValueOnce({ result: makeRerunResult() } as never);
+    render(<Home />);
+    await waitFor(() => {
+      expect(screen.getByText(/pre-filled from previous run/i)).toBeInTheDocument();
+      expect(screen.getByText('https://rerun.example.com')).toBeInTheDocument();
+    });
+  });
+
+  it('dismisses the re-run banner when the ✕ button is clicked', async () => {
+    stableSearchParams.set('rerun', 'rerun-test-id');
+    mockGetResult.mockResolvedValueOnce({ result: makeRerunResult() } as never);
+    render(<Home />);
+    await waitFor(() => screen.getByText(/pre-filled from previous run/i));
+    fireEvent.click(screen.getByRole('button', { name: /dismiss re-run notice/i }));
+    expect(screen.queryByText(/pre-filled from previous run/i)).not.toBeInTheDocument();
   });
 });

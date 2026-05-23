@@ -149,6 +149,7 @@ services:
       STALE_PENDING_MINUTES: 30      # mark pending tests failed after 30 min
       API_KEYS: ${API_KEYS:-}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      RECORDER_URL: http://recorder-service:3007
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,6 +157,23 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+
+  recorder-service:
+    build:
+      context: .
+      dockerfile: services/recorder-service/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3007:3007"   # REST + WebSocket API
+      - "6080:6080"   # noVNC browser viewer (open in browser to see the recording window)
+    environment:
+      PORT: 3007
+      LOG_LEVEL: info
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      CHROMIUM_PATH: /usr/bin/chromium-browser
+      NOVNC_URL: http://localhost:6080
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+    # No hard dependencies — recorder is optional; platform works without it
 
   ui:
     build:
@@ -167,6 +185,7 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:3000
       NEXT_PUBLIC_RESULTS_URL: http://localhost:3004
+      NEXT_PUBLIC_RECORDER_URL: http://localhost:3007
       NEXT_PUBLIC_API_KEY: ${API_KEY:-}
       TURBOPACK: "0"
     depends_on:

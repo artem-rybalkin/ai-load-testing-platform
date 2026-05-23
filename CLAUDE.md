@@ -34,17 +34,18 @@ node-cron in results-service → POST /tests (auto-trigger on schedule)
 
 ## Services & Ports
 
-| Service          | Port  | Description                                       |
-|------------------|-------|---------------------------------------------------|
-| api-service      | 3000  | Fastify REST API, test routing, CORS              |
-| ai-service       | 3001  | Gemini API integration, script generation         |
-| worker-backend   | 3002  | k6 runner, metrics parsing, live metrics posting  |
-| worker-client    | 3003  | Puppeteer + Lighthouse, Web Vitals collector      |
-| results-service  | 3004  | PostgreSQL storage, REST API, analyzer, scheduler |
-| ui               | 3006  | Next.js frontend                                  |
-| postgres         | 5432  | Main database                                     |
-| rabbitmq         | 5672  | Message queue (management UI: 15672)              |
-| redis            | 6379  | Running but not yet used                          |
+| Service           | Port       | Description                                           |
+|-------------------|------------|-------------------------------------------------------|
+| api-service       | 3000       | Fastify REST API, test routing, CORS                  |
+| ai-service        | 3001       | Gemini API integration, script generation             |
+| worker-backend    | 3002       | k6 runner, metrics parsing, live metrics posting      |
+| worker-client     | 3003       | Puppeteer + Lighthouse, Web Vitals collector          |
+| results-service   | 3004       | PostgreSQL storage, REST API, analyzer, scheduler     |
+| ui                | 3006       | Next.js frontend                                      |
+| recorder-service  | 3007/6080  | Flow recorder (Puppeteer CDP capture + noVNC viewer)  |
+| postgres          | 5432       | Main database                                         |
+| rabbitmq          | 5672       | Message queue (management UI: 15672)                  |
+| redis             | 6379       | Running but not yet used                              |
 
 ## Tech Stack
 
@@ -117,6 +118,16 @@ ai-load-testing-platform/
     │   └── src/
     │       └── index.ts      # Puppeteer sessions, Web Vitals, Lighthouse, DLQ retry,
     │                         #   Fastify health server on PORT (default 3003)
+    ├── recorder-service/     # @alt/recorder-service  (port 3007 + noVNC :6080)
+    │   └── src/
+    │       ├── index.ts      # Fastify REST: POST /recordings/start, GET /:id, POST /:id/stop, DELETE /:id
+    │       ├── recorder.ts   # Puppeteer non-headless launch, CDP Network capture, toFlowSteps()
+    │       ├── correlator.ts # AI correlation: Gemini prompt → ExtractRule per FlowStep
+    │       └── logger.ts
+    │   ├── Dockerfile        # node:20-alpine + chromium + xvfb + x11vnc + novnc; USER node
+    │   ├── Dockerfile.dev    # same base, uses tsx watch
+    │   ├── docker-entrypoint.sh      # starts Xvfb :99, x11vnc, noVNC, then node dist/index.js
+    │   └── docker-entrypoint-dev.sh  # starts Xvfb :99, x11vnc, noVNC, then tsx watch
     ├── results-service/      # @alt/results-service
     │   └── src/
     │       ├── index.ts      # startup: initDb → consumer → scheduler → cleanup → app
@@ -357,7 +368,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `GET  /results/active`          — tests with status pending/running
 - `GET  /results/compare?a=&b=`   — side-by-side diff of two completed results
 - `GET  /results/trend?url=`      — chronological metric trend for a URL (p95 or LCP)
-- `GET  /results/:testId`         — single result with joined script
+- `GET  /results/:testId`         — single result with joined `script` + `script_description` from test_scripts
 - `POST /results/:testId/cancel`  — set status = cancelled in DB
 - `POST /results/:testId/running` — set status = running + started_at = NOW() (called by workers on start)
 - `POST /results/:testId/fail`    — set status = failed (called by ai-service on DLQ exhaustion)
@@ -695,7 +706,7 @@ docker compose down -v
 # Build shared types (required after any change to packages/shared/src/index.ts)
 npm run build:shared
 
-# Run unit + integration tests (~242 tests)
+# Run unit + integration tests (~261 tests)
 npm test
 
 # Run tests in watch mode
@@ -722,7 +733,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~242 tests passing across 14 test files
+**Total:** ~261 tests passing across 14 test files
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -730,14 +741,14 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `worker-backend/src/__tests__/parser.test.ts` | `parseK6Output`, `aggregateWindow` (per-step), `parseK6Errors` (error categorization) | 25 |
 | `results-service/src/__tests__/analyzer.test.ts` | `analyzeResult` thresholds + regression + error breakdown thresholds | 34 |
 | `api-service/src/__tests__/options.test.ts` | `buildK6Options`, `replaceK6Options`, `httpOptions` (http2, discard) | 16 |
-| `api-service/src/__tests__/index.test.ts` | POST /tests routing, parameterization passthrough, cancel, health | 19 |
+| `api-service/src/__tests__/index.test.ts` | POST /tests routing, parameterization passthrough, cancel, health, sensitive-field redaction | 23 |
 | `results-service/src/__tests__/scheduler.test.ts` | `startScheduler`, `triggerSchedule` (mocked cron) | 12 |
 | `ai-service/src/__tests__/generator.test.ts` | `FLOW_PROMPT` ExtractRule rendering, parameterization, `compareDescriptions` | 12 |
 
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
 |------|---------|-------|
-| `results-service/src/__tests__/api.test.ts` | all REST endpoints + template regression (target_url, options, thresholds) | 45 |
+| `results-service/src/__tests__/api.test.ts` | all REST endpoints + template regression + script_description in result response | 64 |
 | `results-service/src/__tests__/consumer.test.ts` | `handleResult`, webhook firing, baseline ordering | 11 |
 | `results-service/src/__tests__/stale.test.ts` | `runStaleCleanup` | 10 |
 | `api-service/src/__tests__/scripts.test.ts` | `findExistingScript` + description field + no auto-increment | 9 |
@@ -747,8 +758,8 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 |------|---------|-------|
 | `ui/__tests__/AnalysisPanel.test.tsx` | threshold violations, diff rows, badges | 9 |
 | `ui/__tests__/ActiveTests.test.tsx` | count display, link, polling | 6 |
-| `ui/__tests__/home.test.tsx` | form validation, Advanced settings, template dropdown | 8 |
-| `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links | 6 |
+| `ui/__tests__/home.test.tsx` | form validation, Advanced settings, template dropdown, rerun pre-fill | 11 |
+| `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |
 
 ### Playwright E2E (requires `docker compose up`)
 | File | Flow |
@@ -884,14 +895,44 @@ All phases complete:
 - ✅ **Load generator health monitoring** — workers expose CPU%, memory MB/%, active/max test count via `/health`; `GET /system/health` passes `metrics` through; `WorkerHealth` component shows compact resource bars per worker; saturated status triggers amber SystemHealth strip
 - ✅ **Generator tests** — new `ai-service/src/__tests__/generator.test.ts` covering `ExtractRule` rendering, parameterization `SharedArray`, `compareDescriptions` verdicts (12 tests)
 
+### Phase 11 — Re-run from Results List
+- ✅ **`script_description` in result response** — `GET /results`, `GET /results/:testId`, `GET /results/compare` now join `s.description AS script_description` from `test_scripts`; `TestResult` interface updated
+- ✅ **Re-run button** — results list desktop table and mobile card both show `↻ Re-run` for completed tests; navigates to `/?rerun=<testId>`
+- ✅ **Home page rerun handling** — `?rerun=<testId>` param triggers `getResult()` fetch on mount; pre-fills `type`, `targetUrl`, `description` (from `script_description`), `duration` (snapped from `duration_seconds`); opens Advanced settings automatically; script reuse happens via the existing 3-way api-service routing (same URL+type → cached script reused, no full AI generation)
+- ✅ **Re-run banner** — dismissible info strip above the form card: `↻ Pre-filled from previous run of <url> — script will be reused`; clears on `✕` click
+- ✅ **`snapDuration` / `DURATION_OPTIONS` promoted to module scope** — moved out of `HomeContent` so the `useEffect` re-run handler can call them without stale-closure issues
+- ✅ **15 new tests** — `results.test.tsx`: Re-run buttons visible for completed; navigates `/?rerun=<id>`; absent for non-completed. `home.test.tsx`: form pre-fills URL+description; banner shown; banner dismisses. `api.test.ts`: `script_description` returned from linked script; `null` when no script linked
+
+### Phase 12 — Non-root Containers
+- ✅ **All 6 Dockerfiles hardened** — every service now runs as the built-in `node` user (UID 1000) from `node:20-alpine`; no new user creation needed
+- ✅ **Pattern applied** — all root-level `RUN` steps (apk installs, npm install, builds) complete first, then `RUN chown -R node:node /app` fixes ownership, followed by `USER node` before `EXPOSE`/`CMD`
+- ✅ **worker-backend** — k6 binary at `/usr/local/bin/k6` is world-executable; per-test run dirs are created in `/tmp` (world-writable); no extra permissions needed
+- ✅ **worker-client** — Chromium runs correctly as non-root; existing `--no-sandbox` / `--disable-setuid-sandbox` Puppeteer launch flags remain valid and are unchanged
+- ✅ **ui** — Next.js `.next` build output is created as root then chowned before `USER node`; `next start` serves it without needing write access to the build dir
+
+### Phase 13 — Sensitive Field Protection
+- ✅ **Pino `redact` on all 5 loggers** — every `logger.ts` now configures `redact: { paths: ['envVars', 'testData', 'csvData'], censor: '[REDACTED]' }`; acts as a safety net so accidental `log.info(test, ...)` can never expose credentials or parameterization data in structured logs regardless of nesting
+- ✅ **`POST /tests` response sanitised** — `safeTestResponse()` strips seven internal/sensitive fields before the HTTP response leaves api-service: `envVars`, `testData`, `csvData`, `csvFilename` (credentials / test data), `generatedScript`, `cachedScript`, `cachedScriptDescription` (large internal blobs). `test.id`, `targetUrl`, `type`, `reusedScript`, and other non-sensitive fields are still returned for the UI.
+- ✅ **4 new security tests** — `api-service/src/__tests__/index.test.ts`: `envVars` absent; `testData` absent; `csvData`+`csvFilename` absent; `id`/`targetUrl`/`type` still present
+
+### Phase 14 — Flow Recorder
+- ✅ **New `recorder-service`** (port 3007) — standalone Fastify service; launches non-headless Chromium via `puppeteer-core`; captures all XHR/fetch/navigation requests via CDP `Network.*` domain events; filters out static assets (JS/CSS/images/fonts)
+- ✅ **noVNC browser viewer** (port 6080) — Xvfb virtual display + x11vnc + noVNC proxy; user opens `http://localhost:6080` in their browser to interact with the recording browser inside Docker; non-Docker: `DISPLAY=:0` uses the real screen
+- ✅ **REST API** — `POST /recordings/start` (launches browser, optionally navigates to targetUrl), `GET /recordings/:id` (poll for live step count), `POST /recordings/:id/stop` (stops browser + runs AI correlation), `DELETE /recordings/:id` (abort without returning steps)
+- ✅ **AI correlation detection** (`correlator.ts`) — after recording stops, sends request/response pairs to `gemini-2.5-flash` with a structured prompt; identifies tokens from response N that appear in later requests; maps correlations back to `FlowStep.extract` fields with correct `ExtractSource` + `expression`; best-effort (never blocks the response on AI failure)
+- ✅ **`RecordingSession` + `RecordedRequest` types** added to `@alt/shared`
+- ✅ **"🔴 Record" button** in `FlowBuilder.tsx` — third option alongside existing "Import HAR" + manual steps; HAR import and manual editor unchanged; polling (`GET /recordings/:id` every 1s) shows live captured request count; "⏹ Stop Recording" calls stop endpoint + populates FlowBuilder with returned steps + correlation rules; error banner if recorder-service is unreachable
+- ✅ **`NEXT_PUBLIC_RECORDER_URL`** added to UI environment (default `http://localhost:3007`); `startRecording`, `stopRecording`, `getRecording` added to `ui/lib/api.ts`
+- ✅ **recorder-service added to `GET /system/health`** aggregation in results-service (shows as unreachable if not running — optional service)
+- ✅ **`RECORDER_URL` env var** in results-service + docker-compose
+- ✅ **Non-root** — recorder Dockerfile follows same `chown -R node:node /app && USER node` pattern; Chromium works as non-root with `--no-sandbox`
+
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)
 - Gemini rate limit: **20 requests/day** on free tier (`gemini-2.5-flash`); `compareDescriptions()` also consumes quota so each new-description test costs 2 calls. Paid key removes daily cap. Backoff retry (60s/120s/180s) handles 429 automatically.
 - UI uses polling instead of WebSockets (planned improvement)
-- Flow `envVars` are stored in the RabbitMQ message while the test is in-flight — do not log them
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
 - No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
-- Containers run as root — add non-root user to each Dockerfile before production
-- **Re-run from results list** — add a "Re-run" button on each result row that pre-fills the test form with the same URL, description, options, and reuses the cached script directly (skip AI generation entirely)
+- **recorder-service**: noVNC requires `xvfb` + `x11vnc` + `novnc` APK packages; these add ~60 MB to the Docker image. On Windows/Mac host without Docker the recording browser appears natively (no virtual display needed) when `DISPLAY` is unset.
 - **External k6 script upload** — allow users to paste or upload a custom k6 `.js` script in the test form instead of AI generation; bypass ai-service and send directly to worker queue
 - **Download generated script** — add a download button on the result detail page for the Gemini-generated k6/Puppeteer script (currently only shown as text in a pre block)

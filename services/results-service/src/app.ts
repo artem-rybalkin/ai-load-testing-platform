@@ -62,11 +62,13 @@ export const buildApp = async (
   });
 
   app.get('/system/health', async (_request, reply) => {
+    const recorderUrl = process.env.RECORDER_URL || 'http://recorder-service:3007';
     const services = [
-      { name: 'api-service',      url: `${process.env.API_SERVICE_URL || 'http://api-service:3000'}/health` },
-      { name: 'ai-service',       url: `${process.env.AI_SERVICE_URL  || 'http://ai-service:3001'}/health` },
-      { name: 'worker-backend',   url: `${process.env.WORKER_BACKEND_URL || 'http://worker-backend:3002'}/health` },
-      { name: 'worker-client',    url: `${process.env.WORKER_CLIENT_URL  || 'http://worker-client:3003'}/health` },
+      { name: 'api-service',       url: `${process.env.API_SERVICE_URL || 'http://api-service:3000'}/health` },
+      { name: 'ai-service',        url: `${process.env.AI_SERVICE_URL  || 'http://ai-service:3001'}/health` },
+      { name: 'worker-backend',    url: `${process.env.WORKER_BACKEND_URL || 'http://worker-backend:3002'}/health` },
+      { name: 'worker-client',     url: `${process.env.WORKER_CLIENT_URL  || 'http://worker-client:3003'}/health` },
+      { name: 'recorder-service',  url: `${recorderUrl}/health` },
     ];
 
     const results = await Promise.all(
@@ -150,7 +152,7 @@ export const buildApp = async (
   app.get('/results', async (_request, reply) => {
     try {
       const { rows } = await pool.query(
-        `SELECT r.*, s.script
+        `SELECT r.*, s.script, s.description AS script_description
          FROM test_results r
          LEFT JOIN test_scripts s ON r.script_id = s.id
          ORDER BY r.created_at DESC LIMIT 50`
@@ -198,7 +200,7 @@ export const buildApp = async (
     async (request, reply) => {
       const { testId } = request.params;
       const { rows } = await pool.query(
-        `SELECT r.*, s.script
+        `SELECT r.*, s.script, s.description AS script_description
          FROM test_results r
          LEFT JOIN test_scripts s ON r.script_id = s.id
          WHERE r.test_id = $1`,
@@ -333,7 +335,7 @@ export const buildApp = async (
       const { a, b } = request.query;
       if (!a || !b) return reply.code(400).send({ error: 'Query params a and b are required' });
       const { rows } = await pool.query(
-        `SELECT r.*, s.script FROM test_results r
+        `SELECT r.*, s.script, s.description AS script_description FROM test_results r
          LEFT JOIN test_scripts s ON r.script_id = s.id
          WHERE r.test_id = ANY($1)`,
         [[a, b]]

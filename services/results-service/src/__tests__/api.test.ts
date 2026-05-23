@@ -639,6 +639,36 @@ describe('GET /results/:testId', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().result.test_id).toBe(testId);
   });
+
+  it('includes script_description from the linked test_script', async () => {
+    const testId = '00000000-0000-0000-0000-000000000021';
+    // Insert a script with a description
+    const { rows: scriptRows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script, description)
+       VALUES ('http://x.com', 'backend', 'import http from "k6/http";', 'load test 10 VUs 1 minute')
+       RETURNING id`
+    );
+    const scriptId = scriptRows[0].id as string;
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, script_id)
+       VALUES ($1, 'backend', 'http://x.com', 'completed', $2)`,
+      [testId, scriptId]
+    );
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result.script_description).toBe('load test 10 VUs 1 minute');
+  });
+
+  it('returns null script_description when result has no linked script', async () => {
+    const testId = '00000000-0000-0000-0000-000000000022';
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status) VALUES ($1, 'backend', 'http://x.com', 'completed')`,
+      [testId]
+    );
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result.script_description).toBeNull();
+  });
 });
 
 // ─── POST /results/:testId/live ───────────────────────────────────────────────

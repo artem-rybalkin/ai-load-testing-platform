@@ -60,6 +60,15 @@ services:
       - /app/node_modules
     command: npx tsx watch src/index.ts
 
+  recorder-service:
+    build:
+      context: .
+      dockerfile: services/recorder-service/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx tsx watch src/index.ts
+
   ui:
     build:
       context: .

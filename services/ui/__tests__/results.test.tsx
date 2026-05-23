@@ -30,6 +30,7 @@ const makeResult = (id: string, status = 'completed') => ({
   status,
   metrics: { rps: 10, p95ResponseTime: 400 },
   script: null,
+  script_description: null,
   reused_script: false,
   is_baseline: false,
   duration_seconds: 30,
@@ -106,5 +107,30 @@ describe('Results page', () => {
       const link = screen.getByRole('link', { name: /view/i });
       expect(link).toHaveAttribute('href', '/results/test-id-xyz');
     });
+  });
+
+  it('shows Re-run buttons for completed results (desktop + mobile)', async () => {
+    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'completed')] });
+    render(<ResultsPage />);
+    await waitFor(() => expect(screen.getByText('http://example-aaa.com')).toBeInTheDocument());
+    // jsdom renders both the hidden-md desktop table and the md:hidden mobile cards,
+    // so we expect at least one Re-run button (could be two — one per layout).
+    expect(screen.getAllByRole('button', { name: /re-run/i }).length).toBeGreaterThan(0);
+  });
+
+  it('Re-run button navigates to home with the rerun query param', async () => {
+    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'completed')] });
+    render(<ResultsPage />);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /re-run/i }).length).toBeGreaterThan(0));
+    // Click the first Re-run button (desktop table version)
+    fireEvent.click(screen.getAllByRole('button', { name: /re-run/i })[0]);
+    expect(mockPush).toHaveBeenCalledWith('/?rerun=aaa');
+  });
+
+  it('does not show a Re-run button for non-completed results', async () => {
+    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'running')] });
+    render(<ResultsPage />);
+    await waitFor(() => expect(screen.getByText('http://example-aaa.com')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /re-run/i })).not.toBeInTheDocument();
   });
 });

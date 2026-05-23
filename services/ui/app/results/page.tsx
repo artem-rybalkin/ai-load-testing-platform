@@ -122,7 +122,7 @@ export default function ResultsPage() {
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Type</th>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Status</th>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Analysis</th>
-                  <th className="px-3 py-2" />
+                  <th className="px-3 py-2 text-right text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#eaeef2]">
@@ -165,7 +165,17 @@ export default function ResultsPage() {
                         {r.perf_status && <PerfTag status={r.perf_status} />}
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        <Link href={`/results/${r.test_id}`} className="text-[12px] text-[#0969da] hover:underline" onClick={e => e.stopPropagation()}>View →</Link>
+                        <div className="flex items-center justify-end gap-3">
+                          {r.status === 'completed' && (
+                            <button
+                              onClick={e => { e.stopPropagation(); router.push(`/?rerun=${r.test_id}`); }}
+                              className="text-[12px] text-[#57606a] hover:text-[#24292f] hover:underline"
+                            >
+                              ↻ Re-run
+                            </button>
+                          )}
+                          <Link href={`/results/${r.test_id}`} className="text-[12px] text-[#0969da] hover:underline" onClick={e => e.stopPropagation()}>View →</Link>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -179,13 +189,12 @@ export default function ResultsPage() {
             {results.map(r => {
               const metric = getMainMetric(r);
               return (
-                <Link
+                <div
                   key={r.id}
-                  href={`/results/${r.test_id}`}
                   className="block bg-white border border-[#d0d7de] rounded-md px-3 py-2.5"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
+                    <Link href={`/results/${r.test_id}`} className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <StatusDot status={r.status} perf={r.perf_status} />
                         <span className="font-mono text-[13px] text-[#24292f] font-medium truncate">{r.target_url.replace(/https?:\/\//, '')}</span>
@@ -196,10 +205,20 @@ export default function ResultsPage() {
                         {r.perf_status && <PerfTag status={r.perf_status} />}
                       </div>
                       {metric && <div className="text-[11px] font-mono text-[#57606a] mt-0.5">{metric}</div>}
+                    </Link>
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <span className="text-[13px] text-[#0969da]">→</span>
+                      {r.status === 'completed' && (
+                        <button
+                          onClick={() => router.push(`/?rerun=${r.test_id}`)}
+                          className="text-[11px] text-[#57606a] hover:text-[#24292f]"
+                        >
+                          ↻ Re-run
+                        </button>
+                      )}
                     </div>
-                    <span className="text-[13px] text-[#0969da] flex-shrink-0 mt-0.5">→</span>
                   </div>
-                </Link>
+                </div>
               );
             })}
           </div>

@@ -14,7 +14,12 @@ COPY services/ai-service ./services/ai-service
 
 RUN npm run build --workspace=packages/shared
 
+# Hand ownership to the built-in non-root node user (UID 1000)
+RUN chown -R node:node /app
+
 WORKDIR /app/services/ai-service
+
+USER node
 
 EXPOSE 3001
 

@@ -1,0 +1,24 @@
+{
+  "name": "@alt/recorder-service",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "dependencies": {
+    "@alt/shared": "*",
+    "@fastify/cors": "^8.5.0",
+    "@google/generative-ai": "^0.21.0",
+    "fastify": "^5.8.5",
+    "pino": "^9.0.0",
+    "puppeteer-core": "^22.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src"
+  }
+}

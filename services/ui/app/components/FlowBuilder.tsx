@@ -1,7 +1,7 @@
 'use client';
 
-import { useRef } from 'react';
-import { FlowStep, ExtractRule, ExtractSource } from '@/lib/api';
+import { useRef, useState, useEffect } from 'react';
+import { FlowStep, ExtractRule, ExtractSource, RecordingSession, startRecording, stopRecording, getRecording } from '@/lib/api';
 
 interface EnvVar { key: string; value: string }
 
@@ -85,6 +85,55 @@ const parseHar = (raw: string): FlowStep[] => {
 export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange, testData, onTestDataChange, csvFile, onCsvChange }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const csvRef  = useRef<HTMLInputElement>(null);
+
+  // ── Flow Recording state ────────────────────────────────────────────────────
+  const [recording, setRecording] = useState<RecordingSession | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll recorder-service every second while a session is active
+  useEffect(() => {
+    if (!recording || recording.status !== 'active') {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      return;
+    }
+    pollRef.current = setInterval(async () => {
+      try {
+        const data = await getRecording(recording.id);
+        setRecording(prev => prev ? { ...prev, stepCount: data.stepCount, status: data.status } : data);
+      } catch { /* recorder may be temporarily unreachable — keep polling */ }
+    }, 1000);
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [recording?.id, recording?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleStartRecording = async () => {
+    setRecordingError(null);
+    try {
+      const session = await startRecording(steps[0]?.url);
+      setRecording(session);
+      // Open the noVNC browser viewer in a new tab so the user can interact
+      window.open(session.noVncUrl, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setRecordingError(err instanceof Error ? err.message : 'Failed to start recording — is recorder-service running?');
+    }
+  };
+
+  const handleStopRecording = async () => {
+    if (!recording) return;
+    setRecordingError(null);
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    setRecording(prev => prev ? { ...prev, status: 'stopping' } : prev);
+    try {
+      const result = await stopRecording(recording.id);
+      if (result.steps && result.steps.length > 0) {
+        onChange(result.steps);
+      }
+      setRecording(null);
+    } catch (err) {
+      setRecordingError(err instanceof Error ? err.message : 'Failed to stop recording');
+      setRecording(prev => prev ? { ...prev, status: 'active' } : prev); // revert status
+    }
+  };
 
   const update = (i: number, patch: Partial<FlowStep>) => {
     const next = steps.map((s, idx) => idx === i ? { ...s, ...patch } : s);
@@ -183,18 +232,71 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
   return (
     <div className="space-y-4">
-      {/* HAR import */}
-      <div className="flex items-center gap-3">
+      {/* HAR import + Record button row */}
+      <div className="flex items-center gap-2 flex-wrap">
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          className="px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
+          className="px-3 py-1.5 text-xs font-medium border border-[#d0d7de] text-[#24292f] rounded-md hover:bg-[#f3f4f6]"
         >
           Import from HAR
         </button>
-        <span className="text-xs text-gray-400">or build steps manually below</span>
+
+        {/* 🔴 Record button — third option alongside HAR import */}
+        <button
+          type="button"
+          onClick={recording ? handleStopRecording : handleStartRecording}
+          disabled={recording?.status === 'stopping'}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors font-mono ${
+            recording && recording.status !== 'stopping'
+              ? 'bg-[#cf222e] border-[#cf222e] text-white hover:bg-[#a0151a]'
+              : recording?.status === 'stopping'
+                ? 'bg-[#eaeef2] border-[#d0d7de] text-[#57606a] cursor-not-allowed'
+                : 'border-[#d0d7de] text-[#24292f] hover:bg-[#f3f4f6]'
+          }`}
+        >
+          {recording?.status === 'stopping'
+            ? '⏳ Processing…'
+            : recording
+              ? `⏹ Stop Recording (${recording.stepCount ?? 0})`
+              : '🔴 Record'}
+        </button>
+
+        <span className="text-xs text-[#57606a]">or build steps manually below</span>
         <input ref={fileRef} type="file" accept=".har,application/json" className="hidden" onChange={handleHar} />
       </div>
+
+      {/* Recording active overlay */}
+      {recording && recording.status === 'active' && (
+        <div className="p-3 bg-[#fff8c5] border border-[#d4a72c] rounded-md text-[12px]">
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-semibold text-[#633c01] font-mono">
+              🔴 Recording — {recording.stepCount ?? 0} request{recording.stepCount !== 1 ? 's' : ''} captured
+            </span>
+            <a
+              href={recording.noVncUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[#0969da] hover:underline font-mono text-[11px]"
+            >
+              Open Browser ↗
+            </a>
+          </div>
+          <p className="text-[#633c01]">
+            Interact with the target page in the recording browser, then click{' '}
+            <strong>⏹ Stop Recording</strong> when done.
+            Steps will automatically populate below.
+          </p>
+        </div>
+      )}
+
+      {/* Recording error */}
+      {recordingError && (
+        <div className="p-2 bg-[#fff0ee] border border-[#ff818266] rounded-md text-[12px] text-[#cf222e] flex items-center justify-between">
+          <span>⚠ {recordingError}</span>
+          <button onClick={() => setRecordingError(null)} className="text-[#cf222e] ml-2 hover:opacity-70">✕</button>
+        </div>
+      )}
 
       {/* Steps */}
       <div className="space-y-3">

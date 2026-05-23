@@ -13,6 +13,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
 
+# Hand ownership to the built-in non-root node user (UID 1000).
+# The .next build output is created as root above; chown it so the
+# node user can serve the app at runtime.
+RUN chown -R node:node /app
+
+USER node
+
 EXPOSE 3006
 
 CMD ["npx", "next", "start", "-p", "3006"]

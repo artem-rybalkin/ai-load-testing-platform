@@ -1,5 +1,6 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 const RESULTS_URL = process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004';
+export const RECORDER_URL = process.env.NEXT_PUBLIC_RECORDER_URL || 'http://localhost:3007';
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
 
 const authHeaders = (): Record<string, string> =>
@@ -57,6 +58,7 @@ export interface TestResult {
   status: string;
   metrics: Record<string, number>;
   script: string | null;
+  script_description: string | null;
   reused_script: boolean;
   is_baseline: boolean;
   duration_seconds: number | null;
@@ -297,5 +299,38 @@ export interface AIStatus {
 
 export const getAIStatus = async (): Promise<AIStatus> => {
   const res = await fetch(`${RESULTS_URL}/system/ai-status`, { cache: 'no-store' });
+  return res.json();
+};
+
+// ── Flow Recording ────────────────────────────────────────────────────────────
+
+export interface RecordingSession {
+  id: string;
+  status: 'active' | 'stopping' | 'completed' | 'error';
+  noVncUrl: string;
+  steps?: FlowStep[];
+  stepCount?: number;
+  error?: string;
+}
+
+export const startRecording = async (targetUrl?: string): Promise<RecordingSession> => {
+  const res = await fetch(`${RECORDER_URL}/recordings/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targetUrl }),
+  });
+  if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
+  return res.json();
+};
+
+export const stopRecording = async (id: string): Promise<RecordingSession> => {
+  const res = await fetch(`${RECORDER_URL}/recordings/${id}/stop`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
+  return res.json();
+};
+
+export const getRecording = async (id: string): Promise<RecordingSession> => {
+  const res = await fetch(`${RECORDER_URL}/recordings/${id}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
   return res.json();
 };

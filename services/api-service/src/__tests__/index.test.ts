@@ -278,3 +278,67 @@ describe('POST /tests — parameterization', () => {
     expect(published.testData).toBeUndefined();
   });
 });
+
+// ─── POST /tests — sensitive fields never returned in HTTP response ───────────
+
+describe('POST /tests — response does not leak sensitive fields', () => {
+  it('strips envVars from the HTTP response even when provided in the request', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...validBody, envVars: { SECRET_KEY: 'super-secret', DB_PASSWORD: 'hunter2' } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().test.envVars).toBeUndefined();
+  });
+
+  it('strips testData from the HTTP response', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: {
+        type: 'flow',
+        targetUrl: 'http://example.com',
+        description: 'login flow',
+        options: { vus: 2, duration: '30s' },
+        steps: [{ name: 'Login', url: 'http://example.com/login', method: 'POST' }],
+        testData: [{ username: 'user1', password: 'pass1' }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().test.testData).toBeUndefined();
+  });
+
+  it('strips csvData and csvFilename from the HTTP response', async () => {
+    const csvData = Buffer.from('username,password\nuser1,pass1').toString('base64');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: {
+        type: 'flow',
+        targetUrl: 'http://example.com',
+        description: 'login flow',
+        options: { vus: 2, duration: '30s' },
+        steps: [{ name: 'Login', url: 'http://example.com/login', method: 'POST' }],
+        csvData,
+        csvFilename: 'users.csv',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().test.csvData).toBeUndefined();
+    expect(res.json().test.csvFilename).toBeUndefined();
+  });
+
+  it('still returns test.id, targetUrl, and type in the response', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...validBody, envVars: { API_KEY: 'secret' } },
+    });
+    expect(res.statusCode).toBe(200);
+    const { test } = res.json();
+    expect(test.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(test.targetUrl).toBe('http://example.com');
+    expect(test.type).toBe('backend');
+  });
+});

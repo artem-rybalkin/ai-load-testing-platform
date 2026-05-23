@@ -15,6 +15,26 @@ const parseDurationSeconds = (d: string): number => {
   return n; // seconds
 };
 
+/**
+ * Remove fields that must never leave the api-service boundary:
+ *  - envVars    — caller-supplied credentials passed to k6 as --env flags
+ *  - testData   — parameterization rows (may contain usernames/passwords)
+ *  - csvData    — base64-encoded CSV with the same concerns
+ *  - csvFilename — unnecessary metadata once the test is queued
+ *  - generatedScript / cachedScript / cachedScriptDescription
+ *                 — internal pipeline state; large blobs
+ */
+const safeTestResponse = ({
+  envVars: _ev,
+  testData: _td,
+  csvData: _cd,
+  csvFilename: _cf,
+  generatedScript: _gs,
+  cachedScript: _cs,
+  cachedScriptDescription: _csd,
+  ...safe
+}: EnrichedTestRequest) => safe;
+
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({ logger: false });
 
@@ -131,7 +151,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         // Cache miss — generate new script
         publishTest(test, false);
         warnIfNoWorker();
-        return { success: true, test, scriptReused: false };
+        return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
 
       if (!description || type === 'flow') {
@@ -143,7 +163,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         test.reusedScript = true;
         publishTest(test, true);
         warnIfNoWorker();
-        return { success: true, test, scriptReused: true, scriptUsedCount: existingScript.usedCount };
+        return { success: true, test: safeTestResponse(test), scriptReused: true, scriptUsedCount: existingScript.usedCount };
       }
 
       // Description provided + cached script — route through ai-service for Gemini comparison
@@ -153,7 +173,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       test.scriptId = existingScript.id;
       publishTest(test, false);
       warnIfNoWorker();
-      return { success: true, test, scriptReused: false };
+      return { success: true, test: safeTestResponse(test), scriptReused: false };
     }
   );
 

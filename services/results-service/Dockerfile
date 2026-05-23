@@ -14,7 +14,12 @@ COPY services/results-service ./services/results-service
 
 RUN npm run build --workspace=packages/shared
 
+# Hand ownership to the built-in non-root node user (UID 1000)
+RUN chown -R node:node /app
+
 WORKDIR /app/services/results-service
+
+USER node
 
 EXPOSE 3004
 

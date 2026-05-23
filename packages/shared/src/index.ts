@@ -173,3 +173,27 @@ export interface LiveMetricPoint {
   errorRate: number;
   stepMetrics?: LiveStepMetric[];
 }
+
+// ── Flow Recording ────────────────────────────────────────────────────────────
+
+/** A single captured HTTP exchange during a recording session */
+export interface RecordedRequest {
+  requestId: string;
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+  responseStatus: number;
+  responseHeaders: Record<string, string>;
+  responseBody?: string; // only for JSON responses; used by AI correlation
+}
+
+/** Recording session state returned by the recorder-service */
+export interface RecordingSession {
+  id: string;
+  status: 'active' | 'stopping' | 'completed' | 'error';
+  noVncUrl: string;   // e.g. "http://localhost:6080"
+  steps?: FlowStep[]; // populated after stop + AI correlation
+  stepCount?: number; // live count while recording is active
+  error?: string;
+}
