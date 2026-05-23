@@ -1,7 +1,6 @@
 FROM node:20-alpine
 
 # ── System deps: Chromium + Xvfb virtual display + noVNC browser viewer ───────
-# py3-websockify is the websockify proxy bundled with novnc on Alpine
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -13,7 +12,8 @@ RUN apk add --no-cache \
     x11vnc \
     novnc \
     python3 \
-    py3-websockify
+    py3-pip \
+ && pip3 install --break-system-packages websockify
 
 # Pre-create the X11 Unix socket directory with correct sticky-bit permissions
 # (required because Xvfb runs as non-root and cannot create /tmp/.X11-unix itself)

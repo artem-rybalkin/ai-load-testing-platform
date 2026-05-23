@@ -1,6 +1,7 @@
 FROM node:20-alpine
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont \
-    xvfb x11vnc novnc python3 py3-websockify
+    xvfb x11vnc novnc python3 py3-pip \
+ && pip3 install --break-system-packages websockify
 # Pre-create X11 socket directory with sticky-bit (required when running as non-root)
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
