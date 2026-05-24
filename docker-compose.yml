@@ -187,7 +187,7 @@ services:
       NEXT_PUBLIC_RESULTS_URL: http://localhost:3004
       NEXT_PUBLIC_RECORDER_URL: http://localhost:3007
       NEXT_PUBLIC_API_KEY: ${API_KEY:-}
-      TURBOPACK: "0"
+      NEXT_TELEMETRY_DISABLED: "1"
     depends_on:
       - api-service
       - results-service

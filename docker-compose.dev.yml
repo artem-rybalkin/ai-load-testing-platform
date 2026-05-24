@@ -67,7 +67,8 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
-    command: npx tsx watch src/index.ts
+    # No command override — uses CMD from Dockerfile.dev (/docker-entrypoint-dev.sh)
+    # which starts Xvfb + x11vnc + noVNC before launching tsx watch
 
   ui:
     build:
@@ -76,8 +77,12 @@ services:
     volumes:
       - ./services/ui:/app/services/ui
       - /app/services/ui/node_modules
-      - /app/services/ui/.next
+      - ui_next_cache:/app/services/ui/.next
     environment:
       NODE_ENV: development
       WATCHPACK_POLLING: "true"
-    command: npx next dev -p 3006
+      HOSTNAME: "0.0.0.0"
+    command: npx next dev -p 3006 --hostname 0.0.0.0
+
+volumes:
+  ui_next_cache:

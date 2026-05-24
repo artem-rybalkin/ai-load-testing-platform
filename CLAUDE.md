@@ -56,7 +56,7 @@ node-cron in results-service → POST /tests (auto-trigger on schedule)
 - **AI:** Google Gemini API (@google/generative-ai), model: gemini-2.5-flash
 - **Load Testing:** k6 (installed in worker-backend Docker image)
 - **Browser Testing:** Puppeteer 22 + Lighthouse (headless Chromium in Alpine)
-- **Frontend:** Next.js 15 + Tailwind CSS + Recharts
+- **Frontend:** Next.js 16 + Tailwind CSS + Recharts
 - **Containerization:** Docker + docker-compose
 - **Monorepo:** npm workspaces
 - **Logging:** Pino (structured JSON, every service)
@@ -178,8 +178,10 @@ ai-load-testing-platform/
                 ├── AnalysisPanel.tsx # perf status badge + threshold violations + regression diffs
                 ├── RealtimeChart.tsx # 3-panel live metrics (response time, error rate, throughput)
                 ├── TrendChart.tsx    # p95/LCP trend line across runs for same URL
-                └── FlowBuilder.tsx   # multi-step flow editor + HAR import + extract source selector
-                                    #   + inline data table (parameterization) + CSV file upload
+                └── FlowBuilder.tsx   # multi-step flow editor + HAR import + 🔴 Record button
+                                    #   + extract source selector + inline data table + CSV upload
+                                    #   + "Clear all" button + "Ignore list" for recordings
+            # page.tsx also contains: flowRunner state + "Run as" toggle for flow tests
 ```
 
 ## Database Schema
@@ -209,6 +211,7 @@ CREATE TABLE test_results (
   status           VARCHAR(20) NOT NULL,   -- 'pending'|'running'|'completed'|'failed'|'cancelled'
   status_message   TEXT,                   -- real-time progress from ai-service (retry info, errors)
   metrics          JSONB,                  -- BackendMetrics | ClientMetrics (incl. stepMetrics[])
+  steps            JSONB,                  -- FlowStep[] stored for flow tests; enables re-run restoration
   script_id        UUID REFERENCES test_scripts(id),
   reused_script    BOOLEAN DEFAULT FALSE,
   perf_status      VARCHAR(20),            -- 'passed' | 'degraded' | 'failed'
@@ -363,14 +366,14 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 
 ### results-service (port 3004)
 **Results**
-- `POST /results/pending`         — create pending record `{ testId, type, targetUrl, durationSeconds? }`
+- `POST /results/pending`         — create pending record `{ testId, type, targetUrl, durationSeconds?, steps? }` — steps stored for flow re-run
 - `GET  /results`                 — all results (last 50, joined with script text)
 - `GET  /results/active`          — tests with status pending/running
 - `GET  /results/compare?a=&b=`   — side-by-side diff of two completed results
 - `GET  /results/trend?url=`      — chronological metric trend for a URL (p95 or LCP)
 - `GET  /results/:testId`         — single result with joined `script` + `script_description` from test_scripts
 - `POST /results/:testId/cancel`  — set status = cancelled in DB
-- `POST /results/:testId/running` — set status = running + started_at = NOW() (called by workers on start)
+- `POST /results/:testId/running` — set status = running + started_at = NOW() + status_message = NULL (called by workers on start; clears stale AI message)
 - `POST /results/:testId/fail`    — set status = failed (called by ai-service on DLQ exhaustion)
 - `POST /results/:testId/message` — update status_message field (ai-service progress updates)
 - `POST /results/:testId/live`    — save live metric point with optional `stepMetrics` (called by worker-backend)
@@ -392,7 +395,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 
 **Schedules**
 - `GET  /schedules`          — list all schedules
-- `POST /schedules`          — create `{ name, cron, type, target_url, options, ... }`
+- `POST /schedules`          — create `{ name, cron, type, target_url, options, ... }` — body uses snake_case `target_url`
 - `PUT  /schedules/:id`      — update schedule (including enable/disable)
 - `DELETE /schedules/:id`    — delete schedule (stops cron job)
 - `POST /schedules/:id/run`  — manual immediate trigger
@@ -456,7 +459,7 @@ After 3 retries the message is routed to `<queue>.dlq` and acked.
 
 ### k6 Metrics Parsing (worker-backend/parser.ts)
 
-- `parseK6Output(output)` — regex over k6 text output → `BackendMetrics`
+- `parseK6Output(output)` — regex over k6 text output → `BackendMetrics`; k6 is invoked with `--summary-trend-stats avg,min,med,max,p(90),p(95),p(99)` so p99 is always present
 - `parseK6StatusCodes(jsonContent)` — counts `http_reqs` points by `data.tags.status`
 - `aggregateWindow(lines)` — aggregates 5-second k6 JSON windows → `LiveMetricPoint` with per-step data:
   - Collects `http_req_duration`, `http_reqs`, `http_req_failed` per `data.tags.group`
@@ -477,6 +480,7 @@ After 3 retries the message is routed to `<queue>.dlq` and acked.
 - `RealtimeChart` detects `stepMetrics` and renders one colored line per step in all 3 charts:
   - Response time per step, Error rate per step, Throughput per step
   - Step names are sanitized (`toKey()`) for safe Recharts dataKey usage
+  - Fixed chart height (`CHART_H = 160px`) regardless of step count; Recharts `<Legend>` removed from charts; single shared collapsible legend rendered below all 3 charts (shows first 4 steps, `+ N more` expands)
 
 ### Performance Analyzer (results-service/analyzer.ts)
 Default thresholds: p95 < 1000ms, avg < 500ms, error rate < 1%, LCP < 2500ms,
@@ -555,9 +559,14 @@ The UI follows a "Command Center" aesthetic: GitHub-style color palette, collaps
 
 ### UI Form — Test Creation (app/page.tsx)
 - **Description field** is the primary input; Advanced settings (VUs, duration, ramp-up, profile) are collapsed by default
-- **Auto-extraction from description:** on blur, `applyDescriptionParams()` parses natural language for VUs, sessions, duration, ramp-up, profile keywords and updates the Advanced settings; the section auto-opens to confirm
+- **Auto-extraction from description:** on blur, `applyDescriptionParams()` parses natural language and updates the form:
+  - **Test type detection:** "browser/puppeteer/web vitals/lighthouse" → switches to `client-side`; "backend/load test/api test/k6" → switches to `backend`; for flow tab, also flips `flowRunner` between `'k6'` and `'browser'`
+  - **Numeric params:** VUs, sessions, duration (many formats), ramp-up
+  - **Load profile:** spike / soak / capacity / load keywords
+  - Advanced settings section auto-opens when any numeric param is detected
 - **SLO thresholds:** collapsible section; backend/flow gets p95/avg/errorRate, browser gets LCP/FCP/TTFB/CLS
 - **Templates:** save/load includes description, URL, VUs, duration, profile, peakVus, thresholds; dropdown is controlled (always resets to placeholder after selection)
+- **Flow runner selector** — below FlowBuilder, a toggle "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" controls `flowRunner` state (`'k6'` | `'browser'`); when `'browser'` is selected `handleSubmit` sends `type: 'client-side'` with `sessions/duration/collectWebVitals` options; auto-set by `applyDescriptionParams` type detection
 
 ### UI Polling Strategy
 - `ActiveTests` strip: polls `/results/active` every 3s; shows ⚡ (backend), 🔗 (flow), 🌐 (browser) icons inline
@@ -647,6 +656,7 @@ On non-zero exit the script is rejected; the message is nacked and retried / DLQ
 ```bash
 # .env (root — NEVER commit, add to .gitignore)
 GEMINI_API_KEY=your_key_here
+COMPOSE_BAKE=true             # enables Docker BuildKit bake for parallel multi-service builds
 
 # Set automatically by docker-compose:
 RABBITMQ_URL=amqp://user:password@rabbitmq:5672
@@ -926,6 +936,19 @@ All phases complete:
 - ✅ **recorder-service added to `GET /system/health`** aggregation in results-service (shows as unreachable if not running — optional service)
 - ✅ **`RECORDER_URL` env var** in results-service + docker-compose
 - ✅ **Non-root** — recorder Dockerfile follows same `chown -R node:node /app && USER node` pattern; Chromium works as non-root with `--no-sandbox`
+
+### Phase 15 — Bugfixes & Polish
+- ✅ **Flow test re-run steps restored** — `steps JSONB` column added to `test_results`; `POST /results/pending` accepts and stores `steps[]`; api-service passes steps to pending record; `TestResult` interface gains `steps?: FlowStep[]`; home page re-run handler restores steps into FlowBuilder (works for tests run after this fix)
+- ✅ **p99 always populated** — worker-backend spawns k6 with `--summary-trend-stats avg,min,med,max,p(90),p(95),p(99)` flag; `parseK6Output` regex already extracted p99 but k6 default summary omitted it
+- ✅ **RealtimeChart fixed height** — Recharts `<Legend>` removed from all three `<LineChart>` instances (it was expanding `ResponsiveContainer` height as step count grew); replaced with a single external collapsible legend below the three charts: first 4 steps visible, `+ N more…` button expands; chart panel stays at `CHART_H = 160px` regardless of step count
+- ✅ **`status_message` cleared on worker start** — `POST /results/:testId/running` now includes `status_message = NULL` in the UPDATE; stale "Script ready — starting test…" message no longer shown while test is running
+- ✅ **POST /schedules 400 fixed** — results-service endpoint body type changed from camelCase `targetUrl` to snake_case `target_url` to match UI payload
+- ✅ **Flow runner selector** — "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" toggle below FlowBuilder on home page; `flowRunner` state (`'k6' | 'browser'`) is independent of `form.type`; when browser is selected, submit sends `type: 'client-side'` with Puppeteer options + `steps[]`
+- ✅ **Description type auto-detection** — `applyDescriptionParams()` now detects test type: "browser/puppeteer/web vitals/lighthouse/client-side" keywords → `client-side`; "backend/api test/load test/http test/k6/performance test" keywords → `backend`; also flips `flowRunner` for flow tab; ambiguous descriptions leave type unchanged
+- ✅ **`COMPOSE_BAKE=true`** added to `.env` — enables Docker BuildKit bake for parallel multi-service builds (faster `docker compose up --build`)
+- ✅ **recorder-service dev entrypoint fixed** — removed `command: npx tsx watch src/index.ts` override from `docker-compose.dev.yml` for recorder-service; the override bypassed `docker-entrypoint-dev.sh` (which starts Xvfb first), causing `Missing X server or $DISPLAY` crash
+- ✅ **Next.js `ERR_CONNECTION_RESET` fixed** — switched anonymous `.next` bind-mount to named Docker volume `ui_next_cache`; added `--hostname 0.0.0.0` to `next dev` command; Turbopack warm-start time dropped from ~7s to ~1s, eliminating browser TCP timeouts on first chunk load
+- ✅ **TypeScript strict-mode fixes** — `page.tsx`: `(thresholds as unknown as Record<string, string>)[key]`; `results/[testId]/page.tsx`: `const m = result.metrics as Record<string, any>` to allow nested property access without cascading assertions
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)

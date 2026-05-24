@@ -165,9 +165,24 @@ function HomeContent() {
   const [flowTestData, setFlowTestData] = useState<Array<Record<string, string>>>([]);
   const [flowCsvFile, setFlowCsvFile] = useState<{ name: string; data: string } | null>(null);
   const [flowEnvVars, setFlowEnvVars] = useState<EnvVar[]>([]);
+  const [flowRunner, setFlowRunner] = useState<'k6' | 'browser'>('k6');
 
   const applyDescriptionParams = (desc: string) => {
     const updates: Partial<typeof form> = {};
+
+    // ── Test type detection ──────────────────────────────────────────────────
+    const isBrowser = /\b(browser|puppeteer|real\s+browser|web\s+vitals?|lighthouse|client[\s-]?side)\b/i.test(desc);
+    const isBackend  = /\b(backend|api\s+test|load\s+test|http\s+test|k6|performance\s+test)\b/i.test(desc);
+    if (isBrowser && !isBackend) {
+      updates.type = 'client-side';
+      // For flow tab: also flip the runner to browser
+      setFlowRunner('browser');
+    } else if (isBackend && !isBrowser) {
+      updates.type = 'backend';
+      setFlowRunner('k6');
+    }
+
+    // ── Numeric params ───────────────────────────────────────────────────────
     const vusM = desc.match(/\b(\d+)\s*(?:virtual\s+users?|vus?|users?|concurrent)\b/i);
     if (vusM) updates.vus = Math.min(100, Math.max(1, parseInt(vusM[1])));
     const sessM = desc.match(/\b(\d+)\s*(?:sessions?|browsers?|tabs?)\b/i);
@@ -185,12 +200,17 @@ function HomeContent() {
       const u = rampM[2].toLowerCase()[0];
       updates.rampUp = u === 'm' ? `${n}m` : `${n}s`;
     }
+
+    // ── Load profile ─────────────────────────────────────────────────────────
     if (/\bspike\b/i.test(desc)) updates.profile = 'spike';
     else if (/\bsoak\b/i.test(desc)) updates.profile = 'soak';
     else if (/\bcapacity\b/i.test(desc)) updates.profile = 'capacity';
     else if (/\bload\b/i.test(desc)) updates.profile = 'load';
+
     if (Object.keys(updates).length > 0) {
       setForm(f => ({ ...f, ...updates }));
+      // Open advanced settings if anything meaningful was detected
+      if (Object.keys(updates).some(k => k !== 'type')) setShowAdvanced(true);
     }
   };
 
@@ -211,6 +231,10 @@ function HomeContent() {
           ...(result.script_description ? { description: result.script_description } : {}),
           ...(result.duration_seconds   ? { duration: snapDuration(result.duration_seconds) } : {}),
         }));
+        // Restore flow steps so the FlowBuilder is not empty on re-run
+        if (type === 'flow' && result.steps && result.steps.length > 0) {
+          setFlowSteps(result.steps);
+        }
         setRerunFrom(result.target_url);
         setShowAdvanced(true);
       }).catch(() => {});
@@ -338,6 +362,24 @@ function HomeContent() {
       if (form.type === 'flow') {
         const envVarsMap: Record<string, string> = {};
         for (const ev of flowEnvVars) { if (ev.key) envVarsMap[ev.key] = ev.value; }
+
+        if (flowRunner === 'browser') {
+          // Run as Puppeteer browser test — one real browser session navigating the steps
+          const stepsDesc = flowSteps.map((s, i) => `Step ${i + 1}: ${s.method} ${s.url}`).join(', ');
+          const description = form.description || `Browser flow: ${stepsDesc}`;
+          const res = await createTest({
+            type: 'client-side',
+            targetUrl: flowSteps[0]?.url ?? '',
+            description,
+            options: { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals },
+            steps: flowSteps,
+            envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
+            thresholds: buildThresholds(),
+          });
+          if (res.test?.id) router.push(`/results/${res.test.id}`);
+          return;
+        }
+
         const res = await createTest({
           type: 'flow',
           targetUrl: flowSteps[0]?.url ?? '',
@@ -443,16 +485,47 @@ function HomeContent() {
 
               {/* Flow builder */}
               {form.type === 'flow' && (
-                <FlowBuilder
-                  steps={flowSteps}
-                  envVars={flowEnvVars}
-                  onChange={setFlowSteps}
-                  onEnvVarsChange={setFlowEnvVars}
-                  testData={flowTestData}
-                  onTestDataChange={setFlowTestData}
-                  csvFile={flowCsvFile}
-                  onCsvChange={setFlowCsvFile}
-                />
+                <>
+                  <FlowBuilder
+                    steps={flowSteps}
+                    envVars={flowEnvVars}
+                    onChange={setFlowSteps}
+                    onEnvVarsChange={setFlowEnvVars}
+                    testData={flowTestData}
+                    onTestDataChange={setFlowTestData}
+                    csvFile={flowCsvFile}
+                    onCsvChange={setFlowCsvFile}
+                  />
+                  {/* Runner selector */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Run as</label>
+                    <div className="flex border border-[#d0d7de] rounded-md overflow-hidden w-fit">
+                      {([
+                        { id: 'k6',      label: '⚡ k6 HTTP',          desc: 'Load test with many virtual users' },
+                        { id: 'browser', label: '🌐 Puppeteer Browser', desc: 'Real browser, Web Vitals, Lighthouse' },
+                      ] as const).map((r, i) => (
+                        <button
+                          key={r.id}
+                          type="button"
+                          title={r.desc}
+                          onClick={() => setFlowRunner(r.id)}
+                          className={`px-3 py-1.5 text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-[#d0d7de]' : ''} ${
+                            flowRunner === r.id
+                              ? 'bg-white text-[#0969da]'
+                              : 'bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2]'
+                          }`}
+                        >
+                          {r.label}
+                        </button>
+                      ))}
+                    </div>
+                    {flowRunner === 'browser' && (
+                      <p className="mt-1 text-[11px] text-[#57606a]">
+                        Launches a real Chromium browser. Collects Web Vitals &amp; Lighthouse scores. Uses <strong>sessions</strong> and <strong>duration</strong> from Advanced settings.
+                      </p>
+                    )}
+                  </div>
+                </>
               )}
 
               {/* URL */}
@@ -652,7 +725,7 @@ function HomeContent() {
                         <label className="block text-[10px] text-[#57606a] mb-1">{label} max</label>
                         <input
                           type="number" min={0}
-                          value={(thresholds as Record<string, string>)[key]}
+                          value={(thresholds as unknown as Record<string, string>)[key]}
                           onChange={e => setThresholds(t => ({ ...t, [key]: e.target.value }))}
                           className={inputCls}
                         />

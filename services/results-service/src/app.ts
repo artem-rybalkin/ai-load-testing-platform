@@ -139,7 +139,7 @@ export const buildApp = async (
       try {
         const { testId } = request.params;
         await pool.query(
-          `UPDATE test_results SET status = 'running', started_at = NOW() WHERE test_id = $1`,
+          `UPDATE test_results SET status = 'running', started_at = NOW(), status_message = NULL WHERE test_id = $1`,
           [testId]
         );
         return { success: true };
@@ -163,16 +163,16 @@ export const buildApp = async (
     }
   });
 
-  app.post<{ Body: { testId: string; type: string; targetUrl: string; durationSeconds?: number } }>(
+  app.post<{ Body: { testId: string; type: string; targetUrl: string; durationSeconds?: number; steps?: unknown[] } }>(
     '/results/pending',
     async (request, reply) => {
       try {
-        const { testId, type, targetUrl, durationSeconds } = request.body;
+        const { testId, type, targetUrl, durationSeconds, steps } = request.body;
         await pool.query(
-          `INSERT INTO test_results (test_id, type, target_url, status, duration_seconds)
-           VALUES ($1, $2, $3, 'pending', $4)
+          `INSERT INTO test_results (test_id, type, target_url, status, duration_seconds, steps)
+           VALUES ($1, $2, $3, 'pending', $4, $5)
            ON CONFLICT (test_id) DO NOTHING`,
-          [testId, type, targetUrl, durationSeconds ?? null]
+          [testId, type, targetUrl, durationSeconds ?? null, steps ? JSON.stringify(steps) : null]
         );
         return { success: true };
       } catch (err) {
@@ -398,15 +398,15 @@ export const buildApp = async (
     return { schedules: rows };
   });
 
-  app.post<{ Body: { name: string; cron: string; type: string; targetUrl: string; description?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown>; enabled?: boolean } }>(
+  app.post<{ Body: { name: string; cron: string; type: string; target_url: string; description?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown>; enabled?: boolean } }>(
     '/schedules',
     async (request, reply) => {
-      const { name, cron, type, targetUrl, description, options, thresholds, enabled = true } = request.body;
-      if (!name || !cron || !type || !targetUrl || !options) return reply.code(400).send({ error: 'name, cron, type, targetUrl, options are required' });
+      const { name, cron, type, target_url, description, options, thresholds, enabled = true } = request.body;
+      if (!name || !cron || !type || !target_url || !options) return reply.code(400).send({ error: 'name, cron, type, target_url, options are required' });
       const { rows } = await pool.query(
         `INSERT INTO schedules (name, cron, type, target_url, description, options, thresholds, enabled)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [name, cron, type, targetUrl, description ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, enabled]
+        [name, cron, type, target_url, description ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, enabled]
       );
       await reloadSchedule(pool, rows[0].id);
       return reply.code(201).send({ schedule: rows[0] });

@@ -116,7 +116,13 @@ const runK6Test = async (
     const envArgs = Object.entries(envVars ?? {})
       .filter(([k, v]) => SAFE_KEY.test(k) && !v.includes('\n') && !v.includes('\0') && k.length <= 64 && v.length <= 1024)
       .flatMap(([k, v]) => ['--env', `${k}=${v}`]);
-    const k6 = spawn('k6', ['run', '--out', `json=${jsonPath}`, ...envArgs, scriptPath]);
+    const k6 = spawn('k6', [
+      'run',
+      '--out', `json=${jsonPath}`,
+      '--summary-trend-stats', 'avg,min,med,max,p(90),p(95),p(99)',
+      ...envArgs,
+      scriptPath,
+    ]);
     runningTests.set(testId, k6);
     setStartedAt(testId).catch(() => {}); // mark exact k6 start time for countdown
 

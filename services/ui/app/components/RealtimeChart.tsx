@@ -1,8 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend
+  Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { LiveMetricPoint } from '@/lib/api';
 
@@ -38,7 +39,15 @@ const labelFor = (stepNames: string[], prefix: string, rawName: string) => {
   return stepNames.find(n => toKey(n) === key) ?? rawName;
 };
 
+// How many legend items to show before collapsing
+const LEGEND_SHOW = 4;
+
+// Fixed chart height — never changes regardless of step count
+const CHART_H = 160;
+
 export default function RealtimeChart({ points, startedAt }: Props) {
+  const [legendExpanded, setLegendExpanded] = useState(false);
+
   if (points.length === 0) {
     return (
       <div className="py-6 text-center">
@@ -72,11 +81,12 @@ export default function RealtimeChart({ points, startedAt }: Props) {
     return row;
   });
 
-  const chartH = hasSteps ? 180 : 140;
+  const visibleSteps = legendExpanded ? stepNames : stepNames.slice(0, LEGEND_SHOW);
+  const hiddenCount = stepNames.length - LEGEND_SHOW;
 
   return (
     <div className="space-y-4">
-      {/* Response time */}
+      {/* ── Response time ─────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
@@ -84,7 +94,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
           </span>
           <span className="text-[10px] font-mono text-[#8c959f]">ms · 5s windows</span>
         </div>
-        <ResponsiveContainer width="100%" height={chartH}>
+        <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
             <CartesianGrid stroke="#eaeef2" vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
@@ -93,7 +103,6 @@ export default function RealtimeChart({ points, startedAt }: Props) {
               contentStyle={TOOLTIP_STYLE}
               formatter={(v, name) => [`${v}ms`, labelFor(stepNames, 'avg', String(name))]}
             />
-            {hasSteps && <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }} formatter={name => labelFor(stepNames, 'avg', String(name))} />}
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`avg_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
@@ -106,7 +115,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
         </ResponsiveContainer>
       </div>
 
-      {/* Error rate */}
+      {/* ── Error rate ────────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
@@ -114,7 +123,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
           </span>
           <span className="text-[10px] font-mono text-[#8c959f]">{hasSteps ? 'error %' : 'VUs left · error % right'}</span>
         </div>
-        <ResponsiveContainer width="100%" height={chartH}>
+        <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
             <CartesianGrid stroke="#eaeef2" vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
@@ -133,7 +142,6 @@ export default function RealtimeChart({ points, startedAt }: Props) {
                 return name === 'VUs' ? [`${v}`, 'VUs'] : [`${v}%`, 'Error rate'];
               }}
             />
-            {hasSteps && <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }} formatter={name => labelFor(stepNames, 'err', String(name))} />}
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`err_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
@@ -150,7 +158,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
         </ResponsiveContainer>
       </div>
 
-      {/* Throughput */}
+      {/* ── Throughput ────────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
@@ -158,7 +166,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
           </span>
           <span className="text-[10px] font-mono text-[#8c959f]">req/sec</span>
         </div>
-        <ResponsiveContainer width="100%" height={chartH}>
+        <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
             <CartesianGrid stroke="#eaeef2" vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
@@ -167,7 +175,6 @@ export default function RealtimeChart({ points, startedAt }: Props) {
               contentStyle={TOOLTIP_STYLE}
               formatter={(v, name) => [`${v} rps`, labelFor(stepNames, 'rps', String(name))]}
             />
-            {hasSteps && <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }} formatter={name => labelFor(stepNames, 'rps', String(name))} />}
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`rps_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
@@ -179,6 +186,34 @@ export default function RealtimeChart({ points, startedAt }: Props) {
           </LineChart>
         </ResponsiveContainer>
       </div>
+
+      {/* ── Shared collapsible legend ─────────────────────────────── */}
+      {hasSteps && (
+        <div className="pt-1 border-t border-[#eaeef2]">
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {visibleSteps.map((name, i) => (
+              <span key={name} className="inline-flex items-center gap-1 text-[11px] font-mono text-[#24292f] whitespace-nowrap">
+                <span
+                  className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: STEP_COLORS[i % STEP_COLORS.length] }}
+                />
+                {name}
+              </span>
+            ))}
+          </div>
+          {stepNames.length > LEGEND_SHOW && (
+            <button
+              type="button"
+              onClick={() => setLegendExpanded(e => !e)}
+              className="mt-1.5 text-[11px] font-mono text-[#0969da] hover:underline"
+            >
+              {legendExpanded
+                ? '↑ show fewer'
+                : `+ ${hiddenCount} more step${hiddenCount > 1 ? 's' : ''}…`}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

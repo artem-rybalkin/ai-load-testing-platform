@@ -197,7 +197,8 @@ export default function ResultPage() {
     </div>
   );
 
-  const m = result.metrics;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const m = result.metrics as Record<string, any>;
   const isBackend = result.type === 'backend' || result.type === 'flow';
   const isRunning   = result.status === 'running';
   const isPending   = result.status === 'pending';

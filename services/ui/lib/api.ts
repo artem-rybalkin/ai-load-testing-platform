@@ -65,6 +65,7 @@ export interface TestResult {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+  steps?: FlowStep[];
   perf_status?: string;
   status_message?: string | null;
   analysis?: {
