@@ -505,7 +505,24 @@ export default function ResultPage() {
           {result.script && (
             <div className="col-span-full">
               <BentoCard>
-                <CardHeader title="Generated Script" />
+                <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa] flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Generated Script</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const blob = new Blob([result.script!], { type: 'text/javascript' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `script-${testId.slice(0, 8)}.js`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="text-[11px] font-mono text-[#0969da] hover:underline"
+                  >
+                    ↓ Download .js
+                  </button>
+                </div>
                 <pre className="text-[11px] font-mono text-[#57606a] bg-[#f6f8fa] p-4 overflow-auto max-h-64 leading-relaxed">
                   {result.script}
                 </pre>

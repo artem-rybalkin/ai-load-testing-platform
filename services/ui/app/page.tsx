@@ -166,6 +166,8 @@ function HomeContent() {
   const [flowCsvFile, setFlowCsvFile] = useState<{ name: string; data: string } | null>(null);
   const [flowEnvVars, setFlowEnvVars] = useState<EnvVar[]>([]);
   const [flowRunner, setFlowRunner] = useState<'k6' | 'browser'>('k6');
+  const [scriptMode, setScriptMode] = useState<'ai' | 'custom'>('ai');
+  const [customScript, setCustomScript] = useState('');
 
   const applyDescriptionParams = (desc: string) => {
     const updates: Partial<typeof form> = {};
@@ -351,8 +353,12 @@ function HomeContent() {
     if (form.type === 'flow') {
       if (flowSteps.length === 0) { setError('Add at least one step to run a flow test'); return; }
       if (flowSteps.some(s => !s.url)) { setError('Every step must have a URL'); return; }
-    } else if (!form.targetUrl) {
+    } else if (!form.targetUrl && !(form.type === 'backend' && scriptMode === 'custom')) {
       setError('URL is required');
+      return;
+    }
+    if (form.type === 'backend' && scriptMode === 'custom' && !customScript.trim()) {
+      setError('Paste or upload a k6 script');
       return;
     }
     setLoading(true);
@@ -401,10 +407,16 @@ function HomeContent() {
         ? { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}), ...(httpOpts ? { httpOptions: httpOpts } : {}) }
         : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals };
 
+      const isCustomScript = form.type === 'backend' && scriptMode === 'custom' && customScript.trim();
+      // In custom script mode the URL is optional — extract from the script or fall back to localhost
+      const effectiveUrl = form.targetUrl || (isCustomScript
+        ? (customScript.match(/https?:\/\/[^\s'"`,)]+/)?.[0]?.replace(/['"`,);]+$/, '') ?? 'http://localhost')
+        : '');
       const res = await createTest({
         type: form.type,
-        targetUrl: form.targetUrl,
-        description: form.description || `${form.type} test for ${form.targetUrl}`,
+        targetUrl: effectiveUrl,
+        description: form.description || `Custom k6 script — ${effectiveUrl}`,
+        ...(isCustomScript ? { customScript: customScript.trim() } : {}),
         options,
         thresholds: buildThresholds(),
       });
@@ -470,7 +482,10 @@ function HomeContent() {
                   ] as const).map((t, i) => (
                     <button
                       key={t.id}
-                      onClick={() => setForm(f => ({ ...f, type: t.id }))}
+                      onClick={() => {
+                        setForm(f => ({ ...f, type: t.id }));
+                        if (t.id !== 'backend') { setScriptMode('ai'); setCustomScript(''); }
+                      }}
                       className={`flex-1 py-1.5 text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-[#d0d7de]' : ''} ${
                         form.type === t.id
                           ? 'bg-white text-[#0969da]'
@@ -531,10 +546,15 @@ function HomeContent() {
               {/* URL */}
               {form.type !== 'flow' && (
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Target URL</label>
+                  <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
+                    Target URL
+                    {form.type === 'backend' && scriptMode === 'custom' && (
+                      <span className="ml-1 text-[#8c959f] normal-case font-normal tracking-normal">(optional — used as result label)</span>
+                    )}
+                  </label>
                   <input
                     type="text"
-                    placeholder="https://example.com"
+                    placeholder={form.type === 'backend' && scriptMode === 'custom' ? 'https://example.com (auto-detected from script if blank)' : 'https://example.com'}
                     value={form.targetUrl}
                     onChange={e => setForm(f => ({ ...f, targetUrl: e.target.value }))}
                     className={inputCls}
@@ -542,7 +562,66 @@ function HomeContent() {
                 </div>
               )}
 
-              {/* Description */}
+              {/* Script source toggle — backend only */}
+              {form.type === 'backend' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Script source</label>
+                  <div className="flex border border-[#d0d7de] rounded-md overflow-hidden w-fit">
+                    {([
+                      { id: 'ai',     label: '🤖 AI Generate'  },
+                      { id: 'custom', label: '📄 Custom Script' },
+                    ] as const).map((s, i) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setScriptMode(s.id)}
+                        className={`px-3 py-1.5 text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-[#d0d7de]' : ''} ${
+                          scriptMode === s.id
+                            ? 'bg-white text-[#0969da]'
+                            : 'bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2]'
+                        }`}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Custom k6 script — textarea + file upload */}
+              {form.type === 'backend' && scriptMode === 'custom' && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">k6 Script</label>
+                    <label className="text-[11px] font-mono text-[#0969da] hover:underline cursor-pointer">
+                      ↑ Upload .js
+                      <input
+                        type="file"
+                        accept=".js,.ts"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const text = await file.text();
+                          setCustomScript(text);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <textarea
+                    value={customScript}
+                    onChange={e => setCustomScript(e.target.value)}
+                    placeholder={"import http from 'k6/http';\nimport { sleep } from 'k6';\n\nexport const options = { vus: 10, duration: '30s' };\n\nexport default function() {\n  http.get('https://example.com');\n  sleep(1);\n}"}
+                    spellCheck={false}
+                    className={`${inputCls} font-mono text-[11px] leading-relaxed h-48 resize-y`}
+                  />
+                  <p className="text-[10px] text-[#8c959f] mt-1">Max 512 KB · The script&apos;s own <code className="font-mono">export const options</code> overrides Advanced settings.</p>
+                </div>
+              )}
+
+              {/* Description — hidden in custom script mode */}
+              {!(form.type === 'backend' && scriptMode === 'custom') && (
               <div>
                 <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
                   What to test?{' '}
@@ -557,6 +636,7 @@ function HomeContent() {
                   className={inputCls}
                 />
               </div>
+              )}
 
               {/* Advanced settings */}
               <div>

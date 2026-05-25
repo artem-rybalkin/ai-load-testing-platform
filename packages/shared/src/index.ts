@@ -58,6 +58,7 @@ export interface TestRequest {
   testData?: Array<Record<string, string>>; // inline data table — NOT stored in DB
   csvData?: string;                          // base64-encoded CSV content
   csvFilename?: string;                      // original filename hint
+  customScript?: string;                     // user-supplied k6 script; bypasses AI generation entirely
   createdAt: string;
 }
 
@@ -91,6 +92,8 @@ export interface TestResult {
   status: TestStatus;
   metrics: BackendMetrics | ClientMetrics;
   thresholds?: SLOThresholds;
+  scriptId?: string;       // set by workers; consumer saves it to test_results.script_id
+  reusedScript?: boolean;  // set by workers; consumer saves it to test_results.reused_script
   startedAt: string;
   completedAt?: string;
   perfStatus?: 'passed' | 'degraded' | 'failed';

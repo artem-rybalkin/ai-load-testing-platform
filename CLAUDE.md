@@ -182,6 +182,7 @@ ai-load-testing-platform/
                                     #   + extract source selector + inline data table + CSV upload
                                     #   + "Clear all" button + "Ignore list" for recordings
             # page.tsx also contains: flowRunner state + "Run as" toggle for flow tests
+            #   + scriptMode state + "Script source" toggle (AI Generate | Custom Script) for backend tests
 ```
 
 ## Database Schema
@@ -357,10 +358,11 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 ### api-service (port 3000)
 - `GET  /health` — deep health check (DB + RabbitMQ); 503 if any dep is down
 - `POST /tests`  — create test
-  - body: `{ type, targetUrl, description, options, thresholds?, steps?, envVars?, testData?, csvData?, csvFilename? }`
+  - body: `{ type, targetUrl, description, options, thresholds?, steps?, envVars?, testData?, csvData?, csvFilename?, customScript? }`
   - `type` = `'backend'` | `'client-side'` | `'flow'`
   - for flow: `steps[]` required, `targetUrl` defaults to `steps[0].url`
   - `envVars` passed to k6 as `--env KEY=VALUE` flags, **not stored in DB**
+  - `customScript` (optional) — user-supplied k6 script (≤ 512 KB); bypasses AI and script cache entirely, routes direct to worker; **not stored in DB**
   - description is parsed for VUs/duration/ramp-up/profile at form level; AI uses it for script content
 - `POST /tests/:testId/cancel` — cancel running/pending test; publishes to cancel-fanout exchange
 
@@ -656,7 +658,7 @@ On non-zero exit the script is rejected; the message is nacked and retried / DLQ
 ```bash
 # .env (root — NEVER commit, add to .gitignore)
 GEMINI_API_KEY=your_key_here
-COMPOSE_BAKE=true             # enables Docker BuildKit bake for parallel multi-service builds
+# COMPOSE_BAKE=true           # disabled — Windows path bug (doubled absolute path in bake evaluation)
 
 # Set automatically by docker-compose:
 RABBITMQ_URL=amqp://user:password@rabbitmq:5672
@@ -922,7 +924,7 @@ All phases complete:
 
 ### Phase 13 — Sensitive Field Protection
 - ✅ **Pino `redact` on all 5 loggers** — every `logger.ts` now configures `redact: { paths: ['envVars', 'testData', 'csvData'], censor: '[REDACTED]' }`; acts as a safety net so accidental `log.info(test, ...)` can never expose credentials or parameterization data in structured logs regardless of nesting
-- ✅ **`POST /tests` response sanitised** — `safeTestResponse()` strips seven internal/sensitive fields before the HTTP response leaves api-service: `envVars`, `testData`, `csvData`, `csvFilename` (credentials / test data), `generatedScript`, `cachedScript`, `cachedScriptDescription` (large internal blobs). `test.id`, `targetUrl`, `type`, `reusedScript`, and other non-sensitive fields are still returned for the UI.
+- ✅ **`POST /tests` response sanitised** — `safeTestResponse()` strips internal/sensitive fields before the HTTP response leaves api-service: `envVars`, `testData`, `csvData`, `csvFilename`, `customScript` (credentials / test data / user scripts), `generatedScript`, `cachedScript`, `cachedScriptDescription` (large internal blobs). `test.id`, `targetUrl`, `type`, `reusedScript`, and other non-sensitive fields are still returned for the UI.
 - ✅ **4 new security tests** — `api-service/src/__tests__/index.test.ts`: `envVars` absent; `testData` absent; `csvData`+`csvFilename` absent; `id`/`targetUrl`/`type` still present
 
 ### Phase 14 — Flow Recorder
@@ -945,10 +947,15 @@ All phases complete:
 - ✅ **POST /schedules 400 fixed** — results-service endpoint body type changed from camelCase `targetUrl` to snake_case `target_url` to match UI payload
 - ✅ **Flow runner selector** — "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" toggle below FlowBuilder on home page; `flowRunner` state (`'k6' | 'browser'`) is independent of `form.type`; when browser is selected, submit sends `type: 'client-side'` with Puppeteer options + `steps[]`
 - ✅ **Description type auto-detection** — `applyDescriptionParams()` now detects test type: "browser/puppeteer/web vitals/lighthouse/client-side" keywords → `client-side`; "backend/api test/load test/http test/k6/performance test" keywords → `backend`; also flips `flowRunner` for flow tab; ambiguous descriptions leave type unchanged
-- ✅ **`COMPOSE_BAKE=true`** added to `.env` — enables Docker BuildKit bake for parallel multi-service builds (faster `docker compose up --build`)
 - ✅ **recorder-service dev entrypoint fixed** — removed `command: npx tsx watch src/index.ts` override from `docker-compose.dev.yml` for recorder-service; the override bypassed `docker-entrypoint-dev.sh` (which starts Xvfb first), causing `Missing X server or $DISPLAY` crash
 - ✅ **Next.js `ERR_CONNECTION_RESET` fixed** — switched anonymous `.next` bind-mount to named Docker volume `ui_next_cache`; added `--hostname 0.0.0.0` to `next dev` command; Turbopack warm-start time dropped from ~7s to ~1s, eliminating browser TCP timeouts on first chunk load
 - ✅ **TypeScript strict-mode fixes** — `page.tsx`: `(thresholds as unknown as Record<string, string>)[key]`; `results/[testId]/page.tsx`: `const m = result.metrics as Record<string, any>` to allow nested property access without cascading assertions
+- ~~`COMPOSE_BAKE=true`~~ — **reverted**: Docker Compose Bake has a Windows path bug where it prepends the project root to the `dockerfile:` field a second time, producing an invalid doubled absolute path. Commented out in `.env`; parallel builds work fine without it on Windows.
+
+### Phase 16 — Custom Script & Download
+- ✅ **Custom k6 script upload/paste** — Backend type gets a "Script source" toggle: "🤖 AI Generate" | "📄 Custom Script"; custom mode shows a monospace textarea + "↑ Upload .js" file picker; description field is hidden in custom mode; script validated ≤ 512 KB client-side and server-side; bypasses ai-service and script cache entirely, routes directly to worker-backend queue via `publishTest(test, true)`; switching away from Backend type resets the toggle back to AI Generate
+- ✅ **`customScript` field** added to `TestRequest` / `EnrichedTestRequest` in `@alt/shared`; stripped from `POST /tests` HTTP response by `safeTestResponse()` alongside `envVars`/`csvData`; `POST /tests` body docs updated: `customScript?` field listed
+- ✅ **Download generated script** — "↓ Download .js" button in the Generated Script card header on result detail page; creates a `Blob` URL, triggers an `<a>` click, revokes the URL; filename `script-<testId[:8]>.js`; works for both AI-generated and custom scripts
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)
@@ -957,5 +964,3 @@ All phases complete:
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
 - No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
 - **recorder-service**: noVNC requires `xvfb` + `x11vnc` + `novnc` APK packages; these add ~60 MB to the Docker image. On Windows/Mac host without Docker the recording browser appears natively (no virtual display needed) when `DISPLAY` is unset.
-- **External k6 script upload** — allow users to paste or upload a custom k6 `.js` script in the test form instead of AI generation; bypass ai-service and send directly to worker queue
-- **Download generated script** — add a download button on the result detail page for the Gemini-generated k6/Puppeteer script (currently only shown as text in a pre block)

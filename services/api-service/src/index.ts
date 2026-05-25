@@ -29,6 +29,7 @@ const safeTestResponse = ({
   testData: _td,
   csvData: _cd,
   csvFilename: _cf,
+  customScript: _cscript,
   generatedScript: _gs,
   cachedScript: _cs,
   cachedScriptDescription: _csd,
@@ -78,7 +79,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
     '/tests',
     async (request, reply) => {
-      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename } = request.body;
+      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript } = request.body;
 
       const validTypes: TestType[] = ['backend', 'client-side', 'flow'];
       if (!validTypes.includes(type)) {
@@ -116,6 +117,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         testData,
         csvData,
         csvFilename,
+        customScript,
         scriptCacheKey: flowCacheKey,
         createdAt: new Date().toISOString(),
       };
@@ -144,6 +146,17 @@ export const buildApp = async (): Promise<FastifyInstance> => {
           }).catch(() => {});
         }
       };
+
+      // Custom script path — bypass AI and script cache entirely
+      if (customScript) {
+        if (customScript.length > 512 * 1024) {
+          return reply.code(400).send({ error: 'Custom script must be 512 KB or smaller' });
+        }
+        test.generatedScript = customScript;
+        publishTest(test, true);
+        warnIfNoWorker();
+        return { success: true, test: safeTestResponse(test), scriptReused: false };
+      }
 
       const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey);
 

@@ -51,15 +51,17 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
   );
 
   await p.query(
-    `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis, script_id, reused_script)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (test_id) DO UPDATE SET
-       status       = EXCLUDED.status,
-       metrics      = EXCLUDED.metrics,
-       target_url   = COALESCE(EXCLUDED.target_url, test_results.target_url),
-       completed_at = EXCLUDED.completed_at,
-       perf_status  = EXCLUDED.perf_status,
-       analysis     = EXCLUDED.analysis`,
+       status        = EXCLUDED.status,
+       metrics       = EXCLUDED.metrics,
+       target_url    = COALESCE(EXCLUDED.target_url, test_results.target_url),
+       completed_at  = EXCLUDED.completed_at,
+       perf_status   = EXCLUDED.perf_status,
+       analysis      = EXCLUDED.analysis,
+       script_id     = COALESCE(EXCLUDED.script_id, test_results.script_id),
+       reused_script = COALESCE(EXCLUDED.reused_script, test_results.reused_script)`,
     [
       result.testId,
       result.metrics.type,
@@ -70,6 +72,8 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
       result.completedAt,
       analysis.perfStatus,
       JSON.stringify(analysis),
+      result.scriptId ?? null,
+      result.reusedScript ?? false,
     ]
   );
 

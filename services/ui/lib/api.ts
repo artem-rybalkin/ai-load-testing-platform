@@ -44,6 +44,7 @@ export interface TestRequest {
   testData?: Array<Record<string, string>>;
   csvData?: string;
   csvFilename?: string;
+  customScript?: string;
   thresholds?: {
     p95?: number; avg?: number; errorRate?: number; serverErrorRate?: number; timeoutRate?: number;
     lcp?: number; fcp?: number; ttfb?: number; cls?: number;
