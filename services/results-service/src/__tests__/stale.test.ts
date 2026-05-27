@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
-import { runStaleCleanup } from '../cleanup';
+import { runStaleCleanup, startStaleCleanup } from '../cleanup';
 import { createSchema } from '../db';
 
 let container: StartedPostgreSqlContainer;
@@ -113,5 +113,46 @@ describe('runStaleCleanup — non-target statuses', () => {
     const result = await runStaleCleanup(pool, 15, 30);
     expect(result.runningFixed).toBe(0);
     expect(result.pendingFixed).toBe(0);
+  });
+});
+
+// ─── startStaleCleanup ────────────────────────────────────────────────────────
+// Uses fake timers + a mock pool so no PostgreSQL container is needed.
+
+describe('startStaleCleanup', () => {
+  let mockPool: { query: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockPool = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not call runStaleCleanup immediately on start', () => {
+    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    expect(mockPool.query).not.toHaveBeenCalled();
+  });
+
+  it('calls runStaleCleanup after 60 seconds', async () => {
+    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    await vi.advanceTimersByTimeAsync(60_000);
+    // runStaleCleanup issues 2 UPDATE queries: one for running, one for pending
+    expect(mockPool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('fires repeatedly on every subsequent 60-second tick', async () => {
+    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    await vi.advanceTimersByTimeAsync(180_000); // 3 × 60 s
+    expect(mockPool.query).toHaveBeenCalledTimes(6); // 3 fires × 2 queries
+  });
+
+  it('does not propagate errors when runStaleCleanup rejects', async () => {
+    mockPool.query.mockRejectedValue(new Error('DB connection lost'));
+    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    // The interval catches errors internally; advancing time should not throw
+    await expect(vi.advanceTimersByTimeAsync(60_000)).resolves.not.toThrow();
   });
 });

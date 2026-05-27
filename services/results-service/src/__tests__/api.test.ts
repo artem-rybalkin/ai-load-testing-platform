@@ -296,7 +296,7 @@ const schedulePayload = {
   name: 'Hourly smoke',
   cron: '0 * * * *',
   type: 'backend',
-  targetUrl: 'http://smoke.com',
+  target_url: 'http://smoke.com',   // app.ts expects snake_case (Phase 15 fix)
   options: { vus: 5, duration: '30s' },
 };
 
@@ -722,5 +722,187 @@ describe('DELETE /scripts/:id', () => {
     expect(res.statusCode).toBe(204);
     const { rows: after } = await pool.query('SELECT id FROM test_scripts WHERE id = $1', [id]);
     expect(after).toHaveLength(0);
+  });
+});
+
+// ─── POST /results/:testId/message ───────────────────────────────────────────
+
+describe('POST /results/:testId/message', () => {
+  it('updates status_message for a known test', async () => {
+    const testId = await insertResult({ status: 'pending' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/message`,
+      payload: { message: 'Generating test script with AI…' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ success: true });
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status_message).toBe('Generating test script with AI…');
+  });
+
+  it('overwrites an existing status_message', async () => {
+    const testId = await insertResult({ status: 'pending' });
+    await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/message`,
+      payload: { message: 'First message' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/message`,
+      payload: { message: 'Second message' },
+    });
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status_message).toBe('Second message');
+  });
+
+  it('works for a running test (no status restriction)', async () => {
+    const testId = await insertResult({ status: 'running' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/message`,
+      payload: { message: 'Gemini unavailable — retrying… (2 attempts left)' },
+    });
+    expect(res.statusCode).toBe(200);
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status_message).toContain('Gemini unavailable');
+  });
+});
+
+// ─── POST /results/:testId/fail ───────────────────────────────────────────────
+
+describe('POST /results/:testId/fail', () => {
+  it('marks a pending test as failed and sets completed_at', async () => {
+    const testId = await insertResult({ status: 'pending' });
+    const before = new Date();
+    const res = await app.inject({ method: 'POST', url: `/results/${testId}/fail` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ success: true });
+    const { rows } = await pool.query(
+      'SELECT status, completed_at FROM test_results WHERE test_id = $1', [testId]
+    );
+    expect(rows[0].status).toBe('failed');
+    expect(new Date(rows[0].completed_at).getTime()).toBeGreaterThanOrEqual(before.getTime() - 1000);
+  });
+
+  it('marks a running test as failed', async () => {
+    const testId = await insertResult({ status: 'running' });
+    await app.inject({ method: 'POST', url: `/results/${testId}/fail` });
+    const { rows } = await pool.query('SELECT status FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status).toBe('failed');
+  });
+
+  it('clears status_message when failing a test', async () => {
+    const testId = await insertResult({ status: 'pending' });
+    await pool.query(
+      'UPDATE test_results SET status_message = $1 WHERE test_id = $2',
+      ['Script generation failed after 3 attempts', testId]
+    );
+    await app.inject({ method: 'POST', url: `/results/${testId}/fail` });
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status_message).toBeNull();
+  });
+
+  it('does not change a completed test (status IN guard)', async () => {
+    const testId = await insertResult({ status: 'completed' });
+    await app.inject({ method: 'POST', url: `/results/${testId}/fail` });
+    const { rows } = await pool.query('SELECT status FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status).toBe('completed');
+  });
+
+  it('does not change a cancelled test', async () => {
+    const testId = await insertResult({ status: 'cancelled' });
+    await app.inject({ method: 'POST', url: `/results/${testId}/fail` });
+    const { rows } = await pool.query('SELECT status FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status).toBe('cancelled');
+  });
+});
+
+// ─── POST /results/:testId/running ───────────────────────────────────────────
+
+describe('POST /results/:testId/running', () => {
+  it('sets status to running and sets started_at', async () => {
+    const testId = await insertResult({ status: 'pending' });
+    const before = new Date();
+    const res = await app.inject({ method: 'POST', url: `/results/${testId}/running` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ success: true });
+    const { rows } = await pool.query(
+      'SELECT status, started_at FROM test_results WHERE test_id = $1', [testId]
+    );
+    expect(rows[0].status).toBe('running');
+    expect(new Date(rows[0].started_at).getTime()).toBeGreaterThanOrEqual(before.getTime() - 1000);
+  });
+
+  it('clears status_message when marking a test as running', async () => {
+    const testId = await insertResult({ status: 'pending' });
+    await pool.query(
+      'UPDATE test_results SET status_message = $1 WHERE test_id = $2',
+      ['Script ready — starting test…', testId]
+    );
+    await app.inject({ method: 'POST', url: `/results/${testId}/running` });
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status_message).toBeNull();
+  });
+
+  it('resets started_at when called again (idempotent re-call updates timestamp)', async () => {
+    const testId = await insertResult({ status: 'running' });
+    const before = new Date();
+    await app.inject({ method: 'POST', url: `/results/${testId}/running` });
+    const { rows } = await pool.query('SELECT started_at FROM test_results WHERE test_id = $1', [testId]);
+    expect(new Date(rows[0].started_at).getTime()).toBeGreaterThanOrEqual(before.getTime() - 1000);
+  });
+});
+
+// ─── GET /system/ai-status ────────────────────────────────────────────────────
+
+describe('GET /system/ai-status', () => {
+  it('returns quotaExceeded false when no results exist', async () => {
+    const res = await app.inject({ method: 'GET', url: '/system/ai-status' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().quotaExceeded).toBe(false);
+  });
+
+  it('returns quotaExceeded false when no recent Gemini error messages exist', async () => {
+    // A completed test with no status_message should not trigger quota detection
+    await insertResult({ status: 'completed' });
+    const res = await app.inject({ method: 'GET', url: '/system/ai-status' });
+    expect(res.json().quotaExceeded).toBe(false);
+  });
+
+  it('returns quotaExceeded true when a recent "Gemini unavailable" message exists', async () => {
+    const testId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, status_message, created_at)
+       VALUES ($1, 'backend', 'http://ai.com', 'failed', $2, NOW() - INTERVAL '10 minutes')`,
+      [testId, 'Gemini unavailable — retrying… (0 attempts left)']
+    );
+    const res = await app.inject({ method: 'GET', url: '/system/ai-status' });
+    expect(res.json().quotaExceeded).toBe(true);
+    expect(res.json().message).toContain('Gemini unavailable');
+    expect(res.json().since).toBeDefined();
+  });
+
+  it('returns quotaExceeded true for a "generation failed after" message', async () => {
+    const testId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, status_message, created_at)
+       VALUES ($1, 'backend', 'http://ai2.com', 'failed', $2, NOW() - INTERVAL '5 minutes')`,
+      [testId, 'Script generation failed after 3 attempts — test could not start']
+    );
+    const res = await app.inject({ method: 'GET', url: '/system/ai-status' });
+    expect(res.json().quotaExceeded).toBe(true);
+  });
+
+  it('ignores Gemini errors older than 2 hours', async () => {
+    const testId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, status_message, created_at)
+       VALUES ($1, 'backend', 'http://old.com', 'failed', $2, NOW() - INTERVAL '3 hours')`,
+      [testId, 'Gemini unavailable — retrying… (0 attempts left)']
+    );
+    const res = await app.inject({ method: 'GET', url: '/system/ai-status' });
+    expect(res.json().quotaExceeded).toBe(false);
   });
 });

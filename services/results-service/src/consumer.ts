@@ -5,6 +5,7 @@ import { TestResult, BackendMetrics, ClientMetrics } from '@alt/shared';
 import { pool } from './db';
 import { analyzeResult } from './analyzer';
 import { log } from './logger';
+import { broadcast } from './ws';
 
 const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string): Promise<void> => {
   const { rows } = await p.query(
@@ -80,6 +81,10 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
   if (analysis.perfStatus === 'failed' || analysis.perfStatus === 'degraded') {
     fireWebhooks(p, result, analysis.perfStatus).catch(() => {});
   }
+
+  // Push real-time updates to all connected UI clients
+  broadcast({ type: 'test:status', testId: result.testId, status: result.status, perfStatus: analysis.perfStatus ?? null });
+  broadcast({ type: 'tests:changed' });
 };
 
 export const startConsumer = async (): Promise<void> => {

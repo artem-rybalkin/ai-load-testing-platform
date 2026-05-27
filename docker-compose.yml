@@ -137,11 +137,9 @@ services:
       dockerfile: services/results-service/Dockerfile
     restart: unless-stopped
     ports:
-      - "3004:3004"
-      - "3005:3005"  # WebSocket port
+      - "3004:3004"   # REST API + WebSocket (/ws on same port)
     environment:
       PORT: 3004
-      WS_PORT: 3005
       DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672

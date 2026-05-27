@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, LiveMetricPoint, TestResult, TrendPoint } from '@/lib/api';
+import { useResultsSocket } from '@/lib/useResultsSocket';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 const BackendChart  = dynamic(() => import('@/app/components/BackendChart'),  { ssr: false });
@@ -135,9 +136,9 @@ export default function ResultPage() {
     return () => clearInterval(id);
   }, [result?.status, result?.started_at, result?.duration_seconds]);
 
-  // Poll result
+  // Initial data load
   useEffect(() => {
-    const fetchResult = async () => {
+    const load = async () => {
       try {
         const data = await getResult(testId);
         if (data.result) {
@@ -148,36 +149,47 @@ export default function ResultPage() {
         }
       } catch { /* ignore */ } finally { setLoading(false); }
     };
-    fetchResult();
-    const iv = setInterval(async () => {
-      const data = await getResult(testId);
-      if (data.result) {
-        setResult(data.result);
-        if (data.result.status === 'completed' || data.result.status === 'failed') clearInterval(iv);
-      }
-    }, 2000);
-    return () => clearInterval(iv);
+    load();
+
+    // Load any existing live points (for in-progress or completed tests)
+    getLiveMetrics(testId).then(d => setLivePoints(d.points ?? [])).catch(() => {});
   }, [testId]);
 
-  // Poll live metrics
-  useEffect(() => {
-    if (!result || (result.type !== 'backend' && result.type !== 'flow')) return;
-
-    const fetchLive = async () => {
-      try {
-        const data = await getLiveMetrics(testId);
-        setLivePoints(data.points ?? []);
-      } catch { /* ignore */ }
-    };
-
-    // Always fetch immediately — avoids waiting 3s on first render or after status change
-    fetchLive();
-
-    if (result.status === 'completed' || result.status === 'failed') return;
-
-    const iv = setInterval(fetchLive, 2000);
-    return () => clearInterval(iv);
-  }, [testId, result?.status, result?.type]);
+  // WebSocket push — replaces the 2s polling loops for status and live metrics
+  useResultsSocket((event) => {
+    if (event.type === 'reconnected') {
+      // Re-sync after a dropped connection — re-fetch state and any missed live points
+      getResult(testId).then(d => { if (d.result) setResult(d.result); }).catch(() => {});
+      getLiveMetrics(testId).then(d => setLivePoints(d.points ?? [])).catch(() => {});
+      return;
+    }
+    if (event.type === 'test:status' && event.testId === testId) {
+      const isCompleted = event.status === 'completed';
+      setResult(prev => {
+        if (!prev) return prev;
+        // Clear status_message when transitioning to running/cancelled/failed —
+        // the backend clears it in the DB at that point; without this the stale
+        // AI-generation message would linger in local state indefinitely.
+        const clearMsg = ['running', 'cancelled', 'failed'].includes(event.status);
+        return {
+          ...prev,
+          status: event.status,
+          perf_status: event.perfStatus ?? prev.perf_status,
+          ...(clearMsg ? { status_message: null } : {}),
+        };
+      });
+      if (isCompleted) {
+        // Fetch full result to get metrics + analysis populated by consumer.
+        // Done outside the updater so React Strict Mode double-invocation
+        // (dev only) doesn't fire two network requests per event.
+        getResult(testId).then(d => { if (d.result) setResult(d.result); }).catch(() => {});
+        if (result) getTrend(result.target_url).then(d => setTrend(d.trend ?? [])).catch(() => {});
+      }
+    }
+    if (event.type === 'test:live' && event.testId === testId) {
+      setLivePoints(prev => [...prev, event.point]);
+    }
+  });
 
   if (loading) return (
     <div className="flex items-center justify-center h-40 text-[#57606a] text-[13px]">Loading…</div>
@@ -289,21 +301,26 @@ export default function ResultPage() {
         </BentoCard>
       )}
 
-      {/* Pending / running / terminal-no-metrics state */}
-      {(isPending || isRunning || (!m && isTerminal)) ? (
+      {/* Pending / running / terminal-no-metrics / completed-loading state */}
+      {(isPending || isRunning || !m) ? (
         <BentoCard>
           <div className="p-8 text-center">
             {isTerminal ? (
               <p className="text-[#57606a] text-[13px]">
                 Test {result.status} — no metrics collected.
               </p>
+            ) : result.status === 'completed' ? (
+              /* Brief window between WS 'completed' event and full refetch finishing */
+              <div className="animate-pulse">
+                <p className="text-[#57606a] text-[13px]">Loading results…</p>
+              </div>
             ) : (
               <div className="animate-pulse">
                 <p className="text-[#57606a] text-[13px]">
                   {isPending ? 'Waiting in queue…' : 'Test is running…'}
                 </p>
                 <p className="text-[#8c959f] text-[11px] mt-1">
-                  {isPending ? 'AI is generating the test script' : 'Page updates every 2 seconds'}
+                  {isPending ? 'AI is generating the test script' : 'Page updates in real time'}
                 </p>
               </div>
             )}

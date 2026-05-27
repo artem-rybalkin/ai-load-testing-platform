@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getResults, TestResult } from '@/lib/api';
+import { useResultsSocket } from '@/lib/useResultsSocket';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
@@ -60,16 +61,21 @@ export default function ResultsPage() {
   const [selected, setSelected] = useState<string[]>([]);
   const router = useRouter();
 
-  useEffect(() => {
-    const fetch = async () => {
-      const data = await getResults();
-      setResults(data.results || []);
-      setLoading(false);
-    };
-    fetch();
-    const interval = setInterval(fetch, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  const refresh = async () => {
+    const data = await getResults();
+    setResults(data.results || []);
+    setLoading(false);
+  };
+
+  // Initial load
+  useEffect(() => { refresh(); }, []);
+
+  // Real-time updates via WebSocket — replaces 5s polling
+  useResultsSocket((event) => {
+    if (event.type === 'tests:changed' || event.type === 'test:status') {
+      refresh();
+    }
+  });
 
   const toggleSelect = (testId: string) => {
     setSelected(prev =>

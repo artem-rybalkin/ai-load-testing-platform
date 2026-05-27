@@ -40,7 +40,7 @@ node-cron in results-service → POST /tests (auto-trigger on schedule)
 | ai-service        | 3001       | Gemini API integration, script generation             |
 | worker-backend    | 3002       | k6 runner, metrics parsing, live metrics posting      |
 | worker-client     | 3003       | Puppeteer + Lighthouse, Web Vitals collector          |
-| results-service   | 3004       | PostgreSQL storage, REST API, analyzer, scheduler     |
+| results-service   | 3004       | PostgreSQL storage, REST API + WebSocket (/ws), analyzer, scheduler |
 | ui                | 3006       | Next.js frontend                                      |
 | recorder-service  | 3007/6080  | Flow recorder (Puppeteer CDP capture + noVNC viewer)  |
 | postgres          | 5432       | Main database                                         |
@@ -570,12 +570,19 @@ The UI follows a "Command Center" aesthetic: GitHub-style color palette, collaps
 - **Templates:** save/load includes description, URL, VUs, duration, profile, peakVus, thresholds; dropdown is controlled (always resets to placeholder after selection)
 - **Flow runner selector** — below FlowBuilder, a toggle "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" controls `flowRunner` state (`'k6'` | `'browser'`); when `'browser'` is selected `handleSubmit` sends `type: 'client-side'` with `sessions/duration/collectWebVitals` options; auto-set by `applyDescriptionParams` type detection
 
-### UI Polling Strategy
-- `ActiveTests` strip: polls `/results/active` every 3s; shows ⚡ (backend), 🔗 (flow), 🌐 (browser) icons inline
-- Result detail page: polls `/results/:testId` every 2s until `completed` / `failed` / `cancelled`
-- Live metrics: polls `/results/:testId/live` every 3s while `status === 'running'` (backend + flow)
-- Results list page: polls `/results` every 5s
-- Home page: fetches `getResults()` + `getActiveTests()` once on mount for the quick-stats panel
+### UI Real-time Strategy
+Real-time updates use **WebSocket push** (`ws://localhost:3004/ws`) for the highest-frequency events; low-frequency diagnostics remain as polling.
+
+- **WebSocket** (`useResultsSocket` hook, `services/ui/lib/useResultsSocket.ts`):
+  - Result detail page: `test:status` event → update status immediately; `test:live` event → append metric point (replaces 2s polls)
+  - `ActiveTests` strip: `tests:changed` / `test:status` → refetch active list (replaces 3s poll)
+  - Results list page: `tests:changed` / `test:status` → refetch results (replaces 5s poll)
+  - Auto-reconnects with exponential backoff (1s → 2s → … → 30s cap)
+- **Still polling** (infrequent, acceptable overhead):
+  - `SystemHealth` / `WorkerHealth`: `GET /system/health` every 15s
+  - `AIStatus`: `GET /system/ai-status` every 60s
+  - Home page: fetches `getResults()` + `getActiveTests()` once on mount for the quick-stats panel
+  - FlowBuilder recording: polls recorder-service `GET /recordings/:id` every 1s (separate service)
 
 ### Countdown Timer & Elapsed X-axis
 - `duration_seconds` stored in `test_results` at pending-record creation
@@ -769,7 +776,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | File | Subject | Tests |
 |------|---------|-------|
 | `ui/__tests__/AnalysisPanel.test.tsx` | threshold violations, diff rows, badges | 9 |
-| `ui/__tests__/ActiveTests.test.tsx` | count display, link, polling | 6 |
+| `ui/__tests__/ActiveTests.test.tsx` | count display, link, WS-triggered refetch | 6 |
 | `ui/__tests__/home.test.tsx` | form validation, Advanced settings, template dropdown, rerun pre-fill | 11 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |
 
@@ -957,10 +964,22 @@ All phases complete:
 - ✅ **`customScript` field** added to `TestRequest` / `EnrichedTestRequest` in `@alt/shared`; stripped from `POST /tests` HTTP response by `safeTestResponse()` alongside `envVars`/`csvData`; `POST /tests` body docs updated: `customScript?` field listed
 - ✅ **Download generated script** — "↓ Download .js" button in the Generated Script card header on result detail page; creates a `Blob` URL, triggers an `<a>` click, revokes the URL; filename `script-<testId[:8]>.js`; works for both AI-generated and custom scripts
 
+### Phase 17 — WebSocket Push (replaces UI polling)
+- ✅ **`ws` package** (already a dependency) used for WebSocket server in results-service; `@fastify/websocket` was **not** used — it requires Fastify `^4.x` and is incompatible with Fastify v5. Instead, `WebSocketServer({ noServer: true })` is attached to `fastify.server` (the underlying `http.Server`) via `server.on('upgrade', ...)` — works with any Fastify version. `WS_PORT: 3005` removed from docker-compose.
+- ✅ **`services/results-service/src/ws.ts`** — `WebSocketServer` attached to the HTTP server via the `upgrade` event; module-level `Set<WebSocket>` of connected clients; `setupWebSocketServer(server)` + `broadcast(event)` exports; auto-removes closed/errored sockets; `@types/ws` in devDependencies for types
+- ✅ **Three event types** pushed to all connected UI clients:
+  - `{ type: 'test:status', testId, status, perfStatus }` — emitted from consumer after handleResult, and from `/running`, `/fail`, `/cancel` endpoints
+  - `{ type: 'test:live', testId, point }` — emitted from `POST /results/:testId/live` after INSERT; ships the full metric point so UI doesn't need to refetch
+  - `{ type: 'tests:changed' }` — emitted alongside status events; signals results list and active strip to refetch
+- ✅ **`services/ui/lib/useResultsSocket.ts`** — `'use client'` hook; stable connection (empty `[]` deps); `useRef` for callback so handler changes don't reconnect; exponential backoff (1s→2s→4s…→30s cap); resets delay on successful open
+- ✅ **Result detail page** (`results/[testId]/page.tsx`) — replaced two 2s `setInterval` polls (status + live metrics) with `useResultsSocket`; initial load still fetches once on mount; on `test:status = completed` re-fetches full result from DB to get metrics/analysis
+- ✅ **ActiveTests strip** (`components/ActiveTests.tsx`) — replaced 3s `setInterval` with WS-triggered `getActiveTests()` refetch on `tests:changed` or `test:status` events
+- ✅ **Results list** (`results/page.tsx`) — replaced 5s `setInterval` with WS-triggered `getResults()` refetch on `tests:changed` or `test:status` events
+- ✅ **Caddy-compatible** — Caddy passes WebSocket upgrade headers through automatically; no Caddyfile changes needed; `wss://data.yourdomain.com/ws` works in production
+
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)
 - Gemini rate limit: **20 requests/day** on free tier (`gemini-2.5-flash`); `compareDescriptions()` also consumes quota so each new-description test costs 2 calls. Paid key removes daily cap. Backoff retry (60s/120s/180s) handles 429 automatically.
-- UI uses polling instead of WebSockets (planned improvement)
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
 - No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
 - **recorder-service**: noVNC requires `xvfb` + `x11vnc` + `novnc` APK packages; these add ~60 MB to the Docker image. On Windows/Mac host without Docker the recording browser appears natively (no virtual display needed) when `DISPLAY` is unset.

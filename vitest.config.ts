@@ -30,7 +30,11 @@ export default defineConfig({
     hookTimeout: 120000,
     pool: 'threads',
     threads: {
-      maxThreads: 4,
+      // Capped at 2 to prevent simultaneous Testcontainer PostgreSQL container
+      // exhaustion when all 5 results-service integration test files run together.
+      // Each file spins up its own pg container; 4+ concurrent containers race for
+      // Docker socket resources and fail with "pool is undefined".
+      maxThreads: 2,
     },
     coverage: {
       provider: 'v8',

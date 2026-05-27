@@ -2,23 +2,28 @@
 
 import { useEffect, useState } from 'react';
 import { getActiveTests, ActiveTest } from '@/lib/api';
+import { useResultsSocket } from '@/lib/useResultsSocket';
 import Link from 'next/link';
 
 export default function ActiveTests() {
   const [active, setActive] = useState<ActiveTest[]>([]);
 
-  useEffect(() => {
-    const fetch = async () => {
-      try {
-        const data = await getActiveTests();
-        setActive(data.active || []);
-      } catch {}
-    };
+  const refresh = async () => {
+    try {
+      const data = await getActiveTests();
+      setActive(data.active || []);
+    } catch {}
+  };
 
-    fetch();
-    const interval = setInterval(fetch, 3000);
-    return () => clearInterval(interval);
-  }, []);
+  // Initial load
+  useEffect(() => { refresh(); }, []);
+
+  // Real-time updates via WebSocket — replaces 3s polling
+  useResultsSocket((event) => {
+    if (event.type === 'tests:changed' || event.type === 'test:status') {
+      refresh();
+    }
+  });
 
   if (active.length === 0) return null;
 

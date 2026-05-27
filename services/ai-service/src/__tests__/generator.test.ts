@@ -128,4 +128,177 @@ describe('compareDescriptions', () => {
     fn.mockResolvedValueOnce({ response: { text: () => 'maybe' } });
     expect(await compareDescriptions('a', 'b')).toBe('REGENERATE');
   });
+
+  it('returns REGENERATE on generic error (non-429)', async () => {
+    const fn = await getMockFn();
+    fn.mockRejectedValueOnce(new Error('network failure'));
+    expect(await compareDescriptions('a', 'b')).toBe('REGENERATE');
+  });
+
+  it('retries once after a 429 rate-limit response and returns the verdict', async () => {
+    const fn = await getMockFn();
+    fn.mockClear(); // reset accumulated call count from earlier tests in this file
+    fn.mockRejectedValueOnce({ status: 429 });
+    fn.mockResolvedValueOnce({ response: { text: () => 'REUSE' } });
+
+    vi.useFakeTimers();
+    try {
+      const promise = compareDescriptions('same description', 'same description');
+      await vi.runAllTimersAsync();
+      expect(await promise).toBe('REUSE');
+      expect(fn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      fn.mockReset();
+      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+    }
+  });
+});
+
+// ─── BACKEND_PROMPT ───────────────────────────────────────────────────────────
+
+const baseBackend = (): TestRequest => ({
+  id: 'test-id',
+  type: 'backend',
+  targetUrl: 'https://api.example.com/users',
+  description: 'load test the users endpoint',
+  options: { vus: 10, duration: '30s' } as never,
+  createdAt: new Date().toISOString(),
+});
+
+describe('BACKEND_PROMPT — basic content', () => {
+  it('includes the targetUrl in the prompt', async () => {
+    await generateScript(baseBackend());
+    expect(await getLastPrompt()).toContain('https://api.example.com/users');
+  });
+
+  it('includes the description in the prompt', async () => {
+    await generateScript(baseBackend());
+    expect(await getLastPrompt()).toContain('load test the users endpoint');
+  });
+
+  it('instructs Gemini to return only k6 JavaScript code', async () => {
+    await generateScript(baseBackend());
+    expect(await getLastPrompt()).toContain('k6 JavaScript API');
+    expect(await getLastPrompt()).toContain('Return ONLY the JavaScript code');
+  });
+
+  it('includes httpOptions section when http2 is enabled', async () => {
+    const test = baseBackend();
+    (test.options as never as Record<string, unknown>).httpOptions = { http2: true };
+    await generateScript(test);
+    expect(await getLastPrompt()).toContain('http2');
+  });
+
+  it('includes httpOptions section when discardResponseBodies is enabled', async () => {
+    const test = baseBackend();
+    (test.options as never as Record<string, unknown>).httpOptions = { discardResponseBodies: true };
+    await generateScript(test);
+    expect(await getLastPrompt()).toContain('discardResponseBodies');
+  });
+});
+
+describe('BACKEND_PROMPT — profileInstructions', () => {
+  const makeBackendWithProfile = (profile: string, extra?: object): TestRequest => ({
+    ...baseBackend(),
+    options: { vus: 10, duration: '2m', profile, peakVus: 100, ...extra } as never,
+  });
+
+  it('includes SPIKE TEST instructions for spike profile', async () => {
+    await generateScript(makeBackendWithProfile('spike'));
+    expect(await getLastPrompt()).toContain('SPIKE TEST');
+    expect(await getLastPrompt()).toContain('spike');
+  });
+
+  it('includes CAPACITY / STRESS TEST instructions for capacity profile', async () => {
+    await generateScript(makeBackendWithProfile('capacity'));
+    expect(await getLastPrompt()).toContain('CAPACITY');
+  });
+
+  it('includes SOAK TEST instructions for soak profile', async () => {
+    await generateScript(makeBackendWithProfile('soak'));
+    expect(await getLastPrompt()).toContain('SOAK TEST');
+  });
+
+  it('uses flat VU load profile (default load) with no profile specified', async () => {
+    const test = baseBackend(); // no profile key
+    await generateScript(test);
+    expect(await getLastPrompt()).toContain('LOAD TEST');
+  });
+
+  it('includes ramp-up instruction when rampUp is provided for load profile', async () => {
+    const test: TestRequest = {
+      ...baseBackend(),
+      options: { vus: 10, duration: '1m', profile: 'load', rampUp: '30s' } as never,
+    };
+    await generateScript(test);
+    expect(await getLastPrompt()).toContain('30s');
+  });
+});
+
+// ─── CLIENT_PROMPT ────────────────────────────────────────────────────────────
+
+const baseClient = (): TestRequest => ({
+  id: 'test-id',
+  type: 'client-side',
+  targetUrl: 'https://www.example.com',
+  description: 'measure page load performance',
+  options: { sessions: 5, duration: '60s', collectWebVitals: true } as never,
+  createdAt: new Date().toISOString(),
+});
+
+describe('CLIENT_PROMPT', () => {
+  it('includes the targetUrl in the prompt', async () => {
+    await generateScript(baseClient());
+    expect(await getLastPrompt()).toContain('https://www.example.com');
+  });
+
+  it('includes the description in the prompt', async () => {
+    await generateScript(baseClient());
+    expect(await getLastPrompt()).toContain('measure page load performance');
+  });
+
+  it('includes the sessions count', async () => {
+    await generateScript(baseClient());
+    expect(await getLastPrompt()).toContain('5');
+  });
+
+  it('includes Web Vitals collection instructions', async () => {
+    await generateScript(baseClient());
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('Web Vitals');
+    expect(prompt).toContain('Puppeteer');
+  });
+});
+
+// ─── generateScript — 429 retry ──────────────────────────────────────────────
+
+describe('generateScript — 429 retry', () => {
+  it('retries once after a 429 rate-limit response and returns the script', async () => {
+    const fn = await getMockFn();
+    fn.mockClear(); // reset accumulated call count from earlier tests in this file
+    fn.mockRejectedValueOnce({ status: 429 });
+    fn.mockResolvedValueOnce({ response: { text: () => 'k6 script content' } });
+
+    vi.useFakeTimers();
+    try {
+      const promise = generateScript(baseFlow());
+      await vi.runAllTimersAsync();
+      const script = await promise;
+      expect(script).toBe('k6 script content');
+      expect(fn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      fn.mockReset();
+      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+    }
+  });
+
+  it('throws when non-429 error occurs (no retry)', async () => {
+    const fn = await getMockFn();
+    fn.mockRejectedValueOnce(new Error('auth error'));
+
+    await expect(generateScript(baseFlow())).rejects.toThrow('auth error');
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
 });

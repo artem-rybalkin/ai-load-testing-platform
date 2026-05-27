@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
-import { findExistingScript } from '../scripts';
+import { findExistingScript, stepsToKey, incrementUsedCount } from '../scripts';
+import type { FlowStep } from '@alt/shared';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -146,5 +147,65 @@ describe('findExistingScript', () => {
 
     expect(result).not.toBeNull();
     expect(result!.script).toBe(clientScript);
+  });
+});
+
+// ─── stepsToKey ───────────────────────────────────────────────────────────────
+// Pure function — no DB needed, no Testcontainers
+
+describe('stepsToKey', () => {
+  const makeStep = (url: string, method = 'GET'): FlowStep => ({
+    name: `Step: ${method} ${url}`,
+    url,
+    method: method as FlowStep['method'],
+    headers: {},
+    extract: {},
+  });
+
+  it('returns a string in the format "flow:<16 hex chars>"', () => {
+    expect(stepsToKey([])).toMatch(/^flow:[0-9a-f]{16}$/);
+  });
+
+  it('is deterministic — same input always produces the same key', () => {
+    const steps = [makeStep('https://example.com/login', 'POST')];
+    expect(stepsToKey(steps)).toBe(stepsToKey(steps));
+  });
+
+  it('produces different keys for different step arrays', () => {
+    const a = [makeStep('https://example.com/a', 'GET')];
+    const b = [makeStep('https://example.com/b', 'POST')];
+    expect(stepsToKey(a)).not.toBe(stepsToKey(b));
+  });
+
+  it('produces a stable key for an empty array', () => {
+    expect(stepsToKey([])).toBe(stepsToKey([]));
+  });
+
+  it('the 16-char suffix is lowercase hex', () => {
+    const hash = stepsToKey([makeStep('https://example.com')]).replace('flow:', '');
+    expect(hash).toHaveLength(16);
+    expect(hash).toMatch(/^[0-9a-f]+$/);
+  });
+});
+
+// ─── incrementUsedCount ───────────────────────────────────────────────────────
+// Uses an injected mock pool — no Testcontainers
+
+describe('incrementUsedCount', () => {
+  it('runs the correct UPDATE SQL with the supplied id', async () => {
+    const mockPool = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    await incrementUsedCount('uuid-abc', mockPool as unknown as Pool);
+
+    const [sql, params] = mockPool.query.mock.calls[0] as [string, string[]];
+    expect(sql).toContain('UPDATE test_scripts');
+    expect(sql).toContain('used_count = used_count + 1');
+    expect(sql).toContain('updated_at = NOW()');
+    expect(params).toEqual(['uuid-abc']);
+  });
+
+  it('returns void on success', async () => {
+    const mockPool = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    const result = await incrementUsedCount('uuid-def', mockPool as unknown as Pool);
+    expect(result).toBeUndefined();
   });
 });

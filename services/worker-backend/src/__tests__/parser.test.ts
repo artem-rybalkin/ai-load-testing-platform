@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseK6Output, aggregateWindow, parseK6Errors } from '../parser';
+import { parseK6Output, aggregateWindow, parseK6Errors, parseK6GroupMetrics } from '../parser';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -330,5 +330,176 @@ describe('parseK6Errors', () => {
     expect(errorBreakdown.success).toBe(4);
     expect(errorBreakdown.clientError).toBe(2);
     expect(errorBreakdown.serverError).toBe(2);
+  });
+
+  it('categorizes unknown error_code with no status tag as networkError (catch-all)', () => {
+    // error_code present but doesn't match 1010-1019, 1020-1029, 1050, or 1210 —
+    // and no status tag — lands in the catch-all networkError branch (line 86 of parser.ts)
+    const point = JSON.stringify({
+      type: 'Point',
+      metric: 'http_req_failed',
+      data: { value: 1, time: new Date().toISOString(), tags: { error_code: '9999' } },
+    });
+    const { errorBreakdown } = parseK6Errors(point);
+    expect(errorBreakdown.networkError).toBe(1);
+    expect(errorBreakdown.timeout).toBe(0);
+  });
+});
+
+// ─── parseK6GroupMetrics ──────────────────────────────────────────────────────
+
+describe('parseK6GroupMetrics', () => {
+  /** k6 emits group tags as '::GroupName'; the function strips the leading '::'. */
+  const makeGroupPoint = (metric: string, value: number, group: string): string =>
+    JSON.stringify({
+      type: 'Point',
+      metric,
+      data: { value, time: new Date().toISOString(), tags: { group: `::${group}` } },
+    });
+
+  /** Root-group point — k6 tags for the top-level scope as just '::'. */
+  const makeRootPoint = (metric: string, value: number): string =>
+    JSON.stringify({
+      type: 'Point',
+      metric,
+      data: { value, time: new Date().toISOString(), tags: { group: '::' } },
+    });
+
+  it('returns empty array for empty input', () => {
+    expect(parseK6GroupMetrics('')).toEqual([]);
+  });
+
+  it('returns empty array when no group-tagged points exist', () => {
+    const lines = [
+      makeJsonPoint('http_req_duration', 200),
+      makeJsonPoint('http_reqs', 1),
+    ].join('\n');
+    expect(parseK6GroupMetrics(lines)).toEqual([]);
+  });
+
+  it('returns one StepMetrics for a single group', () => {
+    const lines = [
+      makeGroupPoint('http_req_duration', 150, 'Login'),
+      makeGroupPoint('http_req_duration', 250, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+    ].join('\n');
+
+    const result = parseK6GroupMetrics(lines);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Login');
+    expect(result[0].avgResponseTime).toBe(200); // avg(150, 250)
+    expect(result[0].requestsTotal).toBe(2);
+    expect(result[0].requestsFailed).toBe(0);
+  });
+
+  it('strips the leading :: from the group name', () => {
+    const lines = [makeGroupPoint('http_req_duration', 120, 'Step 1: POST /login')].join('\n');
+    const result = parseK6GroupMetrics(lines);
+    expect(result[0].name).toBe('Step 1: POST /login');
+  });
+
+  it('skips the root :: group (top-level k6 scope)', () => {
+    const lines = [
+      makeRootPoint('http_req_duration', 100),
+      makeGroupPoint('http_req_duration', 200, 'Login'),
+    ].join('\n');
+
+    const result = parseK6GroupMetrics(lines);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Login');
+  });
+
+  it('returns StepMetrics for each distinct group', () => {
+    const lines = [
+      makeGroupPoint('http_req_duration', 100, 'Login'),
+      makeGroupPoint('http_req_duration', 300, 'Profile'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Profile'),
+    ].join('\n');
+
+    const result = parseK6GroupMetrics(lines);
+
+    expect(result).toHaveLength(2);
+    const names = result.map(r => r.name);
+    expect(names).toContain('Login');
+    expect(names).toContain('Profile');
+  });
+
+  it('calculates p95 from the sorted duration distribution', () => {
+    // 20 durations: 19 × 100 ms, 1 × 900 ms
+    // sorted[19] = 900 → p95idx = floor(20 * 0.95) = 19
+    const durations = [...Array(19).fill(100), 900];
+    const lines = durations.map(d => makeGroupPoint('http_req_duration', d, 'Checkout')).join('\n');
+
+    const result = parseK6GroupMetrics(lines);
+
+    expect(result[0].p95ResponseTime).toBe(900);
+    expect(result[0].avgResponseTime).toBe(Math.round((19 * 100 + 900) / 20));
+  });
+
+  it('calculates requestsFailed from averaged http_req_failed values', () => {
+    // 4 requests, 2 failed (values 1,1,0,0) → avg=0.5 → round(0.5 * 4) = 2
+    const lines = [
+      makeGroupPoint('http_req_duration', 100, 'Login'),
+      makeGroupPoint('http_req_duration', 200, 'Login'),
+      makeGroupPoint('http_req_duration', 150, 'Login'),
+      makeGroupPoint('http_req_duration', 300, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+      makeGroupPoint('http_req_failed', 1, 'Login'),
+      makeGroupPoint('http_req_failed', 1, 'Login'),
+      makeGroupPoint('http_req_failed', 0, 'Login'),
+      makeGroupPoint('http_req_failed', 0, 'Login'),
+    ].join('\n');
+
+    const result = parseK6GroupMetrics(lines);
+
+    expect(result[0].requestsTotal).toBe(4);
+    expect(result[0].requestsFailed).toBe(2);
+  });
+
+  it('uses durations.length as requestsTotal fallback when no http_reqs points', () => {
+    const lines = [
+      makeGroupPoint('http_req_duration', 100, 'Login'),
+      makeGroupPoint('http_req_duration', 200, 'Login'),
+      makeGroupPoint('http_req_duration', 300, 'Login'),
+    ].join('\n');
+
+    const result = parseK6GroupMetrics(lines);
+
+    expect(result[0].requestsTotal).toBe(3);
+  });
+
+  it('returns zero requestsFailed when no http_req_failed points', () => {
+    const lines = [
+      makeGroupPoint('http_req_duration', 200, 'Login'),
+      makeGroupPoint('http_reqs', 1, 'Login'),
+    ].join('\n');
+
+    expect(parseK6GroupMetrics(lines)[0].requestsFailed).toBe(0);
+  });
+
+  it('skips malformed JSON lines and continues processing', () => {
+    const lines = [
+      'not json at all',
+      '{broken',
+      makeGroupPoint('http_req_duration', 200, 'Login'),
+    ].join('\n');
+
+    const result = parseK6GroupMetrics(lines);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Login');
+  });
+
+  it('handles a single-item duration array (p95 = that single value)', () => {
+    const lines = [makeGroupPoint('http_req_duration', 999, 'Checkout')].join('\n');
+    const result = parseK6GroupMetrics(lines);
+    expect(result[0].avgResponseTime).toBe(999);
+    expect(result[0].p95ResponseTime).toBe(999);
   });
 });

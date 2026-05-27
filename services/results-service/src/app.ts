@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 import PDFDocument from 'pdfkit';
 import { isConsumerConnected } from './consumer';
 import { reloadSchedule, removeSchedule } from './scheduler';
+import { setupWebSocketServer, broadcast } from './ws';
 
 export const buildApp = async (
   pool: Pool,
@@ -13,6 +14,10 @@ export const buildApp = async (
 
   const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
   await app.register(cors, { origin: allowedOrigin, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] });
+
+  // Attach WebSocket server to Fastify's underlying http.Server.
+  // Handles GET /ws upgrade without any Fastify plugin — works with Fastify v5.
+  setupWebSocketServer(app.server);
 
   // API key authentication — exempt /health and internal /results/pending
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
@@ -122,10 +127,14 @@ export const buildApp = async (
     async (request, reply) => {
       try {
         const { testId } = request.params;
-        await pool.query(
+        const { rowCount } = await pool.query(
           `UPDATE test_results SET status = 'failed', completed_at = NOW(), status_message = NULL WHERE test_id = $1 AND status IN ('pending', 'running')`,
           [testId]
         );
+        if (rowCount) {
+          broadcast({ type: 'test:status', testId, status: 'failed', perfStatus: null });
+          broadcast({ type: 'tests:changed' });
+        }
         return { success: true };
       } catch (err) {
         return reply.code(500).send({ error: 'Failed to mark test as failed' });
@@ -142,6 +151,8 @@ export const buildApp = async (
           `UPDATE test_results SET status = 'running', started_at = NOW(), status_message = NULL WHERE test_id = $1`,
           [testId]
         );
+        broadcast({ type: 'test:status', testId, status: 'running', perfStatus: null });
+        broadcast({ type: 'tests:changed' });
         return { success: true };
       } catch (err) {
         return reply.code(500).send({ error: 'Failed to mark test as running' });
@@ -243,7 +254,7 @@ export const buildApp = async (
 
   app.post<{
     Params: { testId: string };
-    Body: { timestamp: string; vus: number; rps: number; avgResponseTime: number; errorRate: number; stepMetrics?: Array<{ name: string; avgResponseTime: number }> };
+    Body: { timestamp: string; vus: number; rps: number; avgResponseTime: number; errorRate: number; stepMetrics?: Array<{ name: string; avgResponseTime: number; rps: number; errorRate: number }> };
   }>('/results/:testId/live', async (request, reply) => {
     const { testId } = request.params;
     const { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } = request.body;
@@ -253,6 +264,7 @@ export const buildApp = async (
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [testId, timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics ? JSON.stringify(stepMetrics) : null]
       );
+      broadcast({ type: 'test:live', testId, point: { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } });
       return { success: true };
     } catch (err) {
       return reply.code(500).send({ error: 'Failed to save live metric' });
@@ -296,6 +308,8 @@ export const buildApp = async (
         [testId]
       );
       if (!rowCount) return reply.code(404).send({ error: 'Test not found or already finished' });
+      broadcast({ type: 'test:status', testId, status: 'cancelled', perfStatus: null });
+      broadcast({ type: 'tests:changed' });
       return { success: true, testId };
     }
   );

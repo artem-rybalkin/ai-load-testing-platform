@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { log } from './logger';
+import { broadcast } from './ws';
 
 const CLEANUP_INTERVAL_MS = 60_000;
 
@@ -24,10 +25,15 @@ export const runStaleCleanup = async (
     [pendingMinutes]
   );
 
-  if (running.length > 0)
+  if (running.length > 0) {
     log.warn({ count: running.length, testIds: running.map((r: { test_id: string }) => r.test_id) }, 'Marked stale running tests as failed');
-  if (pending.length > 0)
+    for (const r of running) broadcast({ type: 'test:status', testId: r.test_id, status: 'failed', perfStatus: null });
+  }
+  if (pending.length > 0) {
     log.warn({ count: pending.length, testIds: pending.map((r: { test_id: string }) => r.test_id) }, 'Marked stale pending tests as failed');
+    for (const r of pending) broadcast({ type: 'test:status', testId: r.test_id, status: 'failed', perfStatus: null });
+  }
+  if (running.length > 0 || pending.length > 0) broadcast({ type: 'tests:changed' });
 
   return { runningFixed: running.length, pendingFixed: pending.length };
 };
