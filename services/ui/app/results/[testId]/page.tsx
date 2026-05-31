@@ -1,17 +1,13 @@
-'use client';
-
-import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
-import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, LiveMetricPoint, TestResult, TrendPoint } from '@/lib/api';
+import { useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
-import Link from 'next/link';
-import dynamic from 'next/dynamic';
-const BackendChart  = dynamic(() => import('@/app/components/BackendChart'),  { ssr: false });
-const ClientChart   = dynamic(() => import('@/app/components/ClientChart'),   { ssr: false });
-const FlowStepChart = dynamic(() => import('@/app/components/FlowStepChart'), { ssr: false });
-const AnalysisPanel = dynamic(() => import('@/app/components/AnalysisPanel'), { ssr: false });
-const RealtimeChart = dynamic(() => import('@/app/components/RealtimeChart'), { ssr: false });
-const TrendChart    = dynamic(() => import('@/app/components/TrendChart'),    { ssr: false });
+const BackendChart  = lazy(() => import('@/app/components/BackendChart'));
+const ClientChart   = lazy(() => import('@/app/components/ClientChart'));
+const FlowStepChart = lazy(() => import('@/app/components/FlowStepChart'));
+const AnalysisPanel = lazy(() => import('@/app/components/AnalysisPanel'));
+const RealtimeChart = lazy(() => import('@/app/components/RealtimeChart'));
+const TrendChart    = lazy(() => import('@/app/components/TrendChart'));
 
 interface StepMetric { name: string; avgResponseTime: number; p95ResponseTime: number; requestsTotal: number; requestsFailed: number }
 
@@ -95,12 +91,14 @@ const StepMetricsTable = ({ steps }: { steps: StepMetric[] }) => (
 export default function ResultPage() {
   const { testId } = useParams<{ testId: string }>();
   const [result, setResult] = useState<TestResult | null>(null);
+  const resultRef = useRef<TestResult | null>(null);
   const [livePoints, setLivePoints] = useState<LiveMetricPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [baselineBusy, setBaselineBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
+  const [logSources, setLogSources] = useState<LogSource[]>([]);
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -136,6 +134,9 @@ export default function ResultPage() {
     return () => clearInterval(id);
   }, [result?.status, result?.started_at, result?.duration_seconds]);
 
+  // Keep ref in sync so WS callbacks always see the latest result without stale closure
+  useEffect(() => { resultRef.current = result; }, [result]);
+
   // Initial data load
   useEffect(() => {
     const load = async () => {
@@ -143,6 +144,7 @@ export default function ResultPage() {
         const data = await getResult(testId);
         if (data.result) {
           setResult(data.result);
+          resultRef.current = data.result;
           if (data.result.status === 'completed') {
             getTrend(data.result.target_url).then(d => setTrend(d.trend ?? [])).catch(() => {});
           }
@@ -150,6 +152,7 @@ export default function ResultPage() {
       } catch { /* ignore */ } finally { setLoading(false); }
     };
     load();
+    getLogSources().then(d => setLogSources(d.logSources ?? [])).catch(() => {});
 
     // Load any existing live points (for in-progress or completed tests)
     getLiveMetrics(testId).then(d => setLivePoints(d.points ?? [])).catch(() => {});
@@ -183,11 +186,19 @@ export default function ResultPage() {
         // Done outside the updater so React Strict Mode double-invocation
         // (dev only) doesn't fire two network requests per event.
         getResult(testId).then(d => { if (d.result) setResult(d.result); }).catch(() => {});
-        if (result) getTrend(result.target_url).then(d => setTrend(d.trend ?? [])).catch(() => {});
+        // Use ref so we always have the latest target_url even if state is stale
+        const url = resultRef.current?.target_url;
+        if (url) getTrend(url).then(d => setTrend(d.trend ?? [])).catch(() => {});
       }
     }
     if (event.type === 'test:live' && event.testId === testId) {
-      setLivePoints(prev => [...prev, event.point]);
+      // Cap at 120 points (~4 minutes of 2s windows) to bound memory growth
+      setLivePoints(prev => [...prev, event.point].slice(-120));
+      // Receiving live data while still showing 'pending' means the test:status:running
+      // event was broadcast before the WS connection was fully established — catch up.
+      if (resultRef.current?.status === 'pending') {
+        getResult(testId).then(d => { if (d.result) setResult(d.result); }).catch(() => {});
+      }
     }
   });
 
@@ -202,8 +213,8 @@ export default function ResultPage() {
         <p className="text-[#24292f] font-medium text-[13px] mb-1">Generating test script…</p>
         <p className="text-[#57606a] text-[11px] mb-4">This usually takes 10–30 seconds</p>
         <div className="flex gap-2 justify-center">
-          <Link href="/" className="px-3 py-1.5 bg-[#1f883d] text-white rounded-md text-[12px] font-medium">+ New test</Link>
-          <Link href="/results" className="px-3 py-1.5 border border-[#d0d7de] text-[#24292f] rounded-md text-[12px]">All results</Link>
+          <Link to="/" className="px-3 py-1.5 bg-[#1f883d] text-white rounded-md text-[12px] font-medium">+ New test</Link>
+          <Link to="/results" className="px-3 py-1.5 border border-[#d0d7de] text-[#24292f] rounded-md text-[12px]">All results</Link>
         </div>
       </div>
     </div>
@@ -223,7 +234,7 @@ export default function ResultPage() {
     <div className="p-4 lg:p-6">
       {/* Page header */}
       <div className="mb-1">
-        <Link href="/results" className="text-[11px] text-[#57606a] hover:text-[#0969da] hover:underline">← All Results</Link>
+        <Link to="/results" className="text-[11px] text-[#57606a] hover:text-[#0969da] hover:underline">← All Results</Link>
       </div>
       <div className="flex items-start justify-between gap-3 mb-4 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
@@ -260,7 +271,7 @@ export default function ResultPage() {
                 {result.is_baseline ? 'Clear baseline' : 'Set baseline'}
               </button>
               <a
-                href={`${process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.pdf`}
+                href={`${import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.pdf`}
                 target="_blank"
                 rel="noreferrer"
                 className="px-2.5 py-1 rounded-md text-[12px] font-medium border border-[#d0d7de] text-[#24292f] hover:bg-[#eaeef2] transition-colors"
@@ -296,7 +307,7 @@ export default function ResultPage() {
         <BentoCard className="mb-3">
           <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
           <div className="p-3">
-            <RealtimeChart points={livePoints} startedAt={result.started_at} />
+            <Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense>
           </div>
         </BentoCard>
       )}
@@ -397,7 +408,7 @@ export default function ResultPage() {
               <BentoCard>
                 <CardHeader title="Test Timeline" />
                 <div className="p-3">
-                  <RealtimeChart points={livePoints} startedAt={result.started_at} />
+                  <Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense>
                 </div>
               </BentoCard>
             </div>
@@ -476,12 +487,14 @@ export default function ResultPage() {
             <BentoCard>
               <CardHeader title={isBackend ? 'Response Distribution' : 'Web Vitals'} />
               <div className="p-3">
+                <Suspense fallback={null}>
                 {result.type === 'flow' && (m as any).stepMetrics?.length > 0
                   ? <FlowStepChart steps={(m as any).stepMetrics} />
                   : isBackend
                     ? <BackendChart metrics={m as any} />
                     : <ClientChart metrics={m as any} />
                 }
+              </Suspense>
               </div>
             </BentoCard>
           </div>
@@ -491,7 +504,7 @@ export default function ResultPage() {
               <BentoCard>
                 <CardHeader title="Analysis" />
                 <div className="p-3">
-                  <AnalysisPanel analysis={result.analysis as any} />
+                  <Suspense fallback={null}><AnalysisPanel analysis={result.analysis as any} /></Suspense>
                 </div>
               </BentoCard>
             </div>
@@ -508,11 +521,36 @@ export default function ResultPage() {
               <BentoCard>
                 <CardHeader title={`Trend — ${trend.length} runs for this URL`} />
                 <div className="p-3">
-                  <TrendChart
+                  <Suspense fallback={null}><TrendChart
                     trend={trend}
                     metricKey={isBackend ? 'p95ResponseTime' : 'lcp'}
                     label={isBackend ? 'p95 (ms)' : 'LCP (ms)'}
-                  />
+                  /></Suspense>
+                </div>
+              </BentoCard>
+            </div>
+          )}
+
+          {/* ── External log links ── */}
+          {logSources.length > 0 && result.started_at && (
+            <div className="col-span-full">
+              <BentoCard>
+                <CardHeader title="External Logs" />
+                <div className="px-3 py-2.5 flex flex-wrap gap-2">
+                  {logSources.map(src => (
+                    <a
+                      key={src.id}
+                      href={interpolateLogSourceUrl(src.url_template, result)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#d0d7de] rounded-md text-[12px] text-[#24292f] hover:bg-[#eaeef2] hover:border-[#8c959f] transition-colors font-medium"
+                    >
+                      {src.platform && (
+                        <span className="text-[10px] font-mono bg-[#ddf4ff] text-[#0969da] px-1 py-0.5 rounded">{src.platform}</span>
+                      )}
+                      {src.name} →
+                    </a>
+                  ))}
                 </div>
               </BentoCard>
             </div>

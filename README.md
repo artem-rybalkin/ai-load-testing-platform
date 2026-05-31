@@ -91,6 +91,19 @@ docker compose up --build
 
 First startup takes ~2–3 minutes to build all images. After that:
 
+> **Windows users — important:** Docker Desktop on Windows mounts project files through a cross-filesystem bridge (Windows ↔ WSL2 ↔ container) that adds ~500 ms latency per I/O operation. Next.js Turbopack compiles UI chunks lazily on first browser request; with this latency, large chunks like `react-dom` may exceed the browser's connection timeout, producing `ERR_CONNECTION_RESET` on the **first** page load after startup.
+>
+> **Fix (recommended):** clone and work from inside WSL2's native Linux filesystem — I/O latency drops to ~5 ms and the issue disappears:
+> ```bash
+> # In a WSL2 terminal
+> cp -r /mnt/c/path/to/ai-load-testing-platform ~/ai-load-testing-platform
+> cd ~/ai-load-testing-platform
+> docker compose up --build
+> ```
+> Open VS Code with `code .` from the WSL2 terminal (requires the VS Code WSL extension).
+>
+> **Workaround (if staying on Windows filesystem):** after the stack starts, open the browser and wait ~10 seconds for the first compilation to finish, then **hard-refresh** (`Ctrl+Shift+R`). All subsequent loads will be instant.
+
 | What | URL |
 |------|-----|
 | UI dashboard | http://localhost:3006 |
@@ -130,6 +143,7 @@ First startup takes ~2–3 minutes to build all images. After that:
 | [Configuration](docs/configuration.md) | All environment variables and tuning options |
 | [Production Deployment](docs/production.md) | Caddy HTTPS, DNS, security hardening |
 | [Development Guide](docs/development.md) | Hot-reload dev mode, test suite, adding services |
+| [Vite Migration](docs/vite-migration.md) | Why Next.js was replaced, what failed, final solution |
 
 ---
 

@@ -1,13 +1,13 @@
 import amqplib from 'amqplib';
 import { spawn, ChildProcess } from 'child_process';
-import { writeFile, unlink, readFile, mkdir, rm } from 'fs/promises';
+import { writeFile, unlink, readFile, mkdir, rm, open } from 'fs/promises';
 import { Pool } from 'pg';
 import * as os from 'os';
 import * as path from 'path';
 import Fastify from 'fastify';
 
 import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint } from '@alt/shared';
-import { parseK6Output, aggregateWindow, parseK6Errors, parseK6GroupMetrics } from './parser';
+import { parseK6Output, aggregateWindow, parseK6JsonOutput, LIVE_WINDOW_SEC } from './parser';
 import { log } from './logger';
 
 let queueConnected = false;
@@ -30,7 +30,7 @@ const RESULTS_QUEUE    = 'test-results';
 const DLQ              = `${QUEUE}.dlq`;
 const MAX_RETRIES   = 3;
 const RESULTS_URL   = process.env.RESULTS_URL || 'http://results-service:3004';
-const LIVE_INTERVAL_MS     = 2000;
+const LIVE_INTERVAL_MS     = LIVE_WINDOW_SEC * 1000;
 const MAX_TEST_DURATION_MS = parseInt(process.env.K6_MAX_DURATION_MS ?? '600000'); // 10 min
 const GRACE_PERIOD_MS      = 30000;
 const WORKER_CONCURRENCY   = parseInt(process.env.WORKER_CONCURRENCY ?? '1');
@@ -96,15 +96,16 @@ const runK6Test = async (
   const scriptPath = path.join(runDir, 'script.js');
   const jsonPath   = path.join(runDir, 'live.json');
 
-  await writeFile(scriptPath, script);
-
-  // Write parameterization data files so k6 open('./data.json') / open('./data.csv') resolves them
-  if (testData && testData.length > 0) {
-    await writeFile(path.join(runDir, 'data.json'), JSON.stringify(testData));
-  }
-  if (csvData) {
-    await writeFile(path.join(runDir, 'data.csv'), Buffer.from(csvData, 'base64'));
-  }
+  // Write all data files in parallel — they are independent
+  await Promise.all([
+    writeFile(scriptPath, script),
+    testData && testData.length > 0
+      ? writeFile(path.join(runDir, 'data.json'), JSON.stringify(testData))
+      : Promise.resolve(),
+    csvData
+      ? writeFile(path.join(runDir, 'data.csv'), Buffer.from(csvData, 'base64'))
+      : Promise.resolve(),
+  ]);
 
   await validateScript(scriptPath).catch(async (err) => {
     await rm(runDir, { recursive: true, force: true }).catch(() => {});
@@ -126,21 +127,28 @@ const runK6Test = async (
     runningTests.set(testId, k6);
     setStartedAt(testId).catch(() => {}); // mark exact k6 start time for countdown
 
-    let stdout = '';
-    let stderr = '';
-    let processedLines = 0;
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let fileOffset = 0;
 
-    k6.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    k6.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    k6.stdout.on('data', (d: Buffer) => stdoutChunks.push(d));
+    k6.stderr.on('data', (d: Buffer) => stderrChunks.push(d));
 
     const readAndPost = async () => {
       try {
-        const content = await readFile(jsonPath, 'utf-8');
-        const lines   = content.split('\n').filter(l => l.trim());
-        const newLines = lines.slice(processedLines);
-        processedLines = lines.length;
-        const agg = aggregateWindow(newLines);
-        if (agg) await postLiveMetric(testId, { timestamp: new Date().toISOString(), ...agg });
+        const fh = await open(jsonPath, 'r');
+        try {
+          const { size } = await fh.stat();
+          if (size <= fileOffset) return;
+          const buf = Buffer.allocUnsafe(size - fileOffset);
+          await fh.read(buf, 0, buf.length, fileOffset);
+          fileOffset = size;
+          const newLines = buf.toString('utf-8').split('\n').filter(l => l.trim());
+          const agg = aggregateWindow(newLines);
+          if (agg) await postLiveMetric(testId, { timestamp: new Date().toISOString(), ...agg });
+        } finally {
+          await fh.close();
+        }
       } catch { /* file may not exist yet */ }
     };
 
@@ -170,18 +178,17 @@ const runK6Test = async (
         log.warn({ testId, code }, 'k6 exited with non-zero code — parsing partial output');
       }
 
-      const output = stdout + stderr;
+      const output = Buffer.concat(stdoutChunks).toString() + Buffer.concat(stderrChunks).toString();
       log.debug({ testId, exitCode: code }, 'k6 full output received');
       const metrics = parseK6Output(output);
-      const { statusCodes, errorBreakdown } = parseK6Errors(jsonContent);
+      const { statusCodes, errorBreakdown, stepMetrics } = parseK6JsonOutput(jsonContent);
       metrics.statusCodes = statusCodes;
       metrics.errorBreakdown = errorBreakdown;
-      const stepMetrics = parseK6GroupMetrics(jsonContent);
       if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
 
       // Only reject if we got nothing useful AND it was a hard failure (not a threshold violation)
       if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
-        reject(new Error(`k6 exited with code ${code}: ${stderr.slice(-500)}`));
+        reject(new Error(`k6 exited with code ${code}: ${Buffer.concat(stderrChunks).toString().slice(-500)}`));
         return;
       }
 

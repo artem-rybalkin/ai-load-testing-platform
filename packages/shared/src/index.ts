@@ -86,6 +86,30 @@ export interface ClientTestOptions {
   collectWebVitals: boolean;
 }
 
+export interface AiInsights {
+  narrative: string;
+  anomalies: string[];
+  rootCauses: string[];
+  recommendations: string[];
+  severity: 'critical' | 'warning' | 'info';
+}
+
+export interface MetricDiff {
+  metric: string;
+  current: number;
+  previous: number;
+  diffPercent: number;
+  status: 'better' | 'same' | 'worse';
+}
+
+export interface AnalysisResult {
+  perfStatus: 'passed' | 'degraded' | 'failed';
+  diffs: MetricDiff[];
+  summary: string;
+  thresholdViolations: string[];
+  aiInsights?: AiInsights;
+}
+
 export interface TestResult {
   testId: string;
   targetUrl: string;
@@ -97,18 +121,7 @@ export interface TestResult {
   startedAt: string;
   completedAt?: string;
   perfStatus?: 'passed' | 'degraded' | 'failed';
-  analysis?: {
-    perfStatus: string;
-    diffs: Array<{
-      metric: string;
-      current: number;
-      previous: number;
-      diffPercent: number;
-      status: 'better' | 'same' | 'worse';
-    }>;
-    summary: string;
-    thresholdViolations: string[];
-  };
+  analysis?: AnalysisResult;
 }
 
 export interface BackendMetrics {

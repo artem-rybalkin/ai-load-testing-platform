@@ -4,6 +4,10 @@
 # then starts the recorder Node.js service.
 # X11/VNC failures are non-fatal — the recorder still works, just without a visible browser.
 
+# ── 0. Clean up stale X11 lock files from previous container run ─────────────
+# These are left behind when Docker restarts the container without recreating it.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
+
 # ── 1. Start Xvfb virtual display ────────────────────────────────────────────
 Xvfb :99 -screen 0 1280x800x24 -ac &
 XVFB_PID=$!

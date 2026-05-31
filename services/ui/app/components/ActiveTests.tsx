@@ -1,12 +1,11 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getActiveTests, ActiveTest } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
-import Link from 'next/link';
+import { Link } from 'react-router-dom';
 
 export default function ActiveTests() {
   const [active, setActive] = useState<ActiveTest[]>([]);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = async () => {
     try {
@@ -18,10 +17,13 @@ export default function ActiveTests() {
   // Initial load
   useEffect(() => { refresh(); }, []);
 
-  // Real-time updates via WebSocket — replaces 3s polling
+  // Real-time updates via WebSocket — replaces 3s polling.
+  // Debounced 50ms: consumer broadcasts both test:status + tests:changed together;
+  // the debounce coalesces them into a single fetch.
   useResultsSocket((event) => {
-    if (event.type === 'tests:changed' || event.type === 'test:status') {
-      refresh();
+    if (event.type === 'tests:changed' || event.type === 'test:status' || event.type === 'reconnected') {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(refresh, 50);
     }
   });
 
@@ -37,7 +39,7 @@ export default function ActiveTests() {
         {active.map(t => (
           <Link
             key={t.test_id}
-            href={`/results/${t.test_id}`}
+            to={`/results/${t.test_id}`}
             className="text-[11px] font-mono text-[#0969da] hover:underline flex items-center gap-1"
           >
             <span>{t.type === 'client-side' ? '🌐' : t.type === 'flow' ? '🔗' : '⚡'}</span>

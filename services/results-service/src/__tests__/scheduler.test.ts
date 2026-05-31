@@ -43,7 +43,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_templates CASCADE');
+  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets CASCADE');
   mockFetch.mockReset();
   mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
   mockCronSchedule.mockClear();

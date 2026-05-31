@@ -16,7 +16,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U alt_user -d alt_db"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s
 
   redis:
     image: redis:7-alpine
@@ -148,6 +149,7 @@ services:
       API_KEYS: ${API_KEYS:-}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
       RECORDER_URL: http://recorder-service:3007
+      ANALYSER_URL: http://analyser-service:3008
     depends_on:
       postgres:
         condition: service_healthy
@@ -155,6 +157,19 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+
+  analyser-service:
+    build:
+      context: .
+      dockerfile: services/analyser-service/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3008:3008"
+    environment:
+      PORT: 3008
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      RESULTS_URL: http://results-service:3004
+    # No hard dependencies — degrades gracefully if unreachable
 
   recorder-service:
     build:
@@ -169,7 +184,7 @@ services:
       LOG_LEVEL: info
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       CHROMIUM_PATH: /usr/bin/chromium-browser
-      NOVNC_URL: http://localhost:6080/vnc.html
+      NOVNC_URL: http://localhost:6080/vnc.html?autoconnect=true
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
     # No hard dependencies — recorder is optional; platform works without it
 
@@ -177,15 +192,19 @@ services:
     build:
       context: .
       dockerfile: services/ui/Dockerfile
+      args:
+        VITE_API_URL: http://localhost:3000
+        VITE_RESULTS_URL: http://localhost:3004
+        VITE_RECORDER_URL: http://localhost:3007
+        VITE_API_KEY: ${API_KEY:-}
     restart: unless-stopped
     ports:
       - "3006:3006"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:3000
-      NEXT_PUBLIC_RESULTS_URL: http://localhost:3004
-      NEXT_PUBLIC_RECORDER_URL: http://localhost:3007
-      NEXT_PUBLIC_API_KEY: ${API_KEY:-}
-      NEXT_TELEMETRY_DISABLED: "1"
+      VITE_API_URL: http://localhost:3000
+      VITE_RESULTS_URL: http://localhost:3004
+      VITE_RECORDER_URL: http://localhost:3007
+      VITE_API_KEY: ${API_KEY:-}
     depends_on:
       - api-service
       - results-service

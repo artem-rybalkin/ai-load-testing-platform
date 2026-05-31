@@ -1,11 +1,36 @@
 import amqplib from 'amqplib';
 import { Pool } from 'pg';
 
-import { TestResult, BackendMetrics, ClientMetrics } from '@alt/shared';
+import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult } from '@alt/shared';
 import { pool } from './db';
 import { analyzeResult } from './analyzer';
 import { log } from './logger';
 import { broadcast } from './ws';
+
+const ANALYSER_URL = process.env.ANALYSER_URL || 'http://analyser-service:3008';
+
+/** Call analyser-service; returns null on any error so caller falls back to local analysis. */
+const callAnalyserService = async (
+  testId: string,
+  targetUrl: string,
+  type: string,
+  metrics: BackendMetrics | ClientMetrics,
+  previousMetrics: BackendMetrics | ClientMetrics | null,
+  thresholds: TestResult['thresholds']
+): Promise<AnalysisResult | null> => {
+  try {
+    const res = await fetch(`${ANALYSER_URL}/analyse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testId, targetUrl, type, metrics, previousMetrics, thresholds: thresholds ?? null }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return null;
+    return await res.json() as AnalysisResult;
+  } catch {
+    return null;
+  }
+};
 
 const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string): Promise<void> => {
   const { rows } = await p.query(
@@ -32,58 +57,80 @@ let consumerConnected = false;
 export const isConsumerConnected = (): boolean => consumerConnected;
 
 export const handleResult = async (p: Pool, result: TestResult): Promise<void> => {
-  const { rows: prevRows } = await p.query(
-    `SELECT metrics FROM test_results
-     WHERE target_url = $1
-       AND type = $2
-       AND status = 'completed'
-       AND test_id != $3
-     ORDER BY is_baseline DESC, created_at DESC
-     LIMIT 1`,
-    [result.targetUrl, result.metrics.type, result.testId]
-  );
+  const client = await p.connect();
+  let analysis: AnalysisResult | null = null;
 
-  const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
+  try {
+    await client.query('BEGIN');
 
-  const analysis = analyzeResult(
-    result.metrics as BackendMetrics | ClientMetrics,
-    previousMetrics as BackendMetrics | ClientMetrics | null,
-    result.thresholds
-  );
+    const { rows: prevRows } = await client.query(
+      `SELECT metrics FROM test_results
+       WHERE target_url = $1
+         AND type = $2
+         AND status = 'completed'
+         AND test_id != $3
+       ORDER BY is_baseline DESC, created_at DESC
+       LIMIT 1`,
+      [result.targetUrl, result.metrics.type, result.testId]
+    );
 
-  await p.query(
-    `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis, script_id, reused_script)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     ON CONFLICT (test_id) DO UPDATE SET
-       status        = EXCLUDED.status,
-       metrics       = EXCLUDED.metrics,
-       target_url    = COALESCE(EXCLUDED.target_url, test_results.target_url),
-       completed_at  = EXCLUDED.completed_at,
-       perf_status   = EXCLUDED.perf_status,
-       analysis      = EXCLUDED.analysis,
-       script_id     = COALESCE(EXCLUDED.script_id, test_results.script_id),
-       reused_script = COALESCE(EXCLUDED.reused_script, test_results.reused_script)`,
-    [
+    const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
+
+    // Try analyser-service (deterministic + AI insights); fall back to local if unavailable
+    analysis = await callAnalyserService(
       result.testId,
-      result.metrics.type,
       result.targetUrl,
-      result.status,
-      JSON.stringify(result.metrics),
-      result.startedAt,
-      result.completedAt,
-      analysis.perfStatus,
-      JSON.stringify(analysis),
-      result.scriptId ?? null,
-      result.reusedScript ?? false,
-    ]
-  );
+      result.metrics.type,
+      result.metrics as BackendMetrics | ClientMetrics,
+      previousMetrics as BackendMetrics | ClientMetrics | null,
+      result.thresholds
+    ) ?? analyzeResult(
+      result.metrics as BackendMetrics | ClientMetrics,
+      previousMetrics as BackendMetrics | ClientMetrics | null,
+      result.thresholds
+    );
 
-  if (analysis.perfStatus === 'failed' || analysis.perfStatus === 'degraded') {
-    fireWebhooks(p, result, analysis.perfStatus).catch(() => {});
+    await client.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis, script_id, reused_script)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (test_id) DO UPDATE SET
+         status        = EXCLUDED.status,
+         metrics       = EXCLUDED.metrics,
+         target_url    = COALESCE(EXCLUDED.target_url, test_results.target_url),
+         completed_at  = EXCLUDED.completed_at,
+         perf_status   = EXCLUDED.perf_status,
+         analysis      = EXCLUDED.analysis,
+         script_id     = COALESCE(EXCLUDED.script_id, test_results.script_id),
+         reused_script = COALESCE(EXCLUDED.reused_script, test_results.reused_script)`,
+      [
+        result.testId,
+        result.metrics.type,
+        result.targetUrl,
+        result.status,
+        JSON.stringify(result.metrics),
+        result.startedAt,
+        result.completedAt,
+        analysis.perfStatus,
+        JSON.stringify(analysis),
+        result.scriptId ?? null,
+        result.reusedScript ?? false,
+      ]
+    );
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  if (analysis!.perfStatus === 'failed' || analysis!.perfStatus === 'degraded') {
+    fireWebhooks(p, result, analysis!.perfStatus).catch(() => {});
   }
 
   // Push real-time updates to all connected UI clients
-  broadcast({ type: 'test:status', testId: result.testId, status: result.status, perfStatus: analysis.perfStatus ?? null });
+  broadcast({ type: 'test:status', testId: result.testId, status: result.status, perfStatus: analysis!.perfStatus ?? null });
   broadcast({ type: 'tests:changed' });
 };
 

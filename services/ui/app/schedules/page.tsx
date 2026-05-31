@@ -24,9 +24,14 @@ export default function SchedulesPage() {
   const [error, setError] = useState('');
 
   const load = async () => {
-    const data = await getSchedules();
-    setSchedules(data.schedules ?? []);
-    setLoading(false);
+    try {
+      const data = await getSchedules();
+      setSchedules(data.schedules ?? []);
+    } catch {
+      setError('Could not reach results-service — check that it is running.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -170,9 +175,13 @@ export default function SchedulesPage() {
         </div>
       )}
 
+      {error && !showForm && (
+        <div className="bg-[#ffebe9] border border-[#f4c7c3] rounded-md px-4 py-3 mb-4 text-[12px] text-[#cf222e]">{error}</div>
+      )}
+
       {loading ? (
         <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">Loading…</div>
-      ) : schedules.length === 0 ? (
+      ) : schedules.length === 0 && !error ? (
         <div className="bg-white border border-[#d0d7de] rounded-md p-10 text-center text-[13px] text-[#57606a]">
           No schedules yet. Create one to run tests automatically.
         </div>

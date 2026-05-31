@@ -7,36 +7,33 @@ import Home from '../app/page';
 const mockPush = vi.hoisted(() => vi.fn());
 const stableSearchParams = vi.hoisted(() => new URLSearchParams());
 
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush }),
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mockPush,
   // Return the SAME URLSearchParams instance every call so useEffect deps stay stable
-  useSearchParams: () => stableSearchParams,
-}));
-
-vi.mock('next/link', () => ({
-  default: ({ href, children, ...props }: React.ComponentProps<'a'>) => (
-    <a href={href as string} {...props}>{children}</a>
+  useSearchParams: () => [stableSearchParams, vi.fn()],
+  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode; [key: string]: unknown }) => (
+    <a href={String(to)} {...(props as React.HTMLAttributes<HTMLAnchorElement>)}>{children}</a>
   ),
 }));
 
 vi.mock('@/lib/api', () => ({
   createTest: vi.fn().mockResolvedValue({ test: { id: 'new-test-id' } }),
-  getTemplates: vi.fn().mockResolvedValue({ templates: [] }),
-  createTemplate: vi.fn().mockResolvedValue({}),
+  getPresets: vi.fn().mockResolvedValue({ presets: [] }),
+  createPreset: vi.fn().mockResolvedValue({}),
   getResults: vi.fn().mockResolvedValue({ results: [] }),
   getActiveTests: vi.fn().mockResolvedValue({ active: [] }),
   getResult: vi.fn().mockResolvedValue({ result: null }),
 }));
 
-import { createTest, getTemplates, getResult } from '@/lib/api';
+import { createTest, getPresets, getResult } from '@/lib/api';
 const mockCreateTest = vi.mocked(createTest);
-const mockGetTemplates = vi.mocked(getTemplates);
+const mockGetPresets = vi.mocked(getPresets);
 const mockGetResult = vi.mocked(getResult);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockCreateTest.mockResolvedValue({ test: { id: 'new-test-id' } });
-  mockGetTemplates.mockResolvedValue({ templates: [] });
+  mockGetPresets.mockResolvedValue({ presets: [] });
   mockGetResult.mockResolvedValue({ result: null } as never);
   // Ensure no rerun param bleeds between tests
   stableSearchParams.delete('rerun');
@@ -90,17 +87,17 @@ describe('Home page — form validation', () => {
   });
 });
 
-describe('Home page — template dropdown', () => {
-  it('does not show template dropdown when no templates exist', async () => {
+describe('Home page — preset dropdown', () => {
+  it('does not show preset dropdown when no presets exist', async () => {
     render(<Home />);
-    await waitFor(() => expect(mockGetTemplates).toHaveBeenCalled());
-    // Template dropdown uses "Load from template…" as placeholder option
-    expect(screen.queryByText('Load from template…')).not.toBeInTheDocument();
+    await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
+    // Preset dropdown uses "Load from preset…" as placeholder option
+    expect(screen.queryByText('Load from preset…')).not.toBeInTheDocument();
   });
 
-  it('shows template dropdown when templates are available', async () => {
-    mockGetTemplates.mockResolvedValueOnce({
-      templates: [
+  it('shows preset dropdown when presets are available', async () => {
+    mockGetPresets.mockResolvedValueOnce({
+      presets: [
         {
           id: 'tmpl-1', name: 'API Smoke', type: 'backend', target_url: 'http://api.com',
           description: null, options: { vus: 5, duration: '30s' }, thresholds: null,
@@ -109,25 +106,25 @@ describe('Home page — template dropdown', () => {
       ],
     });
     render(<Home />);
-    await waitFor(() => expect(screen.getByText('Load from template…')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Load from preset…')).toBeInTheDocument());
     expect(screen.getByText('API Smoke (backend)')).toBeInTheDocument();
   });
 
-  it('populates form URL when a template is selected', async () => {
-    mockGetTemplates.mockResolvedValueOnce({
-      templates: [
+  it('populates form URL when a preset is selected', async () => {
+    mockGetPresets.mockResolvedValueOnce({
+      presets: [
         {
-          id: 'tmpl-1', name: 'API Smoke', type: 'backend', target_url: 'http://template.com',
+          id: 'tmpl-1', name: 'API Smoke', type: 'backend', target_url: 'http://preset.com',
           description: null, options: { vus: 10, duration: '1m' }, thresholds: null,
           used_count: 0, created_at: new Date().toISOString(),
         },
       ],
     });
     render(<Home />);
-    // Wait for the template dropdown to appear, then select by its default display value
-    await waitFor(() => screen.getByDisplayValue('Load from template…'));
-    fireEvent.change(screen.getByDisplayValue('Load from template…'), { target: { value: 'tmpl-1' } });
-    expect((screen.getByPlaceholderText('https://example.com') as HTMLInputElement).value).toBe('http://template.com');
+    // Wait for the preset dropdown to appear, then select by its default display value
+    await waitFor(() => screen.getByDisplayValue('Load from preset…'));
+    fireEvent.change(screen.getByDisplayValue('Load from preset…'), { target: { value: 'tmpl-1' } });
+    expect((screen.getByPlaceholderText('https://example.com') as HTMLInputElement).value).toBe('http://preset.com');
   });
 });
 

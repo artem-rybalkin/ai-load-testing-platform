@@ -2,4 +2,4 @@ FROM node:20-alpine
 WORKDIR /app/services/ui
 COPY services/ui/package.json ./
 RUN npm install
-CMD ["npx", "next", "dev", "-p", "3006", "--hostname", "0.0.0.0"]
+CMD ["npm", "run", "dev"]

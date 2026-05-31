@@ -1,10 +1,7 @@
-'use client';
-
 import { useState, useEffect, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { createTest, getResult, getTemplates, createTemplate, getResults, getActiveTests, Template, FlowStep, TestResult, ActiveTest } from '@/lib/api';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
-import Link from 'next/link';
 
 interface EnvVar { key: string; value: string }
 
@@ -75,7 +72,7 @@ function QuickStatsPanel({ active, recent }: { active: ActiveTest[]; recent: Tes
             {active.map(t => (
               <Link
                 key={t.test_id}
-                href={`/results/${t.test_id}`}
+                to={`/results/${t.test_id}`}
                 className="flex items-center justify-between px-3 py-2 text-[12px] hover:bg-[#f6f8fa] group"
               >
                 <span className="flex items-center gap-1.5 min-w-0">
@@ -99,7 +96,7 @@ function QuickStatsPanel({ active, recent }: { active: ActiveTest[]; recent: Tes
             {recent.slice(0, 5).map(r => (
               <Link
                 key={r.id}
-                href={`/results/${r.test_id}`}
+                to={`/results/${r.test_id}`}
                 className="flex items-center justify-between px-3 py-2 text-[12px] hover:bg-[#f6f8fa]"
               >
                 <span className="flex items-center gap-1.5 min-w-0">
@@ -133,12 +130,12 @@ const snapDuration = (secs: number) =>
   );
 
 function HomeContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [savingPreset, setSavingPreset] = useState(false);
   const [showThresholds, setShowThresholds] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
@@ -217,7 +214,7 @@ function HomeContent() {
   };
 
   useEffect(() => {
-    getTemplates().then(d => setTemplates(d.templates ?? [])).catch(() => {});
+    getPresets().then(d => setPresets(d.presets ?? [])).catch(() => {});
     getResults().then(d => setRecent(d.results?.slice(0, 10) ?? [])).catch(() => {});
     getActiveTests().then(d => setActive(d.active ?? [])).catch(() => {});
 
@@ -264,9 +261,9 @@ function HomeContent() {
     }
   }, [searchParams]);
 
-  const handleLoadTemplate = (id: string) => {
+  const handleLoadPreset = (id: string) => {
     if (!id) return;
-    const t = templates.find(t => t.id === id);
+    const t = presets.find(t => t.id === id);
     if (!t) return;
     const opts = t.options as Record<string, unknown>;
     setForm(f => ({
@@ -297,15 +294,15 @@ function HomeContent() {
     }
   };
 
-  const handleSaveTemplate = async () => {
-    if (!form.description && !form.targetUrl) { setError('Add a description or URL before saving as template'); return; }
-    setSavingTemplate(true);
+  const handleSavePreset = async () => {
+    if (!form.description && !form.targetUrl) { setError('Add a description or URL before saving as preset'); return; }
+    setSavingPreset(true);
     try {
       const options = form.type === 'client-side'
         ? { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals }
         : { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}) };
       const savedThresholds = showThresholds ? buildThresholds() : null;
-      await createTemplate({
+      await createPreset({
         name: form.description || form.targetUrl || 'Unnamed test',
         description: form.description || null,
         type: form.type === 'flow' ? 'backend' : form.type,
@@ -313,10 +310,10 @@ function HomeContent() {
         options,
         thresholds: savedThresholds ?? null,
       });
-      const data = await getTemplates();
-      setTemplates(data.templates ?? []);
+      const data = await getPresets();
+      setPresets(data.presets ?? []);
     } finally {
-      setSavingTemplate(false);
+      setSavingPreset(false);
     }
   };
 
@@ -382,7 +379,7 @@ function HomeContent() {
             envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
             thresholds: buildThresholds(),
           });
-          if (res.test?.id) router.push(`/results/${res.test.id}`);
+          if (res.test?.id) navigate(`/results/${res.test.id}`);
           return;
         }
 
@@ -398,7 +395,7 @@ function HomeContent() {
           csvFilename: flowCsvFile?.name,
           thresholds: buildThresholds(),
         });
-        if (res.test?.id) router.push(`/results/${res.test.id}`);
+        if (res.test?.id) navigate(`/results/${res.test.id}`);
         return;
       }
 
@@ -421,7 +418,7 @@ function HomeContent() {
         thresholds: buildThresholds(),
       });
 
-      if (res.test?.id) router.push(`/results/${res.test.id}`);
+      if (res.test?.id) navigate(`/results/${res.test.id}`);
     } catch {
       setError('Failed to create test');
     } finally {
@@ -439,14 +436,14 @@ function HomeContent() {
         <div className="w-full lg:flex-1 min-w-0">
           <div className="flex items-center justify-between mb-3">
             <h1 className="text-[15px] font-semibold text-[#24292f]">New Test</h1>
-            {templates.length > 0 && (
+            {presets.length > 0 && (
               <select
                 value=""
-                onChange={e => handleLoadTemplate(e.target.value)}
+                onChange={e => handleLoadPreset(e.target.value)}
                 className="text-[12px] border border-[#d0d7de] rounded-md px-2 py-1 bg-[#f6f8fa] text-[#57606a] focus:outline-none focus:border-[#0969da]"
               >
-                <option value="" disabled>Load from template…</option>
-                {templates.map(t => (
+                <option value="" disabled>Load from preset…</option>
+                {presets.map(t => (
                   <option key={t.id} value={t.id}>{t.name} ({t.type})</option>
                 ))}
               </select>
@@ -829,11 +826,11 @@ function HomeContent() {
               </button>
               <button
                 type="button"
-                onClick={handleSaveTemplate}
-                disabled={savingTemplate}
+                onClick={handleSavePreset}
+                disabled={savingPreset}
                 className="px-3 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] disabled:opacity-50 transition-colors"
               >
-                {savingTemplate ? 'Saving…' : 'Save template'}
+                {savingPreset ? 'Saving…' : 'Save preset'}
               </button>
             </div>
           </div>
@@ -846,18 +843,18 @@ function HomeContent() {
           </div>
           <QuickStatsPanel active={active} recent={recent} />
 
-          {/* Templates quick-access */}
-          {templates.length > 0 && (
+          {/* Presets quick-access */}
+          {presets.length > 0 && (
             <div className="mt-3 bg-white border border-[#d0d7de] rounded-md overflow-hidden">
               <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
-                <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Templates</span>
+                <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Presets</span>
               </div>
               <div className="divide-y divide-[#eaeef2]">
-                {templates.slice(0, 5).map(t => (
+                {presets.slice(0, 5).map(t => (
                   <div key={t.id} className="flex items-center justify-between px-3 py-2">
                     <span className="font-mono text-[12px] text-[#24292f] truncate mr-2">{t.name}</span>
                     <button
-                      onClick={() => handleLoadTemplate(t.id)}
+                      onClick={() => handleLoadPreset(t.id)}
                       className="text-[11px] text-[#0969da] hover:underline flex-shrink-0"
                     >
                       [Use]

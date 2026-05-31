@@ -1,8 +1,6 @@
-'use client';
-
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { getTemplates, createTemplate, deleteTemplate, Template } from '@/lib/api';
+import { useNavigate } from 'react-router-dom';
+import { getPresets, createPreset, deletePreset, Preset } from '@/lib/api';
 
 const EMPTY_FORM = {
   name: '',
@@ -14,9 +12,9 @@ const EMPTY_FORM = {
   sessions: 2,
 };
 
-export default function TemplatesPage() {
-  const router = useRouter();
-  const [templates, setTemplates] = useState<Template[]>([]);
+export default function PresetsPage() {
+  const navigate = useNavigate();
+  const [presets, setPresets] = useState<Preset[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -24,9 +22,14 @@ export default function TemplatesPage() {
   const [error, setError] = useState('');
 
   const load = async () => {
-    const data = await getTemplates();
-    setTemplates(data.templates ?? []);
-    setLoading(false);
+    try {
+      const data = await getPresets();
+      setPresets(data.presets ?? []);
+    } catch {
+      setError('Could not reach results-service — check that it is running.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -39,7 +42,7 @@ export default function TemplatesPage() {
       const options = form.type === 'backend'
         ? { vus: form.vus, duration: form.duration }
         : { sessions: form.sessions, duration: form.duration, collectWebVitals: true };
-      await createTemplate({
+      await createPreset({
         name: form.name,
         description: form.description || null,
         type: form.type,
@@ -51,19 +54,19 @@ export default function TemplatesPage() {
       setShowForm(false);
       await load();
     } catch {
-      setError('Failed to create template');
+      setError('Failed to create preset');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this template?')) return;
-    await deleteTemplate(id);
+    if (!confirm('Delete this preset?')) return;
+    await deletePreset(id);
     await load();
   };
 
-  const handleUse = (t: Template) => {
+  const handleUse = (t: Preset) => {
     const opts = t.options as Record<string, unknown>;
     const description = t.description ?? '';
     const params = new URLSearchParams({
@@ -75,7 +78,7 @@ export default function TemplatesPage() {
       ...(opts.duration ? { duration: String(opts.duration) } : {}),
       ...(opts.profile ? { profile: String(opts.profile) } : {}),
     });
-    router.push(`/?${params.toString()}`);
+    navigate(`/?${params.toString()}`);
   };
 
   const inputCls = "w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]";
@@ -84,7 +87,7 @@ export default function TemplatesPage() {
   return (
     <div className="p-4 lg:p-6">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-[15px] font-semibold text-[#24292f]">Templates</h1>
+        <h1 className="text-[15px] font-semibold text-[#24292f]">Presets</h1>
         <button
           onClick={() => setShowForm(v => !v)}
           className={`px-3 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${
@@ -93,14 +96,14 @@ export default function TemplatesPage() {
               : 'bg-[#1f883d] hover:bg-[#1a7f37] text-white border-transparent'
           }`}
         >
-          {showForm ? 'Cancel' : '+ New template'}
+          {showForm ? 'Cancel' : '+ New preset'}
         </button>
       </div>
 
       {showForm && (
         <div className="bg-white border border-[#d0d7de] rounded-md mb-4 overflow-hidden">
           <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">New Template</span>
+            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">New Preset</span>
           </div>
           <div className="p-4 space-y-3">
             <div className="grid grid-cols-2 gap-3">
@@ -155,28 +158,32 @@ export default function TemplatesPage() {
               <label className={labelCls}>Description (optional)</label>
               <input type="text" value={form.description}
                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="Describe this template…" className={inputCls} />
+                placeholder="Describe this preset…" className={inputCls} />
             </div>
             {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
           </div>
           <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de]">
             <button onClick={handleCreate} disabled={saving}
               className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors">
-              {saving ? 'Saving…' : 'Save template'}
+              {saving ? 'Saving…' : 'Save preset'}
             </button>
           </div>
         </div>
       )}
 
+      {error && !showForm && (
+        <div className="bg-[#ffebe9] border border-[#f4c7c3] rounded-md px-4 py-3 mb-4 text-[12px] text-[#cf222e]">{error}</div>
+      )}
+
       {loading ? (
         <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">Loading…</div>
-      ) : templates.length === 0 ? (
+      ) : presets.length === 0 && !error ? (
         <div className="bg-white border border-[#d0d7de] rounded-md p-10 text-center text-[13px] text-[#57606a]">
-          No templates yet. Save a test configuration to reuse it later.
+          No presets yet. Save a test configuration to reuse it later.
         </div>
       ) : (
         <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
-          {templates.map(t => {
+          {presets.map(t => {
             const opts = t.options as Record<string, unknown>;
             return (
               <div key={t.id} className="flex items-center gap-4 px-4 py-3 hover:bg-[#f6f8fa]">

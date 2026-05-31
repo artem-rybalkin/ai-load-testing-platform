@@ -1,21 +1,6 @@
-import { BackendMetrics, ClientMetrics, LighthouseScore, SLOThresholds } from '@alt/shared';
+import { BackendMetrics, ClientMetrics, LighthouseScore, SLOThresholds, AnalysisResult, MetricDiff } from '@alt/shared';
 
 export type PerfStatus = 'passed' | 'degraded' | 'failed';
-
-export interface MetricDiff {
-  metric: string;
-  current: number;
-  previous: number;
-  diffPercent: number;
-  status: 'better' | 'same' | 'worse';
-}
-
-export interface AnalysisResult {
-  perfStatus: PerfStatus;
-  diffs: MetricDiff[];
-  summary: string;
-  thresholdViolations: string[];
-}
 
 // Thresholds — межі для визначення статусу
 const BACKEND_THRESHOLDS = {

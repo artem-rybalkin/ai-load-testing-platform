@@ -1,9 +1,6 @@
-'use client';
-
 import { useEffect, useState, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, Link } from 'react-router-dom';
 import { compareResults, TestResult } from '@/lib/api';
-import Link from 'next/link';
 
 const PerfBadge = ({ status }: { status?: string }) => {
   if (!status) return null;
@@ -50,7 +47,7 @@ const clientMetrics = [
 ];
 
 function CompareContent() {
-  const params = useSearchParams();
+  const [params] = useSearchParams();
   const a = params.get('a') ?? '';
   const b = params.get('b') ?? '';
   const [results, setResults] = useState<{ resultA: TestResult; resultB: TestResult } | null>(null);
@@ -76,7 +73,7 @@ function CompareContent() {
     <div className="p-4 lg:p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-[15px] font-semibold text-[#24292f]">Compare Runs</h1>
-        <Link href="/results" className="text-[12px] text-[#0969da] hover:underline">← All results</Link>
+        <Link to="/results" className="text-[12px] text-[#0969da] hover:underline">← All results</Link>
       </div>
 
       <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
@@ -112,8 +109,8 @@ function CompareContent() {
       </div>
 
       <div className="mt-3 flex gap-4">
-        <Link href={`/results/${resultA.test_id}`} className="text-[12px] text-[#0969da] hover:underline">View result A →</Link>
-        <Link href={`/results/${resultB.test_id}`} className="text-[12px] text-[#0969da] hover:underline">View result B →</Link>
+        <Link to={`/results/${resultA.test_id}`} className="text-[12px] text-[#0969da] hover:underline">View result A →</Link>
+        <Link to={`/results/${resultB.test_id}`} className="text-[12px] text-[#0969da] hover:underline">View result B →</Link>
       </div>
     </div>
   );

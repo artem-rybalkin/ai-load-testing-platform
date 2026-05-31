@@ -1,19 +1,16 @@
-'use client';
-
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { Link, useLocation } from 'react-router-dom';
 
 const NAV = [
   { href: '/',          icon: '⊕', label: 'New Test'  },
   { href: '/results',   icon: '≡', label: 'Results'   },
   { href: '/schedules', icon: '⏱', label: 'Schedules' },
-  { href: '/templates', icon: '◫', label: 'Templates' },
+  { href: '/presets', icon: '◫', label: 'Presets' },
   { href: '/webhooks',  icon: '◻', label: 'Webhooks'  },
 ];
 
 export default function Sidebar() {
-  const pathname = usePathname();
+  const { pathname } = useLocation();
   const [open, setOpen] = useState(true);
 
   useEffect(() => {
@@ -59,7 +56,7 @@ export default function Sidebar() {
           return (
             <Link
               key={href}
-              href={href}
+              to={href}
               title={!open ? label : undefined}
               className={`flex items-center gap-2.5 px-2.5 py-2 rounded-md text-[13px] transition-colors group relative ${
                 active

@@ -39,11 +39,43 @@ const labelFor = (stepNames: string[], prefix: string, rawName: string) => {
   return stepNames.find(n => toKey(n) === key) ?? rawName;
 };
 
-// How many legend items to show before collapsing
 const LEGEND_SHOW = 4;
+const CHART_H = 224;
 
-// Fixed chart height — never changes regardless of step count
-const CHART_H = 160;
+interface LegendProps {
+  stepNames: string[];
+  expanded: boolean;
+  onToggle: () => void;
+}
+
+function StepLegend({ stepNames, expanded, onToggle }: LegendProps) {
+  const visible = expanded ? stepNames : stepNames.slice(0, LEGEND_SHOW);
+  const hiddenCount = stepNames.length - LEGEND_SHOW;
+  return (
+    <div className="mt-1.5">
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {visible.map((name, i) => (
+          <span key={name} className="inline-flex items-center gap-1 text-[11px] font-mono text-[#24292f] whitespace-nowrap">
+            <span
+              className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
+              style={{ backgroundColor: STEP_COLORS[i % STEP_COLORS.length] }}
+            />
+            {name}
+          </span>
+        ))}
+        {stepNames.length > LEGEND_SHOW && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="text-[11px] font-mono text-[#0969da] hover:underline"
+          >
+            {expanded ? '↑ show fewer' : `+ ${hiddenCount} more step${hiddenCount > 1 ? 's' : ''}…`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function RealtimeChart({ points, startedAt }: Props) {
   const [legendExpanded, setLegendExpanded] = useState(false);
@@ -81,8 +113,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
     return row;
   });
 
-  const visibleSteps = legendExpanded ? stepNames : stepNames.slice(0, LEGEND_SHOW);
-  const hiddenCount = stepNames.length - LEGEND_SHOW;
+  const toggle = () => setLegendExpanded(e => !e);
 
   return (
     <div className="space-y-4">
@@ -101,7 +132,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             <YAxis tick={TICK} unit="ms" width={50} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
               contentStyle={TOOLTIP_STYLE}
-              formatter={(v, name) => [`${v}ms`, labelFor(stepNames, 'avg', String(name))]}
+              formatter={(v, name) => [`${v}ms`, hasSteps ? labelFor(stepNames, 'avg', String(name)) : 'Avg response']}
             />
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`avg_${toKey(name)}`}
@@ -113,6 +144,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             )}
           </LineChart>
         </ResponsiveContainer>
+        {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
       </div>
 
       {/* ── Error rate ────────────────────────────────────────────── */}
@@ -121,7 +153,9 @@ export default function RealtimeChart({ points, startedAt }: Props) {
           <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
             {hasSteps ? 'Error Rate per Step' : 'VUs & Error Rate'}
           </span>
-          <span className="text-[10px] font-mono text-[#8c959f]">{hasSteps ? 'error %' : 'VUs left · error % right'}</span>
+          <span className="text-[10px] font-mono text-[#8c959f]">
+            {hasSteps ? 'error %' : 'VUs left · error % right'}
+          </span>
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
@@ -156,6 +190,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             )}
           </LineChart>
         </ResponsiveContainer>
+        {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
       </div>
 
       {/* ── Throughput ────────────────────────────────────────────── */}
@@ -173,7 +208,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             <YAxis tick={TICK} unit=" rps" width={52} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
               contentStyle={TOOLTIP_STYLE}
-              formatter={(v, name) => [`${v} rps`, labelFor(stepNames, 'rps', String(name))]}
+              formatter={(v, name) => [`${v} rps`, hasSteps ? labelFor(stepNames, 'rps', String(name)) : 'RPS']}
             />
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`rps_${toKey(name)}`}
@@ -185,35 +220,8 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             )}
           </LineChart>
         </ResponsiveContainer>
+        {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
       </div>
-
-      {/* ── Shared collapsible legend ─────────────────────────────── */}
-      {hasSteps && (
-        <div className="pt-1 border-t border-[#eaeef2]">
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            {visibleSteps.map((name, i) => (
-              <span key={name} className="inline-flex items-center gap-1 text-[11px] font-mono text-[#24292f] whitespace-nowrap">
-                <span
-                  className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: STEP_COLORS[i % STEP_COLORS.length] }}
-                />
-                {name}
-              </span>
-            ))}
-          </div>
-          {stepNames.length > LEGEND_SHOW && (
-            <button
-              type="button"
-              onClick={() => setLegendExpanded(e => !e)}
-              className="mt-1.5 text-[11px] font-mono text-[#0969da] hover:underline"
-            >
-              {legendExpanded
-                ? '↑ show fewer'
-                : `+ ${hiddenCount} more step${hiddenCount > 1 ? 's' : ''}…`}
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }

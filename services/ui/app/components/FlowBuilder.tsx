@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect } from 'react';
-import { FlowStep, ExtractRule, ExtractSource, RecordingSession, startRecording, stopRecording, getRecording } from '@/lib/api';
+import { FlowStep, ExtractRule, ExtractSource, RecordingSession, startRecording, stopRecording, getRecording, RECORDER_URL } from '@/lib/api';
 
 interface EnvVar { key: string; value: string }
 
@@ -114,8 +114,8 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     try {
       const session = await startRecording(steps[0]?.url, ignorePatterns.length ? ignorePatterns : undefined);
       setRecording(session);
-      // Open the noVNC browser viewer in a new tab so the user can interact
-      window.open(session.noVncUrl, '_blank', 'noopener,noreferrer');
+      // Open the recorder viewer (noVNC + Stop toolbar) in a new tab
+      window.open(`${RECORDER_URL}/viewer/${session.id}`, '_blank', 'noopener,noreferrer');
     } catch (err) {
       setRecordingError(err instanceof Error ? err.message : 'Failed to start recording — is recorder-service running?');
     }
@@ -364,7 +364,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               🔴 Recording — {recording.stepCount ?? 0} request{recording.stepCount !== 1 ? 's' : ''} captured
             </span>
             <a
-              href={recording.noVncUrl}
+              href={`${RECORDER_URL}/viewer/${recording.id}`}
               target="_blank"
               rel="noreferrer"
               className="text-[#0969da] hover:underline font-mono text-[11px]"

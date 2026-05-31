@@ -17,6 +17,7 @@ import * as os from 'os';
 
 import { TestRequest, TestResult, ClientMetrics, LighthouseScore } from '@alt/shared';
 import { log } from './logger';
+import { handleRetry } from './retry';
 
 const QUEUE              = 'client-tests';
 const CANCEL_EXCHANGE    = 'cancel-fanout';
@@ -35,7 +36,6 @@ setInterval(() => {
 }, 5000);
 const RESULTS_QUEUE      = 'test-results';
 const DLQ                = `${QUEUE}.dlq`;
-const MAX_RETRIES        = 3;
 const MAX_TEST_DURATION_MS = parseInt(process.env.PUPPETEER_MAX_DURATION_MS ?? '300000'); // 5 min
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '2');
 
@@ -46,27 +46,7 @@ const cancelledTests   = new Set<string>();
 // Web Vitals without the optional lighthouse field (for per-session accumulation)
 type WebVitalsSnapshot = Omit<ClientMetrics, 'type' | 'lighthouseScore'>;
 
-// r1: retry helper
-const handleRetry = (
-  channel: amqplib.Channel,
-  msg: amqplib.Message,
-  queue: string,
-  dlq: string,
-  testId: string
-) => {
-  const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
-  if (retryCount < MAX_RETRIES) {
-    log.warn({ testId, retryCount: retryCount + 1, maxRetries: MAX_RETRIES }, 'Retrying message');
-    channel.publish('', queue, msg.content, {
-      persistent: true,
-      headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 }
-    });
-  } else {
-    log.error({ testId, retryCount }, 'Max retries exceeded, routing to DLQ');
-    channel.sendToQueue(dlq, msg.content, { persistent: true });
-  }
-  channel.ack(msg);
-};
+// r1: retry helper imported from ./retry
 
 const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
   const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });

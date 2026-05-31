@@ -60,6 +60,15 @@ services:
       - /app/node_modules
     command: npx tsx watch src/index.ts
 
+  analyser-service:
+    build:
+      context: .
+      dockerfile: services/analyser-service/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx tsx watch src/index.ts
+
   recorder-service:
     build:
       context: .
@@ -76,13 +85,14 @@ services:
       dockerfile: services/ui/Dockerfile.dev
     volumes:
       - ./services/ui:/app/services/ui
-      - /app/services/ui/node_modules
-      - ui_next_cache:/app/services/ui/.next
+      - ui_node_modules:/app/services/ui/node_modules
     environment:
       NODE_ENV: development
-      WATCHPACK_POLLING: "true"
-      HOSTNAME: "0.0.0.0"
-    command: npx next dev -p 3006 --hostname 0.0.0.0
+      VITE_API_URL: http://localhost:3000
+      VITE_RESULTS_URL: http://localhost:3004
+      VITE_RECORDER_URL: http://localhost:3007
+      VITE_API_KEY: ${API_KEY:-}
+    command: npm run dev
 
 volumes:
-  ui_next_cache:
+  ui_node_modules:

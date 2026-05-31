@@ -1,7 +1,7 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-const RESULTS_URL = process.env.NEXT_PUBLIC_RESULTS_URL || 'http://localhost:3004';
-export const RECORDER_URL = process.env.NEXT_PUBLIC_RECORDER_URL || 'http://localhost:3007';
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const RESULTS_URL = import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004';
+export const RECORDER_URL = import.meta.env.VITE_RECORDER_URL || 'http://localhost:3007';
+const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 const authHeaders = (): Record<string, string> =>
   API_KEY ? { 'X-API-Key': API_KEY } : {};
@@ -80,6 +80,13 @@ export interface TestResult {
     }>;
     summary: string;
     thresholdViolations: string[];
+    aiInsights?: {
+      narrative: string;
+      anomalies: string[];
+      rootCauses: string[];
+      recommendations: string[];
+      severity: 'critical' | 'warning' | 'info';
+    };
   };
 }
 
@@ -233,7 +240,7 @@ export const runSchedule = async (id: string): Promise<void> => {
   await fetch(`${RESULTS_URL}/schedules/${id}/run`, { method: 'POST', headers: authHeaders() });
 };
 
-export interface Template {
+export interface Preset {
   id: string;
   name: string;
   description: string | null;
@@ -245,13 +252,13 @@ export interface Template {
   created_at: string;
 }
 
-export const getTemplates = async (): Promise<{ templates: Template[] }> => {
-  const res = await fetch(`${RESULTS_URL}/templates`, { cache: 'no-store', headers: authHeaders() });
+export const getPresets = async (): Promise<{ presets: Preset[] }> => {
+  const res = await fetch(`${RESULTS_URL}/presets`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
-export const createTemplate = async (data: Omit<Template, 'id' | 'used_count' | 'created_at'>): Promise<{ template: Template }> => {
-  const res = await fetch(`${RESULTS_URL}/templates`, {
+export const createPreset = async (data: Omit<Preset, 'id' | 'used_count' | 'created_at'>): Promise<{ preset: Preset }> => {
+  const res = await fetch(`${RESULTS_URL}/presets`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(data),
@@ -259,13 +266,13 @@ export const createTemplate = async (data: Omit<Template, 'id' | 'used_count' | 
   return res.json();
 };
 
-export const getTemplate = async (id: string): Promise<{ template: Template }> => {
-  const res = await fetch(`${RESULTS_URL}/templates/${id}`, { cache: 'no-store', headers: authHeaders() });
+export const getPreset = async (id: string): Promise<{ preset: Preset }> => {
+  const res = await fetch(`${RESULTS_URL}/presets/${id}`, { cache: 'no-store', headers: authHeaders() });
   return res.json();
 };
 
-export const deleteTemplate = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/templates/${id}`, { method: 'DELETE', headers: authHeaders() });
+export const deletePreset = async (id: string): Promise<void> => {
+  await fetch(`${RESULTS_URL}/presets/${id}`, { method: 'DELETE', headers: authHeaders() });
 };
 
 export interface WorkerMetrics {
@@ -302,6 +309,63 @@ export interface AIStatus {
 export const getAIStatus = async (): Promise<AIStatus> => {
   const res = await fetch(`${RESULTS_URL}/system/ai-status`, { cache: 'no-store' });
   return res.json();
+};
+
+// ── Log Sources ──────────────────────────────────────────────────────────────
+
+export interface LogSource {
+  id: string;
+  name: string;
+  platform: string | null;
+  url_template: string;
+  created_at: string;
+}
+
+/**
+ * Interpolates template variables in a log source URL for a specific test result.
+ *
+ * Supported variables:
+ *   {startedAtMs}      — started_at as epoch milliseconds
+ *   {completedAtMs}    — completed_at as epoch milliseconds (falls back to now)
+ *   {startedAtISO}     — started_at as ISO 8601 string
+ *   {completedAtISO}   — completed_at as ISO 8601 string
+ *   {targetUrl}        — raw target URL
+ *   {targetUrlEncoded} — URL-encoded target URL
+ *   {testId}           — test UUID
+ */
+export const interpolateLogSourceUrl = (
+  template: string,
+  result: Pick<TestResult, 'test_id' | 'target_url' | 'started_at' | 'completed_at'>
+): string => {
+  const startedAt  = result.started_at  ? new Date(result.started_at)  : new Date();
+  const completedAt = result.completed_at ? new Date(result.completed_at) : new Date();
+
+  return template
+    .replaceAll('{startedAtMs}',      String(startedAt.getTime()))
+    .replaceAll('{completedAtMs}',    String(completedAt.getTime()))
+    .replaceAll('{startedAtISO}',     startedAt.toISOString())
+    .replaceAll('{completedAtISO}',   completedAt.toISOString())
+    .replaceAll('{targetUrl}',        result.target_url)
+    .replaceAll('{targetUrlEncoded}', encodeURIComponent(result.target_url))
+    .replaceAll('{testId}',           result.test_id);
+};
+
+export const getLogSources = async (): Promise<{ logSources: LogSource[] }> => {
+  const res = await fetch(`${RESULTS_URL}/log-sources`, { cache: 'no-store', headers: authHeaders() });
+  return res.json();
+};
+
+export const createLogSource = async (data: { name: string; platform?: string; urlTemplate: string }): Promise<{ logSource: LogSource }> => {
+  const res = await fetch(`${RESULTS_URL}/log-sources`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+};
+
+export const deleteLogSource = async (id: string): Promise<void> => {
+  await fetch(`${RESULTS_URL}/log-sources/${id}`, { method: 'DELETE', headers: authHeaders() });
 };
 
 // ── Flow Recording ────────────────────────────────────────────────────────────

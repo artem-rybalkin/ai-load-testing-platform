@@ -74,6 +74,7 @@ export const buildApp = async (
       { name: 'worker-backend',    url: `${process.env.WORKER_BACKEND_URL || 'http://worker-backend:3002'}/health` },
       { name: 'worker-client',     url: `${process.env.WORKER_CLIENT_URL  || 'http://worker-client:3003'}/health` },
       { name: 'recorder-service',  url: `${recorderUrl}/health` },
+      { name: 'analyser-service',  url: `${process.env.ANALYSER_URL || 'http://analyser-service:3008'}/health` },
     ];
 
     const results = await Promise.all(
@@ -163,7 +164,7 @@ export const buildApp = async (
   app.get('/results', async (_request, reply) => {
     try {
       const { rows } = await pool.query(
-        `SELECT r.*, s.script, s.description AS script_description
+        `SELECT r.*, s.description AS script_description
          FROM test_results r
          LEFT JOIN test_scripts s ON r.script_id = s.id
          ORDER BY r.created_at DESC LIMIT 50`
@@ -264,8 +265,10 @@ export const buildApp = async (
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [testId, timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics ? JSON.stringify(stepMetrics) : null]
       );
-      broadcast({ type: 'test:live', testId, point: { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } });
-      return { success: true };
+      reply.send({ success: true });
+      // Broadcast after the HTTP response is flushed so the worker isn't blocked
+      setImmediate(() => broadcast({ type: 'test:live', testId, point: { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } }));
+      return reply;
     } catch (err) {
       return reply.code(500).send({ error: 'Failed to save live metric' });
     }
@@ -406,6 +409,33 @@ export const buildApp = async (
     }
   );
 
+  // ── Log sources ──────────────────────────────────────────────────────────
+  app.get('/log-sources', async () => {
+    const { rows } = await pool.query(`SELECT * FROM log_sources ORDER BY created_at DESC`);
+    return { logSources: rows };
+  });
+
+  app.post<{ Body: { name: string; platform?: string; urlTemplate: string } }>(
+    '/log-sources',
+    async (request, reply) => {
+      const { name, platform, urlTemplate } = request.body;
+      if (!name || !urlTemplate) return reply.code(400).send({ error: 'name and urlTemplate are required' });
+      const { rows } = await pool.query(
+        `INSERT INTO log_sources (name, platform, url_template) VALUES ($1,$2,$3) RETURNING *`,
+        [name, platform ?? null, urlTemplate]
+      );
+      return reply.code(201).send({ logSource: rows[0] });
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/log-sources/:id',
+    async (request, reply) => {
+      await pool.query(`DELETE FROM log_sources WHERE id = $1`, [request.params.id]);
+      return reply.code(204).send();
+    }
+  );
+
   // ── s2: Scheduled tests ───────────────────────────────────────────────────
   app.get('/schedules', async () => {
     const { rows } = await pool.query(`SELECT * FROM schedules ORDER BY created_at DESC`);
@@ -476,40 +506,42 @@ export const buildApp = async (
     }
   );
 
-  // ── s3: Test templates ────────────────────────────────────────────────────
-  app.get('/templates', async () => {
-    const { rows } = await pool.query(`SELECT * FROM test_templates ORDER BY used_count DESC, created_at DESC`);
-    return { templates: rows };
+  // ── s3: Test presets ─────────────────────────────────────────────────────
+  app.get('/presets', async () => {
+    const { rows } = await pool.query(`SELECT * FROM test_presets ORDER BY used_count DESC, created_at DESC`);
+    return { presets: rows };
   });
 
   app.post<{ Body: { name: string; description?: string; type: string; target_url?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown> } }>(
-    '/templates',
+    '/presets',
     async (request, reply) => {
       const { name, description, type, target_url, options, thresholds } = request.body;
       if (!name || !type || !options) return reply.code(400).send({ error: 'name, type, options are required' });
       const { rows } = await pool.query(
-        `INSERT INTO test_templates (name, description, type, target_url, options, thresholds)
+        `INSERT INTO test_presets (name, description, type, target_url, options, thresholds)
          VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
         [name, description ?? null, type, target_url ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null]
       );
-      return reply.code(201).send({ template: rows[0] });
+      return reply.code(201).send({ preset: rows[0] });
     }
   );
 
   app.get<{ Params: { id: string } }>(
-    '/templates/:id',
+    '/presets/:id',
     async (request, reply) => {
-      const { rows } = await pool.query(`SELECT * FROM test_templates WHERE id = $1`, [request.params.id]);
-      if (rows.length === 0) return reply.code(404).send({ error: 'Template not found' });
-      await pool.query(`UPDATE test_templates SET used_count = used_count + 1 WHERE id = $1`, [request.params.id]);
-      return { template: rows[0] };
+      const { rows } = await pool.query(
+        `UPDATE test_presets SET used_count = used_count + 1 WHERE id = $1 RETURNING *`,
+        [request.params.id]
+      );
+      if (rows.length === 0) return reply.code(404).send({ error: 'Preset not found' });
+      return { preset: rows[0] };
     }
   );
 
   app.delete<{ Params: { id: string } }>(
-    '/templates/:id',
+    '/presets/:id',
     async (request, reply) => {
-      await pool.query(`DELETE FROM test_templates WHERE id = $1`, [request.params.id]);
+      await pool.query(`DELETE FROM test_presets WHERE id = $1`, [request.params.id]);
       return reply.code(204).send();
     }
   );

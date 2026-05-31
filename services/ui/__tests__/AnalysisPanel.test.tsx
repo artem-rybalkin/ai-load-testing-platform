@@ -33,6 +33,20 @@ const degraded = {
   thresholdViolations: [],
 };
 
+const withInsights = {
+  perfStatus: 'degraded',
+  summary: 'Performance has degraded compared to previous run',
+  diffs: [],
+  thresholdViolations: [],
+  aiInsights: {
+    narrative: 'The API response times have increased due to elevated DB query latency.',
+    anomalies: ['p99 spike at the 60s mark'],
+    rootCauses: ['Unindexed query in orders table'],
+    recommendations: ['Add index on orders.created_at', 'Enable query result caching'],
+    severity: 'warning' as const,
+  },
+};
+
 describe('AnalysisPanel', () => {
   it('renders Passed badge and summary for passing analysis', () => {
     render(<AnalysisPanel analysis={passed} />);
@@ -83,5 +97,74 @@ describe('AnalysisPanel', () => {
   it('shows "Compared to previous run" section header when diffs are present', () => {
     render(<AnalysisPanel analysis={degraded} />);
     expect(screen.getByText('Compared to previous run:')).toBeInTheDocument();
+  });
+});
+
+describe('AnalysisPanel — AI Insights section', () => {
+  it('renders AI Insights toggle when aiInsights is present', () => {
+    render(<AnalysisPanel analysis={withInsights} />);
+    expect(screen.getByText('AI Insights')).toBeInTheDocument();
+  });
+
+  it('does not render AI Insights section when aiInsights is absent', () => {
+    render(<AnalysisPanel analysis={passed} />);
+    expect(screen.queryByText('AI Insights')).not.toBeInTheDocument();
+  });
+
+  it('narrative is not visible before expanding the panel', () => {
+    render(<AnalysisPanel analysis={withInsights} />);
+    expect(screen.queryByText(withInsights.aiInsights.narrative)).not.toBeInTheDocument();
+  });
+
+  it('expanding the panel reveals the narrative', async () => {
+    const { getByText } = render(<AnalysisPanel analysis={withInsights} />);
+    const toggle = getByText('AI Insights').closest('button')!;
+    toggle.click();
+    expect(screen.getByText(withInsights.aiInsights.narrative)).toBeInTheDocument();
+  });
+
+  it('expanding shows anomalies', async () => {
+    render(<AnalysisPanel analysis={withInsights} />);
+    screen.getByText('AI Insights').closest('button')!.click();
+    expect(screen.getByText('p99 spike at the 60s mark')).toBeInTheDocument();
+  });
+
+  it('expanding shows root causes', async () => {
+    render(<AnalysisPanel analysis={withInsights} />);
+    screen.getByText('AI Insights').closest('button')!.click();
+    expect(screen.getByText('Unindexed query in orders table')).toBeInTheDocument();
+  });
+
+  it('expanding shows recommendations', async () => {
+    render(<AnalysisPanel analysis={withInsights} />);
+    screen.getByText('AI Insights').closest('button')!.click();
+    expect(screen.getByText('Add index on orders.created_at')).toBeInTheDocument();
+    expect(screen.getByText('Enable query result caching')).toBeInTheDocument();
+  });
+
+  it('collapses again when toggle is clicked a second time', async () => {
+    render(<AnalysisPanel analysis={withInsights} />);
+    const btn = screen.getByText('AI Insights').closest('button')!;
+    btn.click(); // expand
+    expect(screen.getByText(withInsights.aiInsights.narrative)).toBeInTheDocument();
+    btn.click(); // collapse
+    expect(screen.queryByText(withInsights.aiInsights.narrative)).not.toBeInTheDocument();
+  });
+
+  it('shows a preview snippet of the narrative in the collapsed header', () => {
+    render(<AnalysisPanel analysis={withInsights} />);
+    // The collapsed header truncates to 60 chars — the first 60 chars of the narrative should appear
+    const preview = withInsights.aiInsights.narrative.slice(0, 60);
+    expect(screen.getByText(new RegExp(preview.slice(0, 30)))).toBeInTheDocument();
+  });
+
+  it('does not show anomalies section when anomalies array is empty', () => {
+    const noAnomalies = {
+      ...withInsights,
+      aiInsights: { ...withInsights.aiInsights, anomalies: [] },
+    };
+    render(<AnalysisPanel analysis={noAnomalies} />);
+    screen.getByText('AI Insights').closest('button')!.click();
+    expect(screen.queryByText('Anomalies detected')).not.toBeInTheDocument();
   });
 });

@@ -1,10 +1,7 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getResults, TestResult } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { Link, useNavigate } from 'react-router-dom';
 
 function relTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -59,7 +56,8 @@ export default function ResultsPage() {
   const [results, setResults] = useState<TestResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
-  const router = useRouter();
+  const navigate = useNavigate();
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = async () => {
     const data = await getResults();
@@ -70,10 +68,13 @@ export default function ResultsPage() {
   // Initial load
   useEffect(() => { refresh(); }, []);
 
-  // Real-time updates via WebSocket — replaces 5s polling
+  // Real-time updates via WebSocket — replaces 5s polling.
+  // Debounced 50ms: consumer broadcasts both test:status + tests:changed together;
+  // the debounce coalesces them into a single fetch.
   useResultsSocket((event) => {
-    if (event.type === 'tests:changed' || event.type === 'test:status') {
-      refresh();
+    if (event.type === 'tests:changed' || event.type === 'test:status' || event.type === 'reconnected') {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(refresh, 50);
     }
   });
 
@@ -94,14 +95,14 @@ export default function ResultsPage() {
           )}
           {selected.length === 2 && (
             <button
-              onClick={() => router.push(`/results/compare?a=${selected[0]}&b=${selected[1]}`)}
+              onClick={() => navigate(`/results/compare?a=${selected[0]}&b=${selected[1]}`)}
               className="px-3 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[12px] font-medium transition-colors"
             >
               Compare selected ({selected.length}/2)
             </button>
           )}
           <Link
-            href="/"
+            to="/"
             className="px-3 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[12px] font-medium transition-colors"
           >
             + New Test
@@ -114,7 +115,7 @@ export default function ResultsPage() {
       ) : results.length === 0 ? (
         <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center">
           <p className="text-[#57606a] text-[13px]">No results yet</p>
-          <Link href="/" className="text-[#0969da] text-[12px] hover:underline mt-2 block">Run your first test →</Link>
+          <Link to="/" className="text-[#0969da] text-[12px] hover:underline mt-2 block">Run your first test →</Link>
         </div>
       ) : (
         <>
@@ -137,7 +138,7 @@ export default function ResultsPage() {
                   return (
                     <tr
                       key={r.id}
-                      onClick={() => router.push(`/results/${r.test_id}`)}
+                      onClick={() => navigate(`/results/${r.test_id}`)}
                       className={`cursor-pointer hover:bg-[#f6f8fa] ${selected.includes(r.test_id) ? 'bg-[#ddf4ff] hover:bg-[#ddf4ff]' : ''}`}
                     >
                       <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
@@ -174,13 +175,13 @@ export default function ResultsPage() {
                         <div className="flex items-center justify-end gap-3">
                           {r.status === 'completed' && (
                             <button
-                              onClick={e => { e.stopPropagation(); router.push(`/?rerun=${r.test_id}`); }}
+                              onClick={e => { e.stopPropagation(); navigate(`/?rerun=${r.test_id}`); }}
                               className="text-[12px] text-[#57606a] hover:text-[#24292f] hover:underline"
                             >
                               ↻ Re-run
                             </button>
                           )}
-                          <Link href={`/results/${r.test_id}`} className="text-[12px] text-[#0969da] hover:underline" onClick={e => e.stopPropagation()}>View →</Link>
+                          <Link to={`/results/${r.test_id}`} className="text-[12px] text-[#0969da] hover:underline" onClick={e => e.stopPropagation()}>View →</Link>
                         </div>
                       </td>
                     </tr>
@@ -200,7 +201,7 @@ export default function ResultsPage() {
                   className="block bg-white border border-[#d0d7de] rounded-md px-3 py-2.5"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <Link href={`/results/${r.test_id}`} className="min-w-0 flex-1">
+                    <Link to={`/results/${r.test_id}`} className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <StatusDot status={r.status} perf={r.perf_status} />
                         <span className="font-mono text-[13px] text-[#24292f] font-medium truncate">{r.target_url.replace(/https?:\/\//, '')}</span>
@@ -216,7 +217,7 @@ export default function ResultsPage() {
                       <span className="text-[13px] text-[#0969da]">→</span>
                       {r.status === 'completed' && (
                         <button
-                          onClick={() => router.push(`/?rerun=${r.test_id}`)}
+                          onClick={() => navigate(`/?rerun=${r.test_id}`)}
                           className="text-[11px] text-[#57606a] hover:text-[#24292f]"
                         >
                           ↻ Re-run

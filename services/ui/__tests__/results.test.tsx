@@ -5,13 +5,10 @@ import ResultsPage from '../app/results/page';
 
 const mockPush = vi.fn();
 
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush }),
-}));
-
-vi.mock('next/link', () => ({
-  default: ({ href, children, ...props }: React.ComponentProps<'a'>) => (
-    <a href={href as string} {...props}>{children}</a>
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mockPush,
+  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode; [key: string]: unknown }) => (
+    <a href={String(to)} {...(props as React.HTMLAttributes<HTMLAnchorElement>)}>{children}</a>
   ),
 }));
 

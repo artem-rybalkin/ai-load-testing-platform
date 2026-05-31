@@ -51,8 +51,16 @@ export const createSchema = async (p: Pool): Promise<void> => {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Migrate old table name if still present from an earlier deploy
   await p.query(`
-    CREATE TABLE IF NOT EXISTS test_templates (
+    DO $$ BEGIN
+      IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'test_templates') THEN
+        ALTER TABLE test_templates RENAME TO test_presets;
+      END IF;
+    END $$
+  `);
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS test_presets (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name        TEXT NOT NULL,
       description TEXT,
@@ -71,6 +79,15 @@ export const createSchema = async (p: Pool): Promise<void> => {
       events     TEXT[] NOT NULL DEFAULT '{failed,degraded}',
       secret     TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS log_sources (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name         TEXT NOT NULL,
+      platform     VARCHAR(30),
+      url_template TEXT NOT NULL,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
     )
   `);
   await p.query(`
@@ -100,6 +117,9 @@ export const createSchema = async (p: Pool): Promise<void> => {
     ON test_results(status)`);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_test_results_url_type_status
     ON test_results(target_url, type, status)`);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_test_results_active
+    ON test_results(created_at DESC)
+    WHERE status IN ('pending', 'running')`);
 };
 
 export const initDb = async (): Promise<void> => {

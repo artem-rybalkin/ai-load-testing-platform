@@ -40,7 +40,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_templates CASCADE');
+  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
   mockFetch.mockReset();
 });
 
@@ -371,55 +371,55 @@ describe('schedules', () => {
   });
 });
 
-// ─── Templates CRUD ───────────────────────────────────────────────────────────
+// ─── Presets CRUD ────────────────────────────────────────────────────────────
 
-const templatePayload = {
+const presetPayload = {
   name: 'API smoke',
   type: 'backend',
   options: { vus: 5, duration: '30s' },
 };
 
-describe('templates', () => {
-  it('creates a template and returns 201', async () => {
-    const res = await app.inject({ method: 'POST', url: '/templates', payload: templatePayload });
+describe('presets', () => {
+  it('creates a preset and returns 201', async () => {
+    const res = await app.inject({ method: 'POST', url: '/presets', payload: presetPayload });
     expect(res.statusCode).toBe(201);
-    expect(res.json().template.name).toBe('API smoke');
+    expect(res.json().preset.name).toBe('API smoke');
   });
 
   it('returns 400 when required fields are missing', async () => {
-    const res = await app.inject({ method: 'POST', url: '/templates', payload: { name: 'x' } });
+    const res = await app.inject({ method: 'POST', url: '/presets', payload: { name: 'x' } });
     expect(res.statusCode).toBe(400);
   });
 
   it('saves and returns target_url (regression: was silently dropped due to camelCase mismatch)', async () => {
     const res = await app.inject({
       method: 'POST',
-      url: '/templates',
-      payload: { ...templatePayload, target_url: 'https://example.com' },
+      url: '/presets',
+      payload: { ...presetPayload, target_url: 'https://example.com' },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json().template.target_url).toBe('https://example.com');
+    expect(res.json().preset.target_url).toBe('https://example.com');
   });
 
   it('saves and returns description', async () => {
     const res = await app.inject({
       method: 'POST',
-      url: '/templates',
-      payload: { ...templatePayload, description: 'load test 10 users 1 min' },
+      url: '/presets',
+      payload: { ...presetPayload, description: 'load test 10 users 1 min' },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json().template.description).toBe('load test 10 users 1 min');
+    expect(res.json().preset.description).toBe('load test 10 users 1 min');
   });
 
   it('saves and returns all options fields including profile and rampUp', async () => {
     const options = { vus: 10, duration: '2m', profile: 'spike', peakVus: 100, rampUp: '30s' };
     const res = await app.inject({
       method: 'POST',
-      url: '/templates',
-      payload: { ...templatePayload, options },
+      url: '/presets',
+      payload: { ...presetPayload, options },
     });
     expect(res.statusCode).toBe(201);
-    const saved = res.json().template.options;
+    const saved = res.json().preset.options;
     expect(saved.vus).toBe(10);
     expect(saved.duration).toBe('2m');
     expect(saved.profile).toBe('spike');
@@ -431,63 +431,146 @@ describe('templates', () => {
     const thresholds = { p95: 800, errorRate: 1 };
     const res = await app.inject({
       method: 'POST',
-      url: '/templates',
-      payload: { ...templatePayload, thresholds },
+      url: '/presets',
+      payload: { ...presetPayload, thresholds },
     });
     expect(res.statusCode).toBe(201);
-    const saved = res.json().template.thresholds;
+    const saved = res.json().preset.thresholds;
     expect(saved.p95).toBe(800);
     expect(saved.errorRate).toBe(1);
   });
 
   it('target_url is null when not provided', async () => {
-    const res = await app.inject({ method: 'POST', url: '/templates', payload: templatePayload });
+    const res = await app.inject({ method: 'POST', url: '/presets', payload: presetPayload });
     expect(res.statusCode).toBe(201);
-    expect(res.json().template.target_url).toBeNull();
+    expect(res.json().preset.target_url).toBeNull();
   });
 
-  it('lists templates ordered by used_count DESC', async () => {
-    await app.inject({ method: 'POST', url: '/templates', payload: templatePayload });
-    await app.inject({ method: 'POST', url: '/templates', payload: { ...templatePayload, name: 'Second' } });
-    const res = await app.inject({ method: 'GET', url: '/templates' });
+  it('lists presets ordered by used_count DESC', async () => {
+    await app.inject({ method: 'POST', url: '/presets', payload: presetPayload });
+    await app.inject({ method: 'POST', url: '/presets', payload: { ...presetPayload, name: 'Second' } });
+    const res = await app.inject({ method: 'GET', url: '/presets' });
     expect(res.statusCode).toBe(200);
-    expect(res.json().templates).toHaveLength(2);
+    expect(res.json().presets).toHaveLength(2);
   });
 
-  it('GET /templates returns target_url and description in list', async () => {
+  it('GET /presets returns target_url and description in list', async () => {
     await app.inject({
       method: 'POST',
-      url: '/templates',
-      payload: { ...templatePayload, target_url: 'https://api.example.com', description: 'smoke test' },
+      url: '/presets',
+      payload: { ...presetPayload, target_url: 'https://api.example.com', description: 'smoke test' },
     });
-    const res = await app.inject({ method: 'GET', url: '/templates' });
-    const t = res.json().templates[0];
+    const res = await app.inject({ method: 'GET', url: '/presets' });
+    const t = res.json().presets[0];
     expect(t.target_url).toBe('https://api.example.com');
     expect(t.description).toBe('smoke test');
   });
 
-  it('GET /templates/:id returns the template and increments used_count', async () => {
-    const create = await app.inject({ method: 'POST', url: '/templates', payload: templatePayload });
-    const id = create.json().template.id;
-    await app.inject({ method: 'GET', url: `/templates/${id}` });
-    const { rows } = await pool.query('SELECT used_count FROM test_templates WHERE id = $1', [id]);
+  it('GET /presets/:id returns the preset and increments used_count', async () => {
+    const create = await app.inject({ method: 'POST', url: '/presets', payload: presetPayload });
+    const id = create.json().preset.id;
+    await app.inject({ method: 'GET', url: `/presets/${id}` });
+    const { rows } = await pool.query('SELECT used_count FROM test_presets WHERE id = $1', [id]);
     expect(rows[0].used_count).toBe(1);
   });
 
-  it('GET /templates/:id returns 404 for unknown id', async () => {
-    const res = await app.inject({ method: 'GET', url: '/templates/00000000-0000-0000-0000-000000000099' });
+  it('GET /presets/:id returns 404 for unknown id', async () => {
+    const res = await app.inject({ method: 'GET', url: '/presets/00000000-0000-0000-0000-000000000099' });
     expect(res.statusCode).toBe(404);
   });
 
-  it('deletes a template and returns 204', async () => {
-    const create = await app.inject({ method: 'POST', url: '/templates', payload: templatePayload });
-    const id = create.json().template.id;
-    const del = await app.inject({ method: 'DELETE', url: `/templates/${id}` });
+  it('deletes a preset and returns 204', async () => {
+    const create = await app.inject({ method: 'POST', url: '/presets', payload: presetPayload });
+    const id = create.json().preset.id;
+    const del = await app.inject({ method: 'DELETE', url: `/presets/${id}` });
     expect(del.statusCode).toBe(204);
   });
 
   it('DELETE returns 204 even for non-existent id (idempotent)', async () => {
-    const res = await app.inject({ method: 'DELETE', url: '/templates/00000000-0000-0000-0000-000000000099' });
+    const res = await app.inject({ method: 'DELETE', url: '/presets/00000000-0000-0000-0000-000000000099' });
+    expect(res.statusCode).toBe(204);
+  });
+});
+
+// ─── Log sources CRUD ────────────────────────────────────────────────────────
+
+describe('log-sources', () => {
+  it('POST /log-sources creates a log source and returns 201', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/log-sources',
+      payload: { name: 'Grafana Prod', platform: 'Grafana', urlTemplate: 'https://grafana.example.com/explore?from={startedAtMs}&to={completedAtMs}' },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.logSource.name).toBe('Grafana Prod');
+    expect(body.logSource.platform).toBe('Grafana');
+    expect(body.logSource.url_template).toBe('https://grafana.example.com/explore?from={startedAtMs}&to={completedAtMs}');
+    expect(body.logSource.id).toBeDefined();
+  });
+
+  it('POST /log-sources accepts optional platform (null when omitted)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/log-sources',
+      payload: { name: 'Custom Logs', urlTemplate: 'https://logs.example.com?start={startedAtMs}' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().logSource.platform).toBeNull();
+  });
+
+  it('POST /log-sources returns 400 when name is missing', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/log-sources',
+      payload: { urlTemplate: 'https://logs.example.com' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /log-sources returns 400 when urlTemplate is missing', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/log-sources',
+      payload: { name: 'My Logs' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /log-sources returns empty array when none configured', async () => {
+    const res = await app.inject({ method: 'GET', url: '/log-sources' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().logSources).toEqual([]);
+  });
+
+  it('GET /log-sources lists all created log sources', async () => {
+    await app.inject({ method: 'POST', url: '/log-sources', payload: { name: 'Source A', urlTemplate: 'https://a.example.com' } });
+    await app.inject({ method: 'POST', url: '/log-sources', payload: { name: 'Source B', urlTemplate: 'https://b.example.com' } });
+
+    const res = await app.inject({ method: 'GET', url: '/log-sources' });
+    expect(res.json().logSources).toHaveLength(2);
+    const names = res.json().logSources.map((s: { name: string }) => s.name);
+    expect(names).toContain('Source A');
+    expect(names).toContain('Source B');
+  });
+
+  it('DELETE /log-sources/:id removes the source and returns 204', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/log-sources',
+      payload: { name: 'To Delete', urlTemplate: 'https://delete.example.com' },
+    });
+    const id = create.json().logSource.id;
+
+    const del = await app.inject({ method: 'DELETE', url: `/log-sources/${id}` });
+    expect(del.statusCode).toBe(204);
+
+    const list = await app.inject({ method: 'GET', url: '/log-sources' });
+    expect(list.json().logSources).toHaveLength(0);
+  });
+
+  it('DELETE /log-sources/:id returns 204 even for non-existent id (idempotent)', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/log-sources/00000000-0000-0000-0000-000000000099' });
     expect(res.statusCode).toBe(204);
   });
 });

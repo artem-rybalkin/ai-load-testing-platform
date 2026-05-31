@@ -50,9 +50,135 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_templates CASCADE');
+  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets CASCADE');
   mockFetch.mockReset();
-  mockFetch.mockResolvedValue({ ok: true });
+  // Default: analyser-service returns non-ok so consumer falls back to local analyzeResult;
+  // webhook calls also return ok. Tests that need different behaviour override per-test.
+  mockFetch.mockImplementation((url: string) => {
+    if (String(url).includes('/analyse')) return Promise.resolve({ ok: false });
+    return Promise.resolve({ ok: true });
+  });
+});
+
+// ─── Analyser-service integration ────────────────────────────────────────────
+
+describe('handleResult — analyser-service integration', () => {
+  const analysisFromService = {
+    perfStatus: 'passed' as const,
+    diffs: [],
+    summary: 'AI-enriched summary',
+    thresholdViolations: [],
+    aiInsights: {
+      narrative: 'The system performed well.',
+      anomalies: [],
+      rootCauses: [],
+      recommendations: ['No action needed'],
+      severity: 'info' as const,
+    },
+  };
+
+  it('stores AI-enriched analysis when analyser-service responds with 200', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(analysisFromService) });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await handleResult(pool, result);
+
+    const { rows } = await pool.query(
+      'SELECT analysis FROM test_results WHERE test_id = $1',
+      [result.testId]
+    );
+    expect(rows[0].analysis.aiInsights).toBeDefined();
+    expect(rows[0].analysis.aiInsights.narrative).toBe('The system performed well.');
+    expect(rows[0].analysis.summary).toBe('AI-enriched summary');
+  });
+
+  it('falls back to local analyzeResult when analyser-service returns non-ok', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.resolve({ ok: false, status: 503 });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await handleResult(pool, result);
+
+    const { rows } = await pool.query(
+      'SELECT analysis FROM test_results WHERE test_id = $1',
+      [result.testId]
+    );
+    // Local analyzeResult produces no diffs (no previous run) and no aiInsights
+    expect(rows[0].analysis).toBeDefined();
+    expect(rows[0].analysis.aiInsights).toBeUndefined();
+    expect(rows[0].perf_status).toBe('passed');
+  });
+
+  it('falls back to local analyzeResult when analyser-service throws (network error)', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.reject(new Error('ECONNREFUSED'));
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    // Should not throw — fallback handles the error
+    await expect(handleResult(pool, result)).resolves.toBeUndefined();
+
+    const { rows } = await pool.query(
+      'SELECT perf_status FROM test_results WHERE test_id = $1',
+      [result.testId]
+    );
+    expect(rows[0].perf_status).toBe('passed');
+  });
+
+  it('falls back to local analyzeResult when analyser-service times out', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return new Promise((_, reject) =>
+          setTimeout(() => reject(Object.assign(new Error('AbortError'), { name: 'AbortError' })), 0)
+        );
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await expect(handleResult(pool, result)).resolves.toBeUndefined();
+
+    const { rows } = await pool.query(
+      'SELECT perf_status FROM test_results WHERE test_id = $1',
+      [result.testId]
+    );
+    expect(rows[0].perf_status).toBe('passed');
+  });
+
+  it('still fires webhooks correctly after AI-enriched analysis', async () => {
+    await pool.query(
+      `INSERT INTO webhooks (url, events) VALUES ('https://hook.example.com', '{failed,degraded}')`
+    );
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ...analysisFromService, perfStatus: 'failed', thresholdViolations: ['p95 exceeded'] }),
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult({ metrics: failedMetrics });
+    await handleResult(pool, result);
+
+    await vi.waitFor(
+      () => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com', expect.anything()),
+      { timeout: 1000 }
+    );
+  });
 });
 
 // ─── Result persistence ───────────────────────────────────────────────────────
@@ -168,7 +294,8 @@ describe('handleResult — webhook firing', () => {
       ),
       { timeout: 1000 }
     );
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const webhookCall = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
+    const body = JSON.parse(webhookCall![1].body);
     expect(body.perfStatus).toBe('failed');
     expect(body.testId).toBe(result.testId);
     expect(body.targetUrl).toBe(result.targetUrl);
@@ -188,8 +315,9 @@ describe('handleResult — webhook firing', () => {
       metrics: { ...baseMetrics, avgResponseTime: 200 },
     });
     await handleResult(pool, result);
-    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalled(), { timeout: 1000 });
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()), { timeout: 1000 });
+    const webhookCall = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
+    const body = JSON.parse(webhookCall![1].body);
     expect(body.perfStatus).toBe('degraded');
   });
 
@@ -213,17 +341,17 @@ describe('handleResult — webhook firing', () => {
     await insertWebhook(['failed'], 'my-secret-token');
     const result = makeResult({ metrics: failedMetrics });
     await handleResult(pool, result);
-    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalled(), { timeout: 1000 });
-    const headers = mockFetch.mock.calls[0][1].headers;
-    expect(headers['X-Webhook-Secret']).toBe('my-secret-token');
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()), { timeout: 1000 });
+    const callWithSecret = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
+    expect(callWithSecret![1].headers['X-Webhook-Secret']).toBe('my-secret-token');
   });
 
   it('does not include X-Webhook-Secret header when webhook has no secret', async () => {
     await insertWebhook(['failed'], undefined);
     const result = makeResult({ metrics: failedMetrics });
     await handleResult(pool, result);
-    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalled(), { timeout: 1000 });
-    const headers = mockFetch.mock.calls[0][1].headers;
-    expect(headers['X-Webhook-Secret']).toBeUndefined();
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()), { timeout: 1000 });
+    const callWithoutSecret = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
+    expect(callWithoutSecret![1].headers['X-Webhook-Secret']).toBeUndefined();
   });
 });

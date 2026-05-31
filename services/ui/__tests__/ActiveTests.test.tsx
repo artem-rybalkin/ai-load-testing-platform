@@ -8,9 +8,9 @@ vi.mock('@/lib/api', () => ({
   getActiveTests: vi.fn(),
 }));
 
-vi.mock('next/link', () => ({
-  default: ({ href, children, ...props }: React.ComponentProps<'a'>) => (
-    <a href={href as string} {...props}>{children}</a>
+vi.mock('react-router-dom', () => ({
+  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode; [key: string]: unknown }) => (
+    <a href={String(to)} {...(props as React.HTMLAttributes<HTMLAnchorElement>)}>{children}</a>
   ),
 }));
 

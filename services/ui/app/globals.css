@@ -37,20 +37,20 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-bg-muted: var(--bg-muted);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: 'Geist Variable', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono Variable', 'SFMono-Regular', 'Consolas', monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
 }
 
 /* Shared utility: monospace metric values */
 .metric-mono {
-  font-family: var(--font-geist-mono), 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }

@@ -52,18 +52,28 @@ export const parseK6Output = (output: string): BackendMetrics => {
   };
 };
 
-export const parseK6Errors = (jsonContent: string): {
+// Single-pass parser: processes the k6 JSON output once and extracts all
+// post-test data. Called by the two public wrappers below and directly from
+// the worker to avoid parsing the same file twice.
+const parseK6All = (jsonContent: string): {
   statusCodes: Record<string, number>;
   errorBreakdown: ErrorBreakdown;
+  stepMetrics: StepMetrics[];
 } => {
   const statusCodes: Record<string, number> = {};
   const breakdown: ErrorBreakdown = { success: 0, clientError: 0, serverError: 0, timeout: 0, networkError: 0 };
+  const durationsByGroup: Record<string, number[]> = {};
+  const countByGroup:     Record<string, number>   = {};
+  const failedByGroup:    Record<string, number[]> = {};
 
   for (const line of jsonContent.split('\n')) {
     if (!line.trim()) continue;
     try {
       const obj = JSON.parse(line);
       if (obj.type !== 'Point') continue;
+
+      const rawGroup: string = obj.data?.tags?.group ?? '';
+      const groupName = rawGroup && rawGroup !== '::' ? rawGroup.replace(/^::/, '') : null;
 
       if (obj.metric === 'http_reqs') {
         const status: string = obj.data?.tags?.status ?? '';
@@ -74,51 +84,28 @@ export const parseK6Errors = (jsonContent: string): {
           else if (code >= 400 && code < 500) breakdown.clientError++;
           else if (code >= 500) breakdown.serverError++;
         }
+        if (groupName) countByGroup[groupName] = (countByGroup[groupName] ?? 0) + 1;
       }
 
-      // Non-HTTP failures: error_code tag on http_req_failed
-      if (obj.metric === 'http_req_failed' && obj.data?.value === 1) {
-        const errorCode: string = obj.data?.tags?.error_code ?? '';
-        const code = parseInt(errorCode, 10);
-        if (code >= 1020 && code < 1030) breakdown.timeout++;       // connection timeout
-        else if (code === 1210) breakdown.timeout++;                 // read/response timeout
-        else if ((code >= 1010 && code < 1020) || code === 1050) breakdown.networkError++; // conn refused / DNS
-        else if (errorCode && !obj.data?.tags?.status) breakdown.networkError++; // other network errors
+      if (obj.metric === 'http_req_duration' && groupName) {
+        (durationsByGroup[groupName] ??= []).push(obj.data.value);
       }
-    } catch { /* skip malformed */ }
-  }
 
-  return { statusCodes, errorBreakdown: breakdown };
-};
-
-export const parseK6GroupMetrics = (jsonContent: string): StepMetrics[] => {
-  const durationsByGroup: Record<string, number[]> = {};
-  const countByGroup:    Record<string, number>    = {};
-  const failedByGroup:   Record<string, number[]>  = {};
-
-  for (const line of jsonContent.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const obj = JSON.parse(line);
-      if (obj.type !== 'Point') continue;
-      const rawGroup: string = obj.data?.tags?.group ?? '';
-      if (!rawGroup || rawGroup === '::') continue;
-      const name = rawGroup.replace(/^::/, ''); // strip k6's leading ::
-      switch (obj.metric) {
-        case 'http_req_duration':
-          (durationsByGroup[name] ??= []).push(obj.data.value);
-          break;
-        case 'http_reqs':
-          countByGroup[name] = (countByGroup[name] ?? 0) + 1;
-          break;
-        case 'http_req_failed':
-          (failedByGroup[name] ??= []).push(obj.data.value);
-          break;
+      if (obj.metric === 'http_req_failed') {
+        if (obj.data?.value === 1) {
+          const errorCode: string = obj.data?.tags?.error_code ?? '';
+          const code = parseInt(errorCode, 10);
+          if (code >= 1020 && code < 1030) breakdown.timeout++;
+          else if (code === 1210) breakdown.timeout++;
+          else if ((code >= 1010 && code < 1020) || code === 1050) breakdown.networkError++;
+          else if (errorCode && !obj.data?.tags?.status) breakdown.networkError++;
+        }
+        if (groupName) (failedByGroup[groupName] ??= []).push(obj.data.value);
       }
     } catch { /* skip malformed */ }
   }
 
-  return Object.entries(durationsByGroup).map(([name, durations]) => {
+  const stepMetrics: StepMetrics[] = Object.entries(durationsByGroup).map(([name, durations]) => {
     const total = countByGroup[name] ?? durations.length;
     const failedVals = failedByGroup[name] ?? [];
     const failedCount = failedVals.length
@@ -134,7 +121,24 @@ export const parseK6GroupMetrics = (jsonContent: string): StepMetrics[] => {
       requestsFailed: failedCount,
     };
   });
+
+  return { statusCodes, errorBreakdown: breakdown, stepMetrics };
 };
+
+// Production entry-point: one call instead of two to avoid parsing the file twice.
+export const parseK6JsonOutput = parseK6All;
+
+// These remain exported so existing unit tests can call them independently.
+export const parseK6Errors = (jsonContent: string): {
+  statusCodes: Record<string, number>;
+  errorBreakdown: ErrorBreakdown;
+} => {
+  const { statusCodes, errorBreakdown } = parseK6All(jsonContent);
+  return { statusCodes, errorBreakdown };
+};
+
+export const parseK6GroupMetrics = (jsonContent: string): StepMetrics[] =>
+  parseK6All(jsonContent).stepMetrics;
 
 interface K6JsonPoint {
   type: string;
@@ -142,7 +146,7 @@ interface K6JsonPoint {
   data: { value: number; time: string; tags?: Record<string, string> };
 }
 
-const LIVE_WINDOW_SEC = 2;
+export const LIVE_WINDOW_SEC = 2;
 
 export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timestamp'> | null => {
   const durations: number[] = [];
