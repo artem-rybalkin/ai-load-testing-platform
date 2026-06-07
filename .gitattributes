@@ -1,0 +1,6 @@
+# Enforce LF line endings for files that run inside Linux containers.
+# Without this, Windows git (core.autocrlf=true) converts LF→CRLF on checkout,
+# making shebang lines read as #!/bin/sh\r which Linux cannot execute.
+*.sh        text eol=lf
+Dockerfile* text eol=lf
+Caddyfile   text eol=lf

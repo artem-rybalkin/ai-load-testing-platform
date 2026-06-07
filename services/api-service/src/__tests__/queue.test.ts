@@ -19,6 +19,7 @@ describe('queue module', () => {
     sendToQueue:    ReturnType<typeof vi.fn>;
     publish:        ReturnType<typeof vi.fn>;
     checkQueue:     ReturnType<typeof vi.fn>;
+    on:             ReturnType<typeof vi.fn>;
   };
   let mockConnect: ReturnType<typeof vi.fn>;
 
@@ -32,10 +33,12 @@ describe('queue module', () => {
       sendToQueue:    vi.fn(),
       publish:        vi.fn(),
       checkQueue:     vi.fn().mockResolvedValue({ consumerCount: 2 }),
+      on:             vi.fn(),
     };
 
     mockConnect = vi.fn().mockResolvedValue({
       createChannel: vi.fn().mockResolvedValue(mockChannel),
+      on: vi.fn(),
     });
 
     vi.doMock('amqplib', () => ({ default: { connect: mockConnect } }));
@@ -99,7 +102,7 @@ describe('queue module', () => {
     it('retries after a transient failure and succeeds on the second attempt', async () => {
       mockConnect
         .mockRejectedValueOnce(new Error('ECONNREFUSED'))
-        .mockResolvedValueOnce({ createChannel: vi.fn().mockResolvedValue(mockChannel) });
+        .mockResolvedValueOnce({ createChannel: vi.fn().mockResolvedValue(mockChannel), on: vi.fn() });
 
       vi.useFakeTimers();
       try {

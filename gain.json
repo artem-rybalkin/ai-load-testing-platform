@@ -1,0 +1,17 @@
+{
+  "version": "2.0",
+  "workspace": "ai-load-testing-platform",
+  "rosetta": {
+    "context": "docs/CONTEXT.md",
+    "architecture": "docs/ARCHITECTURE.md",
+    "implementation": "agents/IMPLEMENTATION.md",
+    "memory": "agents/MEMORY.md",
+    "techstack": "docs/TECHSTACK.md",
+    "dependencies": "docs/DEPENDENCIES.md",
+    "codemap": "docs/CODEMAP.md",
+    "assumptions": "docs/ASSUMPTIONS.md",
+    "todo": "docs/TODO.md",
+    "patterns": "docs/PATTERNS",
+    "requirements": "docs/REQUIREMENTS"
+  }
+}

@@ -1,8 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 import { TestRequest, ExtractRule } from '@alt/shared';
+import { log } from './logger';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 
 const profileInstructions = (opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string }): string => {
   const { vus, duration, profile = 'load', peakVus } = opts;
@@ -179,8 +182,8 @@ Extraction rules (for steps with "Extract variables"):
 - regex: const m = response.body.match(/pattern/); use m[1] as the captured value
 
 Error handling — MANDATORY for ALL extractions:
-- After every extraction: if (!value) { exec.test.abort('<varName> not found in step N response'); }
-- This prevents VUs from continuing with missing correlation data
+- After every extraction: if (!value) { exec.vu.abort('<varName> not found in step N response'); }
+- This stops only the failing VU, not the entire test — other VUs continue running for the full duration
 - Import: import exec from 'k6/execution';
 ` : '';
 
@@ -246,20 +249,20 @@ Reply with exactly one word: REUSE or REGENERATE`;
   const maxRetries = 3;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
+      const model = genAI.getGenerativeModel({ model: MODEL_NAME });
       const result = await model.generateContent(prompt);
       const verdict = result.response.text().trim().toUpperCase();
       if (verdict === 'REUSE' || verdict === 'REGENERATE') return verdict;
-      console.warn(`Unexpected comparison verdict "${verdict}", defaulting to REGENERATE`);
+      log.warn({ verdict }, 'Unexpected comparison verdict, defaulting to REGENERATE');
       return 'REGENERATE';
     } catch (err: unknown) {
       const error = err as { status?: number };
       if (error.status === 429 && attempt < maxRetries) {
         const waitTime = 60000 * attempt;
-        console.log(`Rate limited on comparison, waiting ${waitTime / 1000}s...`);
+        log.info({ waitSeconds: waitTime / 1000 }, 'Rate limited on comparison, waiting before retry');
         await new Promise(resolve => setTimeout(resolve, waitTime));
       } else {
-        console.error('compareDescriptions failed, defaulting to REGENERATE:', err);
+        log.error({ err }, 'compareDescriptions failed, defaulting to REGENERATE');
         return 'REGENERATE';
       }
     }
@@ -268,7 +271,7 @@ Reply with exactly one word: REUSE or REGENERATE`;
 };
 
 export const generateScript = async (test: TestRequest): Promise<string> => {
-  const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
+  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
   const prompt = test.type === 'flow'
     ? FLOW_PROMPT(test)
     : test.type === 'backend'
@@ -279,16 +282,16 @@ export const generateScript = async (test: TestRequest): Promise<string> => {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`Generating ${test.type} script (attempt ${attempt})...`);
+      log.info({ testType: test.type, attempt }, 'Generating script');
       const result = await model.generateContent(prompt);
       const script = result.response.text();
-      console.log('Script generated successfully');
+      log.info({ testType: test.type }, 'Script generated successfully');
       return script;
     } catch (err: unknown) {
       const error = err as { status?: number };
       if (error.status === 429 && attempt < maxRetries) {
         const waitTime = 60000 * attempt;
-        console.log(`Rate limited, waiting ${waitTime / 1000}s before retry...`);
+        log.info({ waitSeconds: waitTime / 1000 }, 'Rate limited, waiting before retry');
         await new Promise(resolve => setTimeout(resolve, waitTime));
       } else {
         throw err;

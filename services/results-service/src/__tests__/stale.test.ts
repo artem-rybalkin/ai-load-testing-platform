@@ -107,12 +107,37 @@ describe('runStaleCleanup — non-target statuses', () => {
     const result = await runStaleCleanup(pool, 15, 30);
     expect(result.runningFixed).toBe(0);
     expect(result.pendingFixed).toBe(0);
+    expect(result.liveMetricsDeleted).toBe(0);
   });
 
   it('returns zeroes when DB is empty', async () => {
     const result = await runStaleCleanup(pool, 15, 30);
     expect(result.runningFixed).toBe(0);
     expect(result.pendingFixed).toBe(0);
+    expect(result.liveMetricsDeleted).toBe(0);
+  });
+});
+
+describe('runStaleCleanup — live_metrics retention', () => {
+  it('deletes live_metrics rows older than LIVE_METRICS_RETENTION_DAYS', async () => {
+    const testId = await insertResult('completed', 0, 'created_at');
+    // Insert an old live_metrics row (32 days old) and a recent one
+    await pool.query(
+      `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate)
+       VALUES ($1, NOW() - INTERVAL '32 days', 0, 0, 0, 0)`,
+      [testId]
+    );
+    await pool.query(
+      `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate)
+       VALUES ($1, NOW() - INTERVAL '1 day', 0, 0, 0, 0)`,
+      [testId]
+    );
+
+    const result = await runStaleCleanup(pool, 15, 30);
+
+    expect(result.liveMetricsDeleted).toBe(1);
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM live_metrics WHERE test_id = $1', [testId]);
+    expect(rows[0].cnt).toBe(1); // only the recent row remains
   });
 });
 
@@ -139,14 +164,14 @@ describe('startStaleCleanup', () => {
   it('calls runStaleCleanup after 60 seconds', async () => {
     startStaleCleanup(mockPool as unknown as Pool, 15, 30);
     await vi.advanceTimersByTimeAsync(60_000);
-    // runStaleCleanup issues 2 UPDATE queries: one for running, one for pending
-    expect(mockPool.query).toHaveBeenCalledTimes(2);
+    // runStaleCleanup issues 3 queries: running UPDATE, pending UPDATE, live_metrics DELETE
+    expect(mockPool.query).toHaveBeenCalledTimes(3);
   });
 
   it('fires repeatedly on every subsequent 60-second tick', async () => {
     startStaleCleanup(mockPool as unknown as Pool, 15, 30);
     await vi.advanceTimersByTimeAsync(180_000); // 3 × 60 s
-    expect(mockPool.query).toHaveBeenCalledTimes(6); // 3 fires × 2 queries
+    expect(mockPool.query).toHaveBeenCalledTimes(9); // 3 fires × 3 queries
   });
 
   it('does not propagate errors when runStaleCleanup rejects', async () => {

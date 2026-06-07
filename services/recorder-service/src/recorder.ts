@@ -68,10 +68,26 @@ export function compileIgnorePatterns(patterns: string[]): RegExp[] {
 
 // ─── Convert captured requests → FlowStep[] ──────────────────────────────────
 
+export const FLOW_STEPS_CAP = 50;
+
+/** Compute realistic inter-step think times (ms) from request timestamps.
+ *  Returns one value per step: the pause before that step starts (0 for step 0). */
+export function computeThinkTimes(requests: RecordedRequest[]): number[] {
+  const filtered = requests.filter(r => r.responseStatus < 500).slice(0, FLOW_STEPS_CAP);
+  return filtered.map((r, i) => {
+    if (i === 0) return 0;
+    const curr = r.timestamp ?? 0;
+    const prev = filtered[i - 1].timestamp ?? 0;
+    if (!curr || !prev) return 0;
+    // Cap at 10s — longer gaps are usually page load wait time, not think time
+    return Math.min(Math.max(curr - prev, 0), 10_000);
+  });
+}
+
 export function toFlowSteps(requests: RecordedRequest[]): FlowStep[] {
   return requests
     .filter(r => r.responseStatus < 500) // skip hard server errors
-    .slice(0, 20) // hard cap
+    .slice(0, FLOW_STEPS_CAP)
     .map((r, i) => {
       const parsedUrl = (() => { try { return new URL(r.url); } catch { return null; } })();
       const path = parsedUrl ? parsedUrl.pathname : r.url;
@@ -198,6 +214,7 @@ export async function startSession(
       responseStatus: resp.status,
       responseHeaders: resp.headers,
       responseBody,
+      timestamp: req.timestamp,
     });
 
     session.stepCount = completed.length; // eslint-disable-line @typescript-eslint/no-use-before-define

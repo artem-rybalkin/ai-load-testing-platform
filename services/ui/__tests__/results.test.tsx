@@ -46,7 +46,7 @@ afterEach(() => cleanup());
 
 describe('Results page', () => {
   it('shows "No results yet" when the results list is empty', async () => {
-    mockGetResults.mockResolvedValue({ results: [] });
+    mockGetResults.mockResolvedValue({ results: [], nextBefore: null });
     render(<ResultsPage />);
     await waitFor(() => expect(screen.getByText('No results yet')).toBeInTheDocument());
   });
@@ -54,6 +54,7 @@ describe('Results page', () => {
   it('renders a row for each result', async () => {
     mockGetResults.mockResolvedValue({
       results: [makeResult('aaa'), makeResult('bbb')],
+      nextBefore: null,
     });
     render(<ResultsPage />);
     await waitFor(() => {
@@ -63,7 +64,7 @@ describe('Results page', () => {
   });
 
   it('compare button does not appear when fewer than 2 items are selected', async () => {
-    mockGetResults.mockResolvedValue({ results: [makeResult('aaa')] });
+    mockGetResults.mockResolvedValue({ results: [makeResult('aaa')], nextBefore: null });
     render(<ResultsPage />);
     await waitFor(() => screen.getByText('http://example-aaa.com'));
     const [checkbox] = screen.getAllByRole('checkbox');
@@ -75,6 +76,7 @@ describe('Results page', () => {
   it('shows compare button and navigates when 2 results are selected', async () => {
     mockGetResults.mockResolvedValue({
       results: [makeResult('aaa'), makeResult('bbb')],
+      nextBefore: null,
     });
     render(<ResultsPage />);
     await waitFor(() => screen.getAllByRole('checkbox'));
@@ -91,6 +93,7 @@ describe('Results page', () => {
   it('does not show checkbox for non-completed results', async () => {
     mockGetResults.mockResolvedValue({
       results: [makeResult('aaa', 'running')],
+      nextBefore: null,
     });
     render(<ResultsPage />);
     await waitFor(() => screen.getByText('http://example-aaa.com'));
@@ -98,7 +101,7 @@ describe('Results page', () => {
   });
 
   it('shows a link to the individual result detail page', async () => {
-    mockGetResults.mockResolvedValue({ results: [makeResult('test-id-xyz')] });
+    mockGetResults.mockResolvedValue({ results: [makeResult('test-id-xyz')], nextBefore: null });
     render(<ResultsPage />);
     await waitFor(() => {
       const link = screen.getByRole('link', { name: /view/i });
@@ -107,7 +110,7 @@ describe('Results page', () => {
   });
 
   it('shows Re-run buttons for completed results (desktop + mobile)', async () => {
-    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'completed')] });
+    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'completed')], nextBefore: null });
     render(<ResultsPage />);
     await waitFor(() => expect(screen.getByText('http://example-aaa.com')).toBeInTheDocument());
     // jsdom renders both the hidden-md desktop table and the md:hidden mobile cards,
@@ -116,7 +119,7 @@ describe('Results page', () => {
   });
 
   it('Re-run button navigates to home with the rerun query param', async () => {
-    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'completed')] });
+    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'completed')], nextBefore: null });
     render(<ResultsPage />);
     await waitFor(() => expect(screen.getAllByRole('button', { name: /re-run/i }).length).toBeGreaterThan(0));
     // Click the first Re-run button (desktop table version)
@@ -125,7 +128,7 @@ describe('Results page', () => {
   });
 
   it('does not show a Re-run button for non-completed results', async () => {
-    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'running')] });
+    mockGetResults.mockResolvedValue({ results: [makeResult('aaa', 'running')], nextBefore: null });
     render(<ResultsPage />);
     await waitFor(() => expect(screen.getByText('http://example-aaa.com')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /re-run/i })).not.toBeInTheDocument();

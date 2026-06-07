@@ -369,3 +369,86 @@ describe('analyzeResult — error breakdown thresholds', () => {
     expect(result.thresholdViolations.every(v => !/server error|timeout/i.test(v))).toBe(true);
   });
 });
+
+// ─── Client-side — INP & TBT thresholds ──────────────────────────────────────
+
+describe('analyzeResult — INP and TBT thresholds', () => {
+  it('fails when INP exceeds default 200ms', () => {
+    const result = analyzeResult(client({ inp: 350 }), null);
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations.some(v => /INP/.test(v) && /350ms/.test(v))).toBe(true);
+  });
+
+  it('fails when TBT exceeds default 200ms', () => {
+    const result = analyzeResult(client({ tbt: 500 }), null);
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations.some(v => /TBT/.test(v) && /500ms/.test(v))).toBe(true);
+  });
+
+  it('passes when INP is within default threshold', () => {
+    const result = analyzeResult(client({ inp: 180 }), null);
+
+    expect(result.perfStatus).toBe('passed');
+    expect(result.thresholdViolations.some(v => /INP/.test(v))).toBe(false);
+  });
+
+  it('does not violate INP threshold when inp is undefined', () => {
+    const result = analyzeResult(client({ inp: undefined }), null);
+
+    expect(result.thresholdViolations.some(v => /INP/.test(v))).toBe(false);
+  });
+
+  it('does not violate TBT threshold when tbt is undefined', () => {
+    const result = analyzeResult(client({ tbt: undefined }), null);
+
+    expect(result.thresholdViolations.some(v => /TBT/.test(v))).toBe(false);
+  });
+
+  it('uses custom INP threshold', () => {
+    const result = analyzeResult(client({ inp: 150 }), null, { inp: 100 });
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations.some(v => /INP/.test(v) && /100ms/.test(v))).toBe(true);
+  });
+
+  it('uses custom TBT threshold', () => {
+    const result = analyzeResult(client({ tbt: 80 }), null, { tbt: 50 });
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations.some(v => /TBT/.test(v) && /50ms/.test(v))).toBe(true);
+  });
+
+  it('includes INP in regression diffs when previous result has INP', () => {
+    const prev = client({ inp: 100 });
+    const curr = client({ inp: 300 }); // +200%
+
+    const result = analyzeResult(curr, prev);
+
+    const diff = result.diffs.find(d => d.metric === 'INP');
+    expect(diff).toBeDefined();
+    expect(diff!.status).toBe('worse');
+    expect(diff!.diffPercent).toBeCloseTo(200, 0);
+  });
+
+  it('includes TBT in regression diffs when previous result has TBT', () => {
+    const prev = client({ tbt: 100 });
+    const curr = client({ tbt: 130 }); // +30%
+
+    const result = analyzeResult(curr, prev);
+
+    const diff = result.diffs.find(d => d.metric === 'TBT');
+    expect(diff).toBeDefined();
+    expect(diff!.status).toBe('worse');
+  });
+
+  it('skips INP diff when previous result has no INP', () => {
+    const prev = client({ inp: undefined });
+    const curr = client({ inp: 250 });
+
+    const result = analyzeResult(curr, prev);
+
+    expect(result.diffs.find(d => d.metric === 'INP')).toBeUndefined();
+  });
+});

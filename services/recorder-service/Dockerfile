@@ -32,7 +32,7 @@ COPY tsconfig.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY services/recorder-service/package.json ./services/recorder-service/
 
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm install
 
 COPY packages/shared ./packages/shared
 COPY services/recorder-service ./services/recorder-service
@@ -46,7 +46,7 @@ RUN npm run build --workspace=services/recorder-service
 RUN chown -R node:node /app
 
 COPY services/recorder-service/docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 WORKDIR /app/services/recorder-service
 

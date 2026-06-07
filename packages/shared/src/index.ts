@@ -12,6 +12,8 @@ export interface SLOThresholds {
   fcp?: number;            // ms — default 1800
   ttfb?: number;           // ms — default 800
   cls?: number;            // score — default 0.1
+  inp?: number;            // ms — default 200 (Interaction to Next Paint)
+  tbt?: number;            // ms — default 200 (Total Blocking Time)
 }
 
 export interface ErrorBreakdown {
@@ -55,10 +57,11 @@ export interface TestRequest {
   thresholds?: SLOThresholds;
   steps?: FlowStep[];
   envVars?: Record<string, string>;
-  testData?: Array<Record<string, string>>; // inline data table — NOT stored in DB
+  testData?: Array<Record<string, string>>; // inline data table — stored in test_results.test_data for re-run restoration
   csvData?: string;                          // base64-encoded CSV content
   csvFilename?: string;                      // original filename hint
   customScript?: string;                     // user-supplied k6 script; bypasses AI generation entirely
+  projectId?: string;                        // set by api-service from session; filters DB scope
   createdAt: string;
 }
 
@@ -118,6 +121,7 @@ export interface TestResult {
   thresholds?: SLOThresholds;
   scriptId?: string;       // set by workers; consumer saves it to test_results.script_id
   reusedScript?: boolean;  // set by workers; consumer saves it to test_results.reused_script
+  projectId?: string;      // set by workers from test.projectId; consumer saves it to test_results.project_id
   startedAt: string;
   completedAt?: string;
   perfStatus?: 'passed' | 'degraded' | 'failed';
@@ -145,6 +149,16 @@ export interface LighthouseScore {
   seo: number;            // 0-100
 }
 
+export interface ResourceBreakdown {
+  jsSize: number;      // KB
+  cssSize: number;     // KB
+  imageSize: number;   // KB
+  fontSize: number;    // KB
+  xhrSize: number;     // KB
+  totalSize: number;   // KB
+  requestCount: number;
+}
+
 export interface ClientMetrics {
   type: 'client';
   lcp: number;
@@ -152,6 +166,13 @@ export interface ClientMetrics {
   cls: number;
   ttfb: number;
   fcp: number;
+  inp?: number;              // Interaction to Next Paint (ms) — CWV since March 2024
+  tbt?: number;              // Total Blocking Time (ms) — from Lighthouse
+  tti?: number;              // Time to Interactive (ms) — from Lighthouse
+  jsErrors?: number;         // JS errors thrown during page load
+  longTaskCount?: number;    // Tasks >50ms blocking main thread
+  domNodeCount?: number;     // DOM node count at load — from Lighthouse
+  resourceBreakdown?: ResourceBreakdown;
   lighthouseScore?: LighthouseScore;
 }
 export interface TestScript {
@@ -202,6 +223,7 @@ export interface RecordedRequest {
   responseStatus: number;
   responseHeaders: Record<string, string>;
   responseBody?: string; // only for JSON responses; used by AI correlation
+  timestamp?: number;    // epoch ms when the request was initiated; used for think-time computation
 }
 
 /** Recording session state returned by the recorder-service */
@@ -213,3 +235,164 @@ export interface RecordingSession {
   stepCount?: number; // live count while recording is active
   error?: string;
 }
+
+// ── Deterministic performance analyser ───────────────────────────────────────
+// Shared between results-service (fallback) and analyser-service (primary).
+
+export type PerfStatus = 'passed' | 'degraded' | 'failed';
+
+const BACKEND_THRESHOLDS = {
+  p95ResponseTime: 1000,
+  avgResponseTime: 500,
+  errorRate: 1,
+};
+
+const CLIENT_THRESHOLDS = {
+  lcp:  2500,
+  fcp:  1800,
+  ttfb: 800,
+  cls:  0.1,
+  inp:  200,
+  tbt:  200,
+};
+
+const LIGHTHOUSE_THRESHOLD_PERFORMANCE = 50;
+
+const getDiffStatus = (diffPercent: number): 'better' | 'same' | 'worse' => {
+  if (Math.abs(diffPercent) < 10) return 'same';
+  return diffPercent < 0 ? 'better' : 'worse';
+};
+
+const analyzeBackend = (
+  current: BackendMetrics,
+  previous: BackendMetrics | null,
+  thresholds?: SLOThresholds
+): AnalysisResult => {
+  const t = {
+    p95ResponseTime: thresholds?.p95  ?? BACKEND_THRESHOLDS.p95ResponseTime,
+    avgResponseTime: thresholds?.avg  ?? BACKEND_THRESHOLDS.avgResponseTime,
+    errorRate:       thresholds?.errorRate ?? BACKEND_THRESHOLDS.errorRate,
+    serverErrorRate: thresholds?.serverErrorRate ?? 1,
+    timeoutRate:     thresholds?.timeoutRate ?? 1,
+  };
+
+  const thresholdViolations: string[] = [];
+  const diffs: MetricDiff[] = [];
+  const total = current.requestsTotal;
+  const currentErrorRate = total > 0 ? (current.requestsFailed / total) * 100 : 0;
+
+  if (current.p95ResponseTime > t.p95ResponseTime)
+    thresholdViolations.push(`p95 response time ${Math.round(current.p95ResponseTime)}ms exceeds threshold ${t.p95ResponseTime}ms`);
+  if (current.avgResponseTime > t.avgResponseTime)
+    thresholdViolations.push(`avg response time ${Math.round(current.avgResponseTime)}ms exceeds threshold ${t.avgResponseTime}ms`);
+  if (currentErrorRate > t.errorRate)
+    thresholdViolations.push(`error rate ${currentErrorRate.toFixed(2)}% exceeds threshold ${t.errorRate}%`);
+
+  if (current.errorBreakdown && total > 0) {
+    const serverRate  = (current.errorBreakdown.serverError / total) * 100;
+    const timeoutRate = (current.errorBreakdown.timeout     / total) * 100;
+    if (serverRate  > t.serverErrorRate) thresholdViolations.push(`server error rate (5xx) ${serverRate.toFixed(2)}% exceeds threshold ${t.serverErrorRate}%`);
+    if (timeoutRate > t.timeoutRate)     thresholdViolations.push(`timeout rate ${timeoutRate.toFixed(2)}% exceeds threshold ${t.timeoutRate}%`);
+  }
+
+  if (previous) {
+    const keys: Array<{ key: keyof BackendMetrics; label: string }> = [
+      { key: 'avgResponseTime', label: 'Avg response time' },
+      { key: 'p95ResponseTime', label: 'p95 response time' },
+      { key: 'p99ResponseTime', label: 'p99 response time' },
+      { key: 'rps',             label: 'Requests/sec' },
+    ];
+    for (const { key, label } of keys) {
+      const curr = current[key] as number;
+      const prev = previous[key] as number;
+      if (!prev) continue;
+      const rawDiff    = ((curr - prev) / prev) * 100;
+      const diffPercent = key === 'rps' ? -rawDiff : rawDiff;
+      diffs.push({ metric: label, current: Math.round(curr * 10) / 10, previous: Math.round(prev * 10) / 10, diffPercent: Math.round(rawDiff * 10) / 10, status: getDiffStatus(diffPercent) });
+    }
+  }
+
+  const hasFailures    = thresholdViolations.length > 0;
+  const hasDegradation = diffs.some(d => d.status === 'worse' && Math.abs(d.diffPercent) > 20);
+  const perfStatus     = hasFailures ? 'failed' : hasDegradation ? 'degraded' : 'passed';
+  const summary        = perfStatus === 'passed'
+    ? previous ? 'Performance is good and stable compared to previous run' : 'Performance is within acceptable thresholds'
+    : perfStatus === 'degraded' ? 'Performance has degraded compared to previous run'
+    : `Performance issues detected: ${thresholdViolations[0]}`;
+
+  return { perfStatus, diffs, summary, thresholdViolations };
+};
+
+const analyzeClient = (
+  current: ClientMetrics,
+  previous: ClientMetrics | null,
+  thresholds?: SLOThresholds
+): AnalysisResult => {
+  const t = {
+    lcp:  thresholds?.lcp  ?? CLIENT_THRESHOLDS.lcp,
+    fcp:  thresholds?.fcp  ?? CLIENT_THRESHOLDS.fcp,
+    ttfb: thresholds?.ttfb ?? CLIENT_THRESHOLDS.ttfb,
+    cls:  thresholds?.cls  ?? CLIENT_THRESHOLDS.cls,
+    inp:  thresholds?.inp  ?? CLIENT_THRESHOLDS.inp,
+    tbt:  thresholds?.tbt  ?? CLIENT_THRESHOLDS.tbt,
+  };
+
+  const thresholdViolations: string[] = [];
+  const diffs: MetricDiff[] = [];
+
+  if (current.lcp  > t.lcp)  thresholdViolations.push(`LCP ${Math.round(current.lcp)}ms exceeds threshold ${t.lcp}ms`);
+  if (current.fcp  > t.fcp)  thresholdViolations.push(`FCP ${Math.round(current.fcp)}ms exceeds threshold ${t.fcp}ms`);
+  if (current.ttfb > t.ttfb) thresholdViolations.push(`TTFB ${Math.round(current.ttfb)}ms exceeds threshold ${t.ttfb}ms`);
+  if (current.cls  > t.cls)  thresholdViolations.push(`CLS ${current.cls.toFixed(3)} exceeds threshold ${t.cls}`);
+  if (current.inp  != null && current.inp  > t.inp)  thresholdViolations.push(`INP ${Math.round(current.inp)}ms exceeds threshold ${t.inp}ms`);
+  if (current.tbt  != null && current.tbt  > t.tbt)  thresholdViolations.push(`TBT ${Math.round(current.tbt)}ms exceeds threshold ${t.tbt}ms`);
+  if (current.lighthouseScore && current.lighthouseScore.performance < LIGHTHOUSE_THRESHOLD_PERFORMANCE)
+    thresholdViolations.push(`Lighthouse performance score ${current.lighthouseScore.performance}/100 is below threshold (${LIGHTHOUSE_THRESHOLD_PERFORMANCE})`);
+
+  if (previous) {
+    const vitalKeys: Array<{ key: keyof Omit<ClientMetrics, 'type' | 'lighthouseScore' | 'resourceBreakdown'>; label: string }> = [
+      { key: 'lcp', label: 'LCP' }, { key: 'fcp', label: 'FCP' },
+      { key: 'ttfb', label: 'TTFB' }, { key: 'fid', label: 'FID' }, { key: 'cls', label: 'CLS' },
+      { key: 'inp', label: 'INP' }, { key: 'tbt', label: 'TBT' },
+    ];
+    for (const { key, label } of vitalKeys) {
+      const curr = current[key] as number;
+      const prev = previous[key] as number;
+      if (!prev) continue;
+      const rawDiff = ((curr - prev) / prev) * 100;
+      diffs.push({ metric: label, current: key === 'cls' ? Math.round(curr * 1000) / 1000 : Math.round(curr), previous: key === 'cls' ? Math.round(prev * 1000) / 1000 : Math.round(prev), diffPercent: Math.round(rawDiff * 10) / 10, status: getDiffStatus(rawDiff) });
+    }
+    if (current.lighthouseScore && previous.lighthouseScore) {
+      const lhKeys: Array<{ key: keyof LighthouseScore; label: string }> = [
+        { key: 'performance', label: 'Lighthouse performance' }, { key: 'accessibility', label: 'Lighthouse accessibility' },
+        { key: 'bestPractices', label: 'Lighthouse best practices' }, { key: 'seo', label: 'Lighthouse SEO' },
+      ];
+      for (const { key, label } of lhKeys) {
+        const curr = current.lighthouseScore[key];
+        const prev = previous.lighthouseScore[key];
+        if (!prev) continue;
+        const rawDiff = ((curr - prev) / prev) * 100;
+        diffs.push({ metric: label, current: curr, previous: prev, diffPercent: Math.round(rawDiff * 10) / 10, status: getDiffStatus(-rawDiff) });
+      }
+    }
+  }
+
+  const hasFailures    = thresholdViolations.length > 0;
+  const hasDegradation = diffs.some(d => d.status === 'worse' && Math.abs(d.diffPercent) > 20);
+  const perfStatus     = hasFailures ? 'failed' : hasDegradation ? 'degraded' : 'passed';
+  const summary        = perfStatus === 'passed'
+    ? previous ? 'Web Vitals are good and stable' : 'Web Vitals are within acceptable thresholds'
+    : perfStatus === 'degraded' ? 'Web Vitals have degraded compared to previous run'
+    : `Web Vitals issues: ${thresholdViolations[0]}`;
+
+  return { perfStatus, diffs, summary, thresholdViolations };
+};
+
+export const analyzeResult = (
+  currentMetrics: BackendMetrics | ClientMetrics,
+  previousMetrics: BackendMetrics | ClientMetrics | null,
+  thresholds?: SLOThresholds
+): AnalysisResult =>
+  currentMetrics.type === 'backend'
+    ? analyzeBackend(currentMetrics as BackendMetrics, previousMetrics as BackendMetrics | null, thresholds)
+    : analyzeClient(currentMetrics as ClientMetrics,  previousMetrics as ClientMetrics  | null, thresholds);

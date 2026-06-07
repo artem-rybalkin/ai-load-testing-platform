@@ -21,8 +21,8 @@ async function createAndWaitForResult(page: Page): Promise<string> {
   const { test: created } = await res.json();
   const testId: string = created.id;
 
-  // Poll until completed or failed (max 3 minutes)
-  const deadline = Date.now() + 180_000;
+  // Poll until completed or failed (max 90 seconds)
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     const r = await page.request.get(`${RESULTS_URL}/results/${testId}`);
     const { result } = await r.json();
@@ -35,7 +35,8 @@ async function createAndWaitForResult(page: Page): Promise<string> {
 
 test.describe('Compare flow', () => {
   test('selects two results and opens the compare view', async ({ page }) => {
-    // Create two completed tests sequentially
+    // Create two tests and wait for both to complete
+    // WORKER_CONCURRENCY≥2 required on worker-backend for parallel execution
     const [idA, idB] = await Promise.all([
       createAndWaitForResult(page),
       createAndWaitForResult(page),
@@ -45,13 +46,16 @@ test.describe('Compare flow', () => {
     await page.goto('/results');
     await page.waitForLoadState('networkidle');
 
-    // Both tests should appear in the list (use first() — results page may have multiple links per row)
-    await expect(page.locator(`a[href="/results/${idA}"]`).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator(`a[href="/results/${idB}"]`).first()).toBeVisible({ timeout: 5_000 });
+    // Scope to main content — avoids matching links in the ActiveTests header strip
+    const main = page.locator('main');
+
+    // Both tests should appear in the results table
+    await expect(main.locator(`a[href="/results/${idA}"]`).first()).toBeVisible({ timeout: 15_000 });
+    await expect(main.locator(`a[href="/results/${idB}"]`).first()).toBeVisible({ timeout: 5_000 });
 
     // Select both via checkboxes (table row containing the testId link)
-    const rowA = page.locator(`tr:has(a[href="/results/${idA}"])`).first();
-    const rowB = page.locator(`tr:has(a[href="/results/${idB}"])`).first();
+    const rowA = main.locator(`tr:has(a[href="/results/${idA}"])`).first();
+    const rowB = main.locator(`tr:has(a[href="/results/${idB}"])`).first();
 
     await rowA.locator('input[type="checkbox"]').click();
     await rowB.locator('input[type="checkbox"]').click();

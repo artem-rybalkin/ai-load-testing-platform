@@ -3,12 +3,13 @@ import { log } from './logger';
 import { broadcast } from './ws';
 
 const CLEANUP_INTERVAL_MS = 60_000;
+const LIVE_METRICS_RETENTION_DAYS = parseInt(process.env.LIVE_METRICS_RETENTION_DAYS ?? '30');
 
 export const runStaleCleanup = async (
   pool: Pool,
   runningMinutes: number,
   pendingMinutes: number
-): Promise<{ runningFixed: number; pendingFixed: number }> => {
+): Promise<{ runningFixed: number; pendingFixed: number; liveMetricsDeleted: number }> => {
   const { rows: running } = await pool.query(
     `UPDATE test_results SET status = 'failed'
      WHERE status = 'running'
@@ -25,6 +26,14 @@ export const runStaleCleanup = async (
     [pendingMinutes]
   );
 
+  const retentionDays = Number.isFinite(LIVE_METRICS_RETENTION_DAYS) && LIVE_METRICS_RETENTION_DAYS > 0
+    ? LIVE_METRICS_RETENTION_DAYS : 30;
+  const { rowCount: liveDeleted } = await pool.query(
+    `DELETE FROM live_metrics WHERE timestamp < NOW() - ($1 || ' days')::INTERVAL`,
+    [retentionDays]
+  );
+  const liveMetricsDeleted = liveDeleted ?? 0;
+
   if (running.length > 0) {
     log.warn({ count: running.length, testIds: running.map((r: { test_id: string }) => r.test_id) }, 'Marked stale running tests as failed');
     for (const r of running) broadcast({ type: 'test:status', testId: r.test_id, status: 'failed', perfStatus: null });
@@ -34,8 +43,9 @@ export const runStaleCleanup = async (
     for (const r of pending) broadcast({ type: 'test:status', testId: r.test_id, status: 'failed', perfStatus: null });
   }
   if (running.length > 0 || pending.length > 0) broadcast({ type: 'tests:changed' });
+  if (liveMetricsDeleted > 0) log.info({ liveMetricsDeleted, retentionDays }, 'Deleted old live_metrics rows');
 
-  return { runningFixed: running.length, pendingFixed: pending.length };
+  return { runningFixed: running.length, pendingFixed: pending.length, liveMetricsDeleted };
 };
 
 export const startStaleCleanup = (pool: Pool, runningMinutes: number, pendingMinutes: number): void => {

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { getSystemHealth, ServiceHealth } from '@/lib/api';
+import { ServiceHealth } from '@/lib/api';
+import { useHealth } from '@/lib/HealthContext';
 
 const WORKER_NAMES: Record<string, string> = {
   'worker-backend': '⚡ k6',
@@ -25,20 +25,8 @@ const MiniBar = ({ value, max = 100, label }: { value: number; max?: number; lab
 };
 
 export default function WorkerHealth() {
-  const [workers, setWorkers] = useState<ServiceHealth[]>([]);
-
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const data = await getSystemHealth();
-        const w = data.services.filter(s => WORKER_NAMES[s.name] && s.metrics);
-        setWorkers(w);
-      } catch { /* ignore */ }
-    };
-    check();
-    const interval = setInterval(check, 15000);
-    return () => clearInterval(interval);
-  }, []);
+  const { services } = useHealth();
+  const workers = services.filter(s => WORKER_NAMES[s.name] && s.metrics);
 
   if (workers.length === 0) return null;
 

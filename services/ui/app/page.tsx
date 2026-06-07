@@ -1,18 +1,18 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
+import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
 
 interface EnvVar { key: string; value: string }
 
 interface Thresholds {
   p95: string; avg: string; errorRate: string; serverErrorRate: string; timeoutRate: string;
-  lcp: string; fcp: string; ttfb: string; cls: string;
+  lcp: string; fcp: string; ttfb: string; cls: string; inp: string; tbt: string;
 }
 
 const DEFAULT_THRESHOLDS: Thresholds = {
   p95: '1000', avg: '500', errorRate: '1', serverErrorRate: '1', timeoutRate: '1',
-  lcp: '2500', fcp: '1800', ttfb: '800', cls: '0.1',
+  lcp: '2500', fcp: '1800', ttfb: '800', cls: '0.1', inp: '200', tbt: '200',
 };
 
 function relTime(iso: string) {
@@ -139,6 +139,8 @@ function HomeContent() {
   const [showThresholds, setShowThresholds] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
+  const [suggestingThresholds, setSuggestingThresholds] = useState(false);
+  const [thresholdSuggestionNote, setThresholdSuggestionNote] = useState<string | null>(null);
   const [recent, setRecent] = useState<TestResult[]>([]);
   const [active, setActive] = useState<ActiveTest[]>([]);
   const [rerunFrom, setRerunFrom] = useState<string | null>(null);
@@ -165,6 +167,10 @@ function HomeContent() {
   const [flowRunner, setFlowRunner] = useState<'k6' | 'browser'>('k6');
   const [scriptMode, setScriptMode] = useState<'ai' | 'custom'>('ai');
   const [customScript, setCustomScript] = useState('');
+  const [translating, setTranslating] = useState(false);
+  const [suggestingSettings, setSuggestingSettings] = useState(false);
+  const [settingsSuggestionNote, setSettingsSuggestionNote] = useState<string | null>(null);
+  const [presetNameSuggestion, setPresetNameSuggestion] = useState<{ name: string; tags: string[] } | null>(null);
 
   const applyDescriptionParams = (desc: string) => {
     const updates: Partial<typeof form> = {};
@@ -234,6 +240,10 @@ function HomeContent() {
         if (type === 'flow' && result.steps && result.steps.length > 0) {
           setFlowSteps(result.steps);
         }
+        // Restore parameterization rows
+        if (result.test_data && result.test_data.length > 0) {
+          setFlowTestData(result.test_data);
+        }
         setRerunFrom(result.target_url);
         setShowAdvanced(true);
       }).catch(() => {});
@@ -289,6 +299,8 @@ function HomeContent() {
         ...(th.fcp       != null ? { fcp:       String(th.fcp)       } : {}),
         ...(th.ttfb      != null ? { ttfb:      String(th.ttfb)      } : {}),
         ...(th.cls       != null ? { cls:       String(th.cls)       } : {}),
+        ...(th.inp       != null ? { inp:       String(th.inp)       } : {}),
+        ...(th.tbt       != null ? { tbt:       String(th.tbt)       } : {}),
       }));
       setShowThresholds(true);
     }
@@ -297,13 +309,26 @@ function HomeContent() {
   const handleSavePreset = async () => {
     if (!form.description && !form.targetUrl) { setError('Add a description or URL before saving as preset'); return; }
     setSavingPreset(true);
+    setPresetNameSuggestion(null);
     try {
+      // AI-14: get a name suggestion before saving
+      let presetName = form.description || form.targetUrl || 'Unnamed test';
+      try {
+        const suggestion = await suggestPresetName({
+          url: form.targetUrl, type: form.type,
+          vus: form.vus, duration: form.duration, profile: form.profile,
+          stepCount: form.type === 'flow' ? flowSteps.length : undefined,
+        });
+        setPresetNameSuggestion(suggestion);
+        presetName = suggestion.name;
+      } catch { /* non-fatal, use fallback name */ }
+
       const options = form.type === 'client-side'
         ? { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals }
         : { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}) };
       const savedThresholds = showThresholds ? buildThresholds() : null;
       await createPreset({
-        name: form.description || form.targetUrl || 'Unnamed test',
+        name: presetName,
         description: form.description || null,
         type: form.type === 'flow' ? 'backend' : form.type,
         target_url: form.targetUrl || null,
@@ -335,6 +360,8 @@ function HomeContent() {
         ...(thresholds.fcp  ? { fcp:  Number(thresholds.fcp)  } : {}),
         ...(thresholds.ttfb ? { ttfb: Number(thresholds.ttfb) } : {}),
         ...(thresholds.cls  ? { cls:  Number(thresholds.cls)  } : {}),
+        ...(thresholds.inp  ? { inp:  Number(thresholds.inp)  } : {}),
+        ...(thresholds.tbt  ? { tbt:  Number(thresholds.tbt)  } : {}),
       };
     }
     return {
@@ -344,6 +371,45 @@ function HomeContent() {
       ...(thresholds.serverErrorRate ? { serverErrorRate: Number(thresholds.serverErrorRate) } : {}),
       ...(thresholds.timeoutRate     ? { timeoutRate:     Number(thresholds.timeoutRate)     } : {}),
     };
+  };
+
+  const handleSuggestSettings = async () => {
+    if (!form.targetUrl) return;
+    setSuggestingSettings(true);
+    setSettingsSuggestionNote(null);
+    try {
+      const s = await suggestSettings(form.targetUrl, form.type);
+      setForm(f => ({
+        ...f,
+        ...(s.vus      ? { vus:     s.vus }     : {}),
+        ...(s.duration ? { duration: s.duration } : {}),
+        ...(s.profile  ? { profile:  s.profile as 'load'|'spike'|'soak'|'capacity' } : {}),
+      }));
+      setShowAdvanced(true);
+      setSettingsSuggestionNote(s.reasoning);
+    } catch (e) { setSettingsSuggestionNote((e as Error).message); }
+    finally { setSuggestingSettings(false); }
+  };
+
+  const handleSuggestThresholds = async () => {
+    if (!form.targetUrl) return;
+    setSuggestingThresholds(true);
+    setThresholdSuggestionNote(null);
+    try {
+      const { suggestions, runsAnalysed } = await suggestThresholds(form.targetUrl, form.type);
+      setThresholds(t => ({
+        ...t,
+        ...(suggestions.p95        ? { p95:       String(suggestions.p95)       } : {}),
+        ...(suggestions.avg        ? { avg:       String(suggestions.avg)       } : {}),
+        ...(suggestions.errorRate  ? { errorRate: String(suggestions.errorRate) } : {}),
+      }));
+      setShowThresholds(true);
+      setThresholdSuggestionNote(`Based on ${runsAnalysed} runs — ${suggestions.reasoning}`);
+    } catch (err) {
+      setThresholdSuggestionNote((err as Error).message);
+    } finally {
+      setSuggestingThresholds(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -556,6 +622,17 @@ function HomeContent() {
                     onChange={e => setForm(f => ({ ...f, targetUrl: e.target.value }))}
                     className={inputCls}
                   />
+                  {form.targetUrl && (
+                    <div className="mt-1 flex items-center gap-2">
+                      <button type="button" onClick={handleSuggestSettings} disabled={suggestingSettings}
+                        className="text-[11px] text-[#0969da] hover:underline disabled:opacity-50 font-mono">
+                        {suggestingSettings ? '⏳ Analysing…' : '✨ Suggest settings'}
+                      </button>
+                      {settingsSuggestionNote && (
+                        <span className="text-[11px] text-[#57606a] font-mono truncate">{settingsSuggestionNote}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -590,21 +667,31 @@ function HomeContent() {
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">k6 Script</label>
-                    <label className="text-[11px] font-mono text-[#0969da] hover:underline cursor-pointer">
-                      ↑ Upload .js
-                      <input
-                        type="file"
-                        accept=".js,.ts"
-                        className="hidden"
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          const text = await file.text();
-                          setCustomScript(text);
-                          e.target.value = '';
-                        }}
-                      />
-                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className="text-[11px] font-mono text-[#0969da] hover:underline cursor-pointer">
+                        ↑ Upload .js
+                        <input type="file" accept=".js,.ts" className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0]; if (!file) return;
+                            setCustomScript(await file.text()); e.target.value = '';
+                          }} />
+                      </label>
+                      <label className={`text-[11px] font-mono cursor-pointer ${translating ? 'text-[#57606a]' : 'text-[#0969da] hover:underline'}`}
+                        title="Upload a Playwright .ts/.js file and translate it to k6 with AI">
+                        {translating ? '⏳ Translating…' : '✨ Translate Playwright'}
+                        <input type="file" accept=".js,.ts" className="hidden" disabled={translating}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0]; if (!file) return;
+                            const src = await file.text(); e.target.value = '';
+                            setTranslating(true);
+                            try {
+                              const { k6Script } = await translatePlaywright(src, form.targetUrl || undefined);
+                              setCustomScript(k6Script);
+                            } catch (err) { setError(`Translation failed: ${(err as Error).message}`); }
+                            finally { setTranslating(false); }
+                          }} />
+                      </label>
+                    </div>
                   </div>
                   <textarea
                     value={customScript}
@@ -629,7 +716,13 @@ function HomeContent() {
                   placeholder="e.g. load test with 10 users for 2 minutes, ramp up 30s..."
                   value={form.description}
                   onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                  onBlur={e => applyDescriptionParams(e.target.value)}
+                  onBlur={e => {
+                    // Skip if focus is moving to the Run Test button — avoid opening
+                    // Advanced Settings mid-submit which confuses users
+                    const relatedTarget = e.relatedTarget as HTMLElement | null;
+                    if (relatedTarget?.closest('[data-run-btn]')) return;
+                    applyDescriptionParams(e.target.value);
+                  }}
                   className={inputCls}
                 />
               </div>
@@ -775,15 +868,31 @@ function HomeContent() {
 
               {/* SLO thresholds */}
               <div>
-                <button
-                  type="button"
-                  onClick={() => setShowThresholds(v => !v)}
-                  className="flex items-center gap-1 text-[12px] text-[#57606a] hover:text-[#24292f] py-0.5"
-                >
-                  <span className={`transition-transform inline-block text-[10px] ${showThresholds ? 'rotate-90' : ''}`}>▶</span>
-                  SLO thresholds
-                  {showThresholds && <span className="text-[11px] text-[#0969da] ml-1">active</span>}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowThresholds(v => !v)}
+                    className="flex items-center gap-1 text-[12px] text-[#57606a] hover:text-[#24292f] py-0.5"
+                  >
+                    <span className={`transition-transform inline-block text-[10px] ${showThresholds ? 'rotate-90' : ''}`}>▶</span>
+                    SLO thresholds
+                    {showThresholds && <span className="text-[11px] text-[#0969da] ml-1">active</span>}
+                  </button>
+                  {form.targetUrl && form.type !== 'flow' && (
+                    <button
+                      type="button"
+                      onClick={handleSuggestThresholds}
+                      disabled={suggestingThresholds}
+                      className="text-[11px] text-[#0969da] hover:underline disabled:opacity-50 font-mono"
+                      title="Analyse run history and suggest realistic SLO values"
+                    >
+                      {suggestingThresholds ? '⏳ Analysing…' : '✨ Suggest'}
+                    </button>
+                  )}
+                </div>
+                {thresholdSuggestionNote && (
+                  <p className="text-[11px] text-[#57606a] mt-1 font-mono">{thresholdSuggestionNote}</p>
+                )}
                 {showThresholds && (
                   <div className="mt-2 grid grid-cols-3 gap-2 p-3 bg-[#f6f8fa] rounded-md border border-[#d0d7de]">
                     {(form.type === 'client-side' ? [
@@ -791,6 +900,8 @@ function HomeContent() {
                       { key: 'fcp',  label: 'FCP ms'  },
                       { key: 'ttfb', label: 'TTFB ms' },
                       { key: 'cls',  label: 'CLS'     },
+                      { key: 'inp',  label: 'INP ms'  },
+                      { key: 'tbt',  label: 'TBT ms'  },
                     ] : [
                       { key: 'p95',             label: 'p95 ms'     },
                       { key: 'avg',             label: 'Avg ms'     },
@@ -820,6 +931,7 @@ function HomeContent() {
               <button
                 onClick={handleSubmit}
                 disabled={loading}
+                data-run-btn
                 className="flex-1 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {loading ? 'Creating…' : '▶ Run Test'}
@@ -833,6 +945,14 @@ function HomeContent() {
                 {savingPreset ? 'Saving…' : 'Save preset'}
               </button>
             </div>
+            {presetNameSuggestion && (
+              <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] text-[#57606a] font-mono">✓ Saved as: <strong>{presetNameSuggestion.name}</strong></span>
+                {presetNameSuggestion.tags.map(tag => (
+                  <span key={tag} className="px-1.5 py-0.5 bg-[#eaeef2] text-[#57606a] rounded text-[10px] font-mono">{tag}</span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

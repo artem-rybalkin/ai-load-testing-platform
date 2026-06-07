@@ -1,3 +1,4 @@
+import './tracing';
 import Fastify from 'fastify';
 import { BackendMetrics, ClientMetrics, SLOThresholds, AnalysisResult } from '@alt/shared';
 import { analyzeResult } from './analyzer';
@@ -20,6 +21,12 @@ app.get('/health', async (_request, reply) => {
   });
 });
 
+interface ExternalMetricSource {
+  sourceName: string;
+  platform: string | null;
+  data: string;
+}
+
 interface AnalyseBody {
   testId: string;
   targetUrl: string;
@@ -27,10 +34,11 @@ interface AnalyseBody {
   metrics: BackendMetrics | ClientMetrics;
   previousMetrics: BackendMetrics | ClientMetrics | null;
   thresholds?: SLOThresholds | null;
+  externalMetrics?: ExternalMetricSource[];
 }
 
 app.post<{ Body: AnalyseBody }>('/analyse', async (request, reply) => {
-  const { testId, targetUrl, type, metrics, previousMetrics, thresholds } = request.body;
+  const { testId, targetUrl, type, metrics, previousMetrics, thresholds, externalMetrics } = request.body;
   const testLog = log.child({ testId });
 
   testLog.info({ targetUrl, type }, 'Running analysis');
@@ -39,7 +47,7 @@ app.post<{ Body: AnalyseBody }>('/analyse', async (request, reply) => {
   const base = analyzeResult(metrics, previousMetrics ?? null, thresholds ?? undefined);
 
   // 2. AI insights (best-effort; null on failure or missing key)
-  const aiInsights = await generateAiInsights({
+  const { insights: aiInsights, rateLimited: geminiRateLimited } = await generateAiInsights({
     targetUrl,
     type,
     metrics,
@@ -48,6 +56,7 @@ app.post<{ Body: AnalyseBody }>('/analyse', async (request, reply) => {
     summary: base.summary,
     thresholdViolations: base.thresholdViolations,
     diffs: base.diffs,
+    externalMetrics: externalMetrics ?? [],
   });
 
   const result: AnalysisResult = {
@@ -55,9 +64,9 @@ app.post<{ Body: AnalyseBody }>('/analyse', async (request, reply) => {
     ...(aiInsights ? { aiInsights } : {}),
   };
 
-  testLog.info({ perfStatus: result.perfStatus, hasAiInsights: Boolean(aiInsights) }, 'Analysis complete');
+  testLog.info({ perfStatus: result.perfStatus, hasAiInsights: Boolean(aiInsights), geminiRateLimited }, 'Analysis complete');
 
-  return reply.send(result);
+  return reply.send({ ...result, geminiRateLimited });
 });
 
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {

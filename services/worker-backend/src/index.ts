@@ -1,3 +1,4 @@
+import './tracing';
 import amqplib from 'amqplib';
 import { spawn, ChildProcess } from 'child_process';
 import { writeFile, unlink, readFile, mkdir, rm, open } from 'fs/promises';
@@ -46,7 +47,8 @@ const saveScript = async (
   targetUrl: string,
   script: string,
   scriptId?: string,
-  description?: string
+  description?: string,
+  projectId?: string,
 ): Promise<string> => {
   if (scriptId) {
     await pool.query(
@@ -56,12 +58,12 @@ const saveScript = async (
     return scriptId;
   }
   const { rows } = await pool.query(
-    `INSERT INTO test_scripts (target_url, test_type, script, description)
-     VALUES ($1, 'backend', $2, $3)
+    `INSERT INTO test_scripts (target_url, test_type, script, description, project_id)
+     VALUES ($1, 'backend', $2, $3, $4)
      ON CONFLICT (target_url, test_type) DO UPDATE
      SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW()
      RETURNING id`,
-    [targetUrl, script, description ?? null]
+    [targetUrl, script, description ?? null, projectId ?? null]
   );
   return rows[0].id;
 };
@@ -238,6 +240,8 @@ const handleRetry = (
   channel.ack(msg);
 };
 
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
 const start = async (): Promise<void> => {
   const url        = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
@@ -257,7 +261,28 @@ const start = async (): Promise<void> => {
     }
   }
 
+  connection!.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+  });
+  connection!.on('close', () => {
+    log.warn('RabbitMQ connection closed — scheduling reconnect');
+    queueConnected = false;
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null;
+        try { await start(); } catch (err) {
+          log.error({ err: (err as Error).message }, 'RabbitMQ reconnect failed');
+        }
+      }, 5000);
+    }
+  });
+
   const channel = await connection!.createChannel();
+  channel.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    queueConnected = false;
+  });
+
   await channel.assertQueue(QUEUE,         { durable: true });
   await channel.assertQueue(DLQ,           { durable: true });
   await channel.assertQueue(RESULTS_QUEUE, { durable: true });
@@ -291,6 +316,11 @@ const start = async (): Promise<void> => {
     const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
     testLog.info('Received backend test');
 
+    // Tag the active OTel span so traces are searchable by testId in Tempo
+    const { trace, context } = await import('@opentelemetry/api');
+    const span = trace.getActiveSpan();
+    if (span) { span.setAttribute('test.id', test.id); span.setAttribute('test.url', test.targetUrl); }
+
     // r2: skip if already cancelled
     const { rows: statusRows } = await pool.query(
       `SELECT status FROM test_results WHERE test_id = $1`, [test.id]
@@ -316,7 +346,7 @@ const start = async (): Promise<void> => {
       }
 
       const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
-      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description);
+      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description, test.projectId);
 
       const result: TestResult = {
         testId: test.id,
@@ -329,11 +359,12 @@ const start = async (): Promise<void> => {
 
       channel.sendToQueue(
         RESULTS_QUEUE,
-        Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds })),
+        Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds, projectId: test.projectId })),
         { persistent: true }
       );
 
-      testLog.info({ metrics }, 'k6 test completed');
+      testLog.info({ requestsTotal: metrics.requestsTotal, rps: metrics.rps, p95: metrics.p95ResponseTime, errorRate: (metrics.requestsFailed / (metrics.requestsTotal || 1) * 100).toFixed(2) }, 'k6 test completed');
+      testLog.debug({ metrics }, 'k6 test full metrics');
       channel.ack(msg);
     } catch (err) {
       testLog.error({ err: (err as Error).message }, 'Test failed');

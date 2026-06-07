@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { detectCorrelations } from '../correlator';
+import { detectCorrelations, suggestStepNames, suggestIgnorePatterns } from '../correlator';
 import type { RecordedRequest, FlowStep } from '@alt/shared';
 
 // ─── Mock Gemini (same pattern as generator.test.ts) ─────────────────────────
@@ -298,5 +298,93 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
     await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // Original steps should be unchanged
     expect(TWO_STEPS[0].extract).toEqual(originalExtract);
+  });
+});
+
+// ─── suggestStepNames ─────────────────────────────────────────────────────────
+
+describe('suggestStepNames', () => {
+  it('renames steps with Gemini suggestions', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: { text: () => '["Authenticate — get token", "Load homepage"]' },
+    });
+    const result = await suggestStepNames(TWO_STEPS);
+    expect(result[0].name).toBe('Authenticate — get token');
+    expect(result[1].name).toBe('Load homepage');
+  });
+
+  it('returns original steps when Gemini returns wrong array length', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: { text: () => '["Only one name"]' },
+    });
+    const result = await suggestStepNames(TWO_STEPS);
+    expect(result[0].name).toBe(TWO_STEPS[0].name);
+  });
+
+  it('returns original steps when Gemini returns non-JSON', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({ response: { text: () => 'not json' } });
+    const result = await suggestStepNames(TWO_STEPS);
+    expect(result).toEqual(TWO_STEPS);
+  });
+
+  it('returns original steps when Gemini throws', async () => {
+    const mock = await getMock();
+    mock.mockRejectedValueOnce(new Error('network error'));
+    const result = await suggestStepNames(TWO_STEPS);
+    expect(result).toEqual(TWO_STEPS);
+  });
+
+  it('returns steps unchanged when input is empty', async () => {
+    const result = await suggestStepNames([]);
+    expect(result).toEqual([]);
+  });
+});
+
+// ─── suggestIgnorePatterns ────────────────────────────────────────────────────
+
+describe('suggestIgnorePatterns', () => {
+  it('returns suggested domain strings from Gemini', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: { text: () => '["analytics.google.com", "cdn.clarity.ms"]' },
+    });
+    const result = await suggestIgnorePatterns(TWO_REQUESTS);
+    expect(result).toEqual(['analytics.google.com', 'cdn.clarity.ms']);
+  });
+
+  it('returns empty array when Gemini returns empty array', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({ response: { text: () => '[]' } });
+    const result = await suggestIgnorePatterns(TWO_REQUESTS);
+    expect(result).toEqual([]);
+  });
+
+  it('returns empty array when Gemini response is not parseable', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({ response: { text: () => 'not json' } });
+    const result = await suggestIgnorePatterns(TWO_REQUESTS);
+    expect(result).toEqual([]);
+  });
+
+  it('returns empty array on Gemini error', async () => {
+    const mock = await getMock();
+    mock.mockRejectedValueOnce(new Error('503'));
+    const result = await suggestIgnorePatterns(TWO_REQUESTS);
+    expect(result).toEqual([]);
+  });
+
+  it('filters non-string values from Gemini output', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({ response: { text: () => '["valid.com", 42, null, "also.valid"]' } });
+    const result = await suggestIgnorePatterns(TWO_REQUESTS);
+    expect(result).toEqual(['valid.com', 'also.valid']);
+  });
+
+  it('returns empty array when requests list is empty', async () => {
+    const result = await suggestIgnorePatterns([]);
+    expect(result).toEqual([]);
   });
 });

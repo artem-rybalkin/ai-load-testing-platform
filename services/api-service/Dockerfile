@@ -7,7 +7,7 @@ COPY tsconfig.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY services/api-service/package.json ./services/api-service/
 
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm install
 
 COPY packages/shared ./packages/shared
 COPY services/api-service ./services/api-service

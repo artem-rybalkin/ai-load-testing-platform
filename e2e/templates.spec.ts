@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Templates E2E: save a template from the home form, load it back,
+ * Presets E2E: save a preset from the home form, load it back,
  * verify all fields round-trip correctly.
  * Requires: docker compose up.
  */
@@ -13,8 +13,8 @@ test.describe('Templates', () => {
     await page.fill('input[type="text"][placeholder*="example"]', 'https://httpbin.org/get');
     await page.fill('input[placeholder*="test"]', 'Load test 5 VUs 30s');
 
-    // Save as template
-    await page.getByRole('button', { name: /save.*template/i }).click();
+    // Save as preset (renamed from "template" in Phase 20)
+    await page.getByRole('button', { name: /save.*preset/i }).click();
 
     // Should not navigate away — just save silently
     await page.waitForTimeout(1500);
@@ -51,9 +51,9 @@ test.describe('Templates', () => {
   });
 
   test('templates page lists saved templates', async ({ page }) => {
-    await page.goto('/templates');
+    await page.goto('/presets');
     await expect(page.locator('h1, [class*="font-semibold"]').first()).toBeVisible({ timeout: 5_000 });
     // Page should render without crashing
-    await expect(page).toHaveURL('/templates');
+    await expect(page).toHaveURL('/presets');
   });
 });

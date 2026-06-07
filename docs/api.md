@@ -10,6 +10,8 @@ All requests and responses use JSON. In production with `API_KEYS` set, include 
 
 ## Authentication
 
+### API key auth (legacy / service-to-service)
+
 When `API_KEYS` is set (production), all endpoints require:
 
 ```http
@@ -22,6 +24,59 @@ Exempt endpoints (always accessible without a key):
 - `POST /results/:testId/running`, `/fail`, `/message` (internal — called by workers)
 
 Returns `401 Unauthorized` if the key is missing or invalid.
+
+---
+
+### Cookie session auth (UI / project-scoped)
+
+When `SESSION_SECRET` is set on results-service, session middleware is active. All results-service endpoints (except `/health`, `/auth/*`, internal `/results/pending`, and internal worker callbacks) require a valid `alt_session` cookie.
+
+#### `POST /auth/login`
+
+Create or join a project and issue a session cookie.
+
+**Request body:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `username` | string | Display name (1–80 chars) |
+| `projectName` | string | Project slug (1–80 chars, lowercased) |
+
+```bash
+curl -X POST http://localhost:3004/auth/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{ "username": "alice", "projectName": "my-team" }'
+```
+
+**Response `200`:**
+```json
+{ "projectId": "550e8400-...", "username": "alice", "projectName": "my-team" }
+```
+
+Sets `alt_session` cookie (HttpOnly, SameSite=Strict). If `SESSION_SECRET` is empty, returns a 200 dev response with `{ "dev": true }` and sets no cookie.
+
+#### `POST /auth/logout`
+
+Clear the session cookie.
+
+```bash
+curl -X POST http://localhost:3004/auth/logout -b cookies.txt
+```
+
+**Response `200`:** `{ "success": true }`
+
+#### `GET /auth/me`
+
+Return the currently authenticated user from the session cookie.
+
+```bash
+curl http://localhost:3004/auth/me -b cookies.txt
+```
+
+**Response `200`:** `{ "projectId": "...", "username": "alice", "projectName": "my-team" }`
+
+Returns `401` if not authenticated.
 
 ---
 
@@ -109,6 +164,8 @@ Create and start a new test.
 | `fcp` | ms | 1800 | Browser — First Contentful Paint |
 | `ttfb` | ms | 800 | Browser — Time to First Byte |
 | `cls` | score | 0.1 | Browser — Cumulative Layout Shift |
+| `inp` | ms | 200 | Browser — Interaction to Next Paint |
+| `tbt` | ms | 200 | Browser — Total Blocking Time |
 
 **FlowStep object:**
 
@@ -535,23 +592,23 @@ curl -X POST http://localhost:3004/schedules/<id>/run
 
 ---
 
-### Templates
+### Presets
 
 Reusable test configurations that pre-fill the UI form.
 
-#### `GET /templates`
+#### `GET /presets`
 
-List all templates, ordered by `used_count` descending.
+List all presets, ordered by `used_count` descending.
 
-#### `POST /templates`
+#### `POST /presets`
 
-Create a template.
+Create a preset.
 
 **Request body:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | ✅ | Template name |
+| `name` | string | ✅ | Preset name |
 | `type` | string | ✅ | Test type |
 | `options` | object | ✅ | Test options |
 | `target_url` | string | — | Default target URL |
@@ -559,7 +616,7 @@ Create a template.
 | `thresholds` | object | — | Default SLO thresholds |
 
 ```bash
-curl -X POST http://localhost:3004/templates \
+curl -X POST http://localhost:3004/presets \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Standard API smoke test",
@@ -571,13 +628,13 @@ curl -X POST http://localhost:3004/templates \
   }'
 ```
 
-#### `GET /templates/:id`
+#### `GET /presets/:id`
 
-Get a template and increment its `used_count`.
+Get a preset and increment its `used_count`.
 
-#### `DELETE /templates/:id`
+#### `DELETE /presets/:id`
 
-Delete a template. Returns `204`.
+Delete a preset. Returns `204`.
 
 ---
 

@@ -31,7 +31,8 @@ These are pre-configured for inter-container communication. Change only if runni
 | Variable | Service | Description |
 |----------|---------|-------------|
 | `API_KEYS` | api-service, results-service | Comma-separated list of valid API keys. Empty string = auth disabled |
-| `API_KEY` | ui | Single API key passed to the UI as `NEXT_PUBLIC_API_KEY` |
+| `API_KEY` | ui | Single API key passed to the UI as `VITE_API_KEY` |
+| `SESSION_SECRET` | results-service | Secret for HMAC-SHA256 cookie signing. Empty string = auth disabled (dev). Use a minimum 32-character random string in production |
 | `ALLOWED_ORIGIN` | api-service, results-service, ui | CORS allowed origin. Default: `*`. Set to `https://yourdomain.com` in production |
 
 **Example `.env` for production:**
@@ -39,6 +40,7 @@ These are pre-configured for inter-container communication. Change only if runni
 GEMINI_API_KEY=AIza...
 API_KEYS=key1,key2
 API_KEY=key1
+SESSION_SECRET=change-me-to-a-long-random-string
 ALLOWED_ORIGIN=https://yourdomain.com
 DOMAIN=yourdomain.com
 ```
@@ -68,16 +70,18 @@ Running in results-service — cleans up tests that got stuck.
 
 ---
 
-## UI (Next.js public env vars)
+## UI (Vite public env vars)
 
-These are embedded into the Next.js build. Prefix `NEXT_PUBLIC_` means they're exposed to the browser.
+These are embedded into the Vite build. Prefix `VITE_` means they're exposed to the browser.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:3000` | api-service URL (browser-visible) |
-| `NEXT_PUBLIC_RESULTS_URL` | `http://localhost:3004` | results-service URL (browser-visible) |
-| `NEXT_PUBLIC_RECORDER_URL` | `http://localhost:3007` | recorder-service URL (browser-visible) |
-| `NEXT_PUBLIC_API_KEY` | _(empty)_ | API key sent with every UI request as `X-API-Key` |
+| `VITE_API_URL` | `http://localhost:3000` | api-service URL (browser-visible) |
+| `VITE_RESULTS_URL` | `http://localhost:3004` | results-service URL (browser-visible) |
+| `VITE_RECORDER_URL` | `http://localhost:3007` | recorder-service URL (browser-visible) |
+| `VITE_API_KEY` | _(empty)_ | API key sent with every UI request as `X-API-Key` |
+
+In dev, the Vite dev server proxies `/api/*` → api-service and `/data/*` → results-service so auth cookies work on the same origin without CORS issues.
 
 ---
 
@@ -99,14 +103,14 @@ These are embedded into the Next.js build. Prefix `NEXT_PUBLIC_` means they're e
 | ai-service | `3001` | Internal (no direct client traffic) |
 | worker-backend | `3002` | Health endpoint |
 | worker-client | `3003` | Health endpoint |
-| results-service | `3004` | REST API |
-| ui | `3006` | Next.js frontend |
+| results-service | `3004` | REST API + WebSocket + auth |
+| ui | `3006` | Vite + React SPA |
 | recorder-service | `3007` | Recording REST API |
 | recorder-service | `6080` | noVNC browser viewer |
 | postgres | `5432` | Database |
 | rabbitmq | `5672` | AMQP |
 | rabbitmq | `15672` | RabbitMQ management UI |
-| redis | `6379` | Cache / pub-sub |
+| redis | `6379` | Cache / pub-sub (not yet wired) |
 
 In production (`docker-compose.prod.yml`), only ports `80` and `443` (Caddy) are exposed. All internal service ports are removed.
 
@@ -135,8 +139,8 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 Changes to any `.ts` file → service restarts automatically (usually < 2s).
 
 **Notes:**
-- On Windows, Next.js HMR requires `WATCHPACK_POLLING=true` (already set)
-- The `.next` build cache is stored in a named Docker volume `ui_next_cache` for fast warm starts
+- On Windows, Vite HMR requires `WATCHPACK_POLLING=true` (already set)
+- The Vite dev server proxies `/api/*` → api-service and `/data/*` → results-service for same-origin cookie auth
 
 ### `docker-compose.prod.yml` — production overlay
 

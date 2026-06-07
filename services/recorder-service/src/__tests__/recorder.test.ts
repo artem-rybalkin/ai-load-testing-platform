@@ -7,8 +7,9 @@ vi.mock('puppeteer-core', () => ({
   default: {},
 }));
 
-import { compileIgnorePatterns, toFlowSteps } from '../recorder';
-import type { RecordedRequest } from '@alt/shared';
+import { compileIgnorePatterns, toFlowSteps, computeThinkTimes } from '../recorder';
+import { detectDuplicateSteps } from '../correlator';
+import type { RecordedRequest, FlowStep } from '@alt/shared';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -130,11 +131,11 @@ describe('toFlowSteps', () => {
     expect(toFlowSteps([makeRequest({ responseStatus: 500 })])).toHaveLength(0);
   });
 
-  it('caps output at 20 steps when more than 20 requests are provided', () => {
-    const requests = Array.from({ length: 25 }, (_, i) =>
+  it('caps output at FLOW_STEPS_CAP (50) when more requests are provided', () => {
+    const requests = Array.from({ length: 55 }, (_, i) =>
       makeRequest({ url: `https://api.example.com/step/${i}`, requestId: `req-${i}` })
     );
-    expect(toFlowSteps(requests)).toHaveLength(20);
+    expect(toFlowSteps(requests)).toHaveLength(50);
   });
 
   it('sets step name as "Step N: METHOD /pathname"', () => {
@@ -258,5 +259,119 @@ describe('toFlowSteps', () => {
   it('handles a request with no headers gracefully', () => {
     const steps = toFlowSteps([makeRequest({ headers: {} })]);
     expect(steps[0].headers).toEqual({});
+  });
+});
+
+// ─── computeThinkTimes ────────────────────────────────────────────────────────
+
+describe('computeThinkTimes', () => {
+  const req = (url: string, ts: number): RecordedRequest =>
+    makeRequest({ url, timestamp: ts });
+
+  it('returns 0 for the first step', () => {
+    const times = computeThinkTimes([req('/a', 1000), req('/b', 2500)]);
+    expect(times[0]).toBe(0);
+  });
+
+  it('returns ms gap between consecutive requests', () => {
+    const times = computeThinkTimes([req('/a', 1000), req('/b', 3200)]);
+    expect(times[1]).toBe(2200);
+  });
+
+  it('caps gaps at 10 000 ms', () => {
+    const times = computeThinkTimes([req('/a', 1000), req('/b', 20_000)]);
+    expect(times[1]).toBe(10_000);
+  });
+
+  it('returns 0 when timestamps are missing', () => {
+    const times = computeThinkTimes([makeRequest(), makeRequest()]);
+    expect(times[1]).toBe(0);
+  });
+
+  it('filters out 5xx requests before computing gaps', () => {
+    const requests = [
+      req('/a', 1000),
+      makeRequest({ url: '/err', timestamp: 2000, responseStatus: 500 }), // skipped
+      req('/b', 3500),
+    ];
+    const times = computeThinkTimes(requests);
+    // After filtering: [/a at 1000, /b at 3500] → gap = 2500
+    expect(times).toHaveLength(2);
+    expect(times[1]).toBe(2500);
+  });
+
+  it('returns empty array for empty input', () => {
+    expect(computeThinkTimes([])).toEqual([]);
+  });
+});
+
+// ─── detectDuplicateSteps ─────────────────────────────────────────────────────
+
+const makeStep = (method: 'GET' | 'POST', url: string): FlowStep =>
+  ({ name: `${method} ${url}`, url, method, headers: {}, extract: {} });
+
+describe('detectDuplicateSteps', () => {
+  it('returns empty array when all steps are unique', () => {
+    const steps = [
+      makeStep('GET', 'https://api.example.com/products'),
+      makeStep('POST', 'https://api.example.com/cart'),
+      makeStep('GET', 'https://api.example.com/user'),
+    ];
+    expect(detectDuplicateSteps(steps)).toEqual([]);
+  });
+
+  it('detects two steps hitting the same endpoint with different query params', () => {
+    const steps = [
+      makeStep('GET', 'https://api.example.com/search?q=shoes'),
+      makeStep('GET', 'https://api.example.com/profile'),
+      makeStep('GET', 'https://api.example.com/search?q=bags'),
+    ];
+    const suggestions = detectDuplicateSteps(steps);
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].indices).toEqual([0, 2]);
+  });
+
+  it('includes the common path in the suggestion', () => {
+    const steps = [
+      makeStep('GET', 'https://api.example.com/category?id=A'),
+      makeStep('GET', 'https://api.example.com/category?id=B'),
+    ];
+    const [s] = detectDuplicateSteps(steps);
+    expect(s.commonPath).toContain('/category');
+  });
+
+  it('identifies the varying query parameter key', () => {
+    const steps = [
+      makeStep('GET', 'https://api.example.com/items?page=1'),
+      makeStep('GET', 'https://api.example.com/items?page=2'),
+    ];
+    const [s] = detectDuplicateSteps(steps);
+    expect(s.paramKey).toBe('page');
+  });
+
+  it('groups three duplicates together', () => {
+    const steps = [
+      makeStep('GET', 'https://api.example.com/cat?id=1'),
+      makeStep('GET', 'https://api.example.com/cat?id=2'),
+      makeStep('GET', 'https://api.example.com/cat?id=3'),
+    ];
+    const [s] = detectDuplicateSteps(steps);
+    expect(s.indices).toHaveLength(3);
+  });
+
+  it('treats same path with different HTTP methods as distinct', () => {
+    const steps = [
+      makeStep('GET',  'https://api.example.com/orders'),
+      makeStep('POST', 'https://api.example.com/orders'),
+    ];
+    expect(detectDuplicateSteps(steps)).toEqual([]);
+  });
+
+  it('handles steps with invalid URLs gracefully', () => {
+    const steps = [
+      { name: 'bad', url: 'not-a-url', method: 'GET' as const, headers: {}, extract: {} },
+      makeStep('GET', 'https://api.example.com/ok'),
+    ];
+    expect(() => detectDuplicateSteps(steps)).not.toThrow();
   });
 });

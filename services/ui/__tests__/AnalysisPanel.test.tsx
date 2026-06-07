@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 afterEach(() => cleanup());
 import AnalysisPanel from '../app/components/AnalysisPanel';
 
@@ -119,25 +119,25 @@ describe('AnalysisPanel — AI Insights section', () => {
   it('expanding the panel reveals the narrative', async () => {
     const { getByText } = render(<AnalysisPanel analysis={withInsights} />);
     const toggle = getByText('AI Insights').closest('button')!;
-    toggle.click();
+    fireEvent.click(toggle);
     expect(screen.getByText(withInsights.aiInsights.narrative)).toBeInTheDocument();
   });
 
   it('expanding shows anomalies', async () => {
     render(<AnalysisPanel analysis={withInsights} />);
-    screen.getByText('AI Insights').closest('button')!.click();
+    fireEvent.click(screen.getByText('AI Insights').closest('button')!);
     expect(screen.getByText('p99 spike at the 60s mark')).toBeInTheDocument();
   });
 
   it('expanding shows root causes', async () => {
     render(<AnalysisPanel analysis={withInsights} />);
-    screen.getByText('AI Insights').closest('button')!.click();
+    fireEvent.click(screen.getByText('AI Insights').closest('button')!);
     expect(screen.getByText('Unindexed query in orders table')).toBeInTheDocument();
   });
 
   it('expanding shows recommendations', async () => {
     render(<AnalysisPanel analysis={withInsights} />);
-    screen.getByText('AI Insights').closest('button')!.click();
+    fireEvent.click(screen.getByText('AI Insights').closest('button')!);
     expect(screen.getByText('Add index on orders.created_at')).toBeInTheDocument();
     expect(screen.getByText('Enable query result caching')).toBeInTheDocument();
   });
@@ -145,9 +145,9 @@ describe('AnalysisPanel — AI Insights section', () => {
   it('collapses again when toggle is clicked a second time', async () => {
     render(<AnalysisPanel analysis={withInsights} />);
     const btn = screen.getByText('AI Insights').closest('button')!;
-    btn.click(); // expand
+    fireEvent.click(btn); // expand
     expect(screen.getByText(withInsights.aiInsights.narrative)).toBeInTheDocument();
-    btn.click(); // collapse
+    fireEvent.click(btn); // collapse
     expect(screen.queryByText(withInsights.aiInsights.narrative)).not.toBeInTheDocument();
   });
 
@@ -164,7 +164,7 @@ describe('AnalysisPanel — AI Insights section', () => {
       aiInsights: { ...withInsights.aiInsights, anomalies: [] },
     };
     render(<AnalysisPanel analysis={noAnomalies} />);
-    screen.getByText('AI Insights').closest('button')!.click();
+    fireEvent.click(screen.getByText('AI Insights').closest('button')!);
     expect(screen.queryByText('Anomalies detected')).not.toBeInTheDocument();
   });
 });

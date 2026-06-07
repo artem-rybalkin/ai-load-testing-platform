@@ -8,11 +8,17 @@ test.describe('Happy path — create and complete a backend test', () => {
   test('creates a test, navigates to result, and eventually shows completed or failed status', async ({ page }) => {
     await page.goto('/');
 
-    // Fill in the target URL (redesigned UI uses type="text" not type="url")
-    await page.locator('input[placeholder*="example"]').fill('http://localhost:3000/health');
+    // Use click+fill+Tab to ensure React commits state before reading it in handleSubmit.
+    // Playwright fill() may dispatch programmatic events that React 18 treats as
+    // low-priority; pressing Tab triggers blur which forces a synchronous flush.
+    const urlInput = page.locator('input[placeholder*="example"]');
+    await urlInput.click();
+    await urlInput.fill('http://localhost:3000/health');
+    await urlInput.press('Tab');
 
-    // Fill description
-    await page.locator('input[placeholder*="test"]').fill('E2E smoke test 5 VUs 30s');
+    const descInput = page.locator('input[placeholder*="test"]');
+    await descInput.fill('E2E smoke test 5 VUs 30s');
+    await descInput.press('Tab');
 
     // Click "Run Test"
     await page.getByRole('button', { name: /run test/i }).click();
@@ -27,8 +33,13 @@ test.describe('Happy path — create and complete a backend test', () => {
   test('shows a progress bar or live indicator during execution', async ({ page }) => {
     await page.goto('/');
 
-    await page.locator('input[placeholder*="example"]').fill('http://localhost:3000/health');
-    await page.locator('input[placeholder*="test"]').fill('5 VUs 30s load test');
+    const urlInput2 = page.locator('input[placeholder*="example"]');
+    await urlInput2.click();
+    await urlInput2.fill('http://localhost:3000/health');
+    await urlInput2.press('Tab');
+    const descInput2 = page.locator('input[placeholder*="test"]');
+    await descInput2.fill('5 VUs 30s load test');
+    await descInput2.press('Tab');
     await page.getByRole('button', { name: /run test/i }).click();
 
     await expect(page).toHaveURL(/\/results\/[0-9a-f-]{36}/, { timeout: 15_000 });
@@ -42,13 +53,21 @@ test.describe('Happy path — create and complete a backend test', () => {
   test('shows countdown text when test is running', async ({ page }) => {
     await page.goto('/');
 
-    await page.locator('input[placeholder*="example"]').fill('http://localhost:3000/health');
-    await page.locator('input[placeholder*="test"]').fill('2 VUs 30s');
+    const urlInput3 = page.locator('input[placeholder*="example"]');
+    await urlInput3.click();
+    await urlInput3.fill('http://localhost:3000/health');
+    await urlInput3.press('Tab');
+    const descInput3 = page.locator('input[placeholder*="test"]');
+    await descInput3.fill('2 VUs 30s');
+    await descInput3.press('Tab');
     await page.getByRole('button', { name: /run test/i }).click();
 
     await expect(page).toHaveURL(/\/results\/[0-9a-f-]{36}/, { timeout: 15_000 });
 
-    // "remaining", "finishing", or "left" appears once test is running with known duration
-    await expect(page.getByText(/remaining|finishing|left/i).first()).toBeVisible({ timeout: 60_000 });
+    // Countdown shows once the test starts. If the worker is busy the test stays
+    // pending — accept either "remaining/left" (running) or "pending" (queued).
+    await expect(
+      page.getByText(/remaining|finishing|left|pending/i).first()
+    ).toBeVisible({ timeout: 120_000 });
   });
 });

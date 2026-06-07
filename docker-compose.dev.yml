@@ -12,6 +12,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/packages/shared/node_modules
     working_dir: /app
 
 
@@ -22,6 +23,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/services/api-service/node_modules
     command: npx tsx watch src/index.ts
 
   ai-service:
@@ -31,6 +33,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/services/ai-service/node_modules
     command: npx tsx watch src/index.ts
 
   results-service:
@@ -40,6 +43,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/services/results-service/node_modules
     command: npx tsx watch src/index.ts
 
   worker-backend:
@@ -49,6 +53,9 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/services/worker-backend/node_modules
+    environment:
+      WORKER_CONCURRENCY: 3   # allow 3 concurrent k6 tests during E2E runs
     command: npx tsx watch src/index.ts
 
   worker-client:
@@ -58,6 +65,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/services/worker-client/node_modules
     command: npx tsx watch src/index.ts
 
   analyser-service:
@@ -67,6 +75,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/services/analyser-service/node_modules
     command: npx tsx watch src/index.ts
 
   recorder-service:
@@ -76,6 +85,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/services/recorder-service/node_modules
     # No command override — uses CMD from Dockerfile.dev (/docker-entrypoint-dev.sh)
     # which starts Xvfb + x11vnc + noVNC before launching tsx watch
 
@@ -83,6 +93,7 @@ services:
     build:
       context: .
       dockerfile: services/ui/Dockerfile.dev
+    restart: on-failure
     volumes:
       - ./services/ui:/app/services/ui
       - ui_node_modules:/app/services/ui/node_modules
@@ -91,8 +102,11 @@ services:
       VITE_API_URL: http://localhost:3000
       VITE_RESULTS_URL: http://localhost:3004
       VITE_RECORDER_URL: http://localhost:3007
+      RECORDER_SERVICE_URL: http://recorder-service:3007
       VITE_API_KEY: ${API_KEY:-}
-    command: npm run dev
+    # 8s delay lets the WSL2 bind mount warm up before Vite scans files.
+    # restart: on-failure means Docker auto-recovers if Vite still crashes.
+    command: sh -c "sleep 8 && npm run dev"
 
 volumes:
   ui_node_modules:

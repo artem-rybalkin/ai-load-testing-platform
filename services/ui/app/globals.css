@@ -41,12 +41,37 @@
   --font-mono: 'Geist Mono Variable', 'SFMono-Regular', 'Consolas', monospace;
 }
 
+/* ── Dark mode ──────────────────────────────────────────────────────────────── */
+.dark {
+  --background:    #0d1117;
+  --foreground:    #e6edf3;
+  --surface:       #161b22;
+  --border:        #30363d;
+  --border-muted:  #21262d;
+  --text-primary:  #e6edf3;
+  --text-secondary:#8b949e;
+  --text-tertiary: #6e7681;
+  --accent:        #58a6ff;
+  --accent-hover:  #79b8ff;
+  --success:       #3fb950;
+  --success-hover: #56d364;
+  --warning:       #d29922;
+  --danger:        #f85149;
+  --danger-hover:  #ff7b72;
+  --bg-success:    #0f2a14;
+  --bg-warning:    #1c1700;
+  --bg-danger:     #2d0a0a;
+  --bg-accent:     #0d2149;
+  --bg-muted:      #161b22;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 /* Shared utility: monospace metric values */
@@ -54,3 +79,71 @@ body {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Dark mode: remap hardcoded GitHub light palette to dark tokens ───────── */
+/* Components use hardcoded hex values; these rules remap them via CSS         */
+/* attribute selectors — unlayered rules beat Tailwind's @layer utilities.     */
+
+/* Backgrounds */
+.dark .bg-white                               { background-color: var(--surface); }
+.dark [class*="bg-[#f6f8fa]"]                { background-color: var(--bg-muted); }
+.dark [class*="bg-[#f6f7f8]"]                { background-color: var(--background); }
+.dark [class*="bg-[#f3f4f6]"]                { background-color: var(--bg-muted); }
+.dark [class*="bg-[#eaeef2]"]                { background-color: var(--border-muted); }
+/* Semantic chip / callout backgrounds */
+.dark [class*="bg-[#ddf4ff]"]                { background-color: var(--bg-accent); }
+.dark [class*="bg-[#f1f8ff]"]                { background-color: var(--bg-accent); }
+.dark [class*="bg-[#eef2ff]"]                { background-color: #131240; }
+.dark [class*="bg-[#faf5ff]"]                { background-color: #1a0a2e; }
+.dark [class*="bg-[#fff8c5]"]                { background-color: var(--bg-warning); }
+.dark [class*="bg-[#ffebe9]"]                { background-color: var(--bg-danger); }
+.dark [class*="bg-[#fff0ee]"]                { background-color: var(--bg-danger); }
+.dark [class*="bg-[#dafbe1]"]                { background-color: var(--bg-success); }
+
+/* Text — neutral */
+.dark [class*="text-[#24292f]"]              { color: var(--text-primary); }
+.dark [class*="text-[#1f2328]"]              { color: var(--text-primary); }
+.dark [class*="text-[#57606a]"]              { color: var(--text-secondary); }
+.dark [class*="text-[#8c959f]"]              { color: var(--text-tertiary); }
+.dark [class*="text-[#d0d7de]"]              { color: var(--text-tertiary); }
+/* Text — semantic (use brighter variants readable on dark backgrounds) */
+.dark [class*="text-[#0969da]"]              { color: var(--accent); }
+.dark [class*="text-[#0550ae]"]              { color: var(--accent); }
+.dark [class*="text-[#1f883d]"]              { color: var(--success); }
+.dark [class*="text-[#1a7f37]"]              { color: var(--success-hover); }
+.dark [class*="text-[#9a6700]"]              { color: var(--warning); }
+.dark [class*="text-[#7a5100]"]              { color: var(--warning); }
+.dark [class*="text-[#633c01]"]              { color: var(--warning); }
+.dark [class*="text-[#bf8700]"]              { color: var(--warning); }
+.dark [class*="text-[#cf222e]"]              { color: var(--danger); }
+.dark [class*="text-[#7c3aed]"]              { color: #a78bfa; }
+.dark [class*="text-[#4338ca]"]              { color: #818cf8; }
+
+/* Borders */
+.dark [class*="border-[#d0d7de]"]            { border-color: var(--border); }
+.dark [class*="border-[#eaeef2]"]            { border-color: var(--border-muted); }
+.dark [class*="border-[#0969da]"]            { border-color: var(--accent); }
+.dark [class*="border-[#cf222e]"]            { border-color: var(--danger); }
+/* divide-y applies border-color to > * + * children */
+.dark [class*="divide-[#eaeef2]"] > * + *    { border-color: var(--border-muted); }
+
+/* Hover states */
+.dark [class*="hover:bg-[#f6f8fa]"]:hover   { background-color: var(--bg-muted); }
+.dark [class*="hover:bg-[#eaeef2]"]:hover   { background-color: var(--border-muted); }
+.dark [class*="hover:bg-[#f6f7f8]"]:hover   { background-color: var(--bg-muted); }
+.dark [class*="hover:text-[#24292f]"]:hover  { color: var(--text-primary); }
+.dark [class*="hover:text-[#1f2328]"]:hover  { color: var(--text-primary); }
+.dark [class*="hover:text-[#cf222e]"]:hover  { color: var(--danger); }
+
+/* Form controls */
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.dark textarea,
+.dark select {
+  background-color: var(--surface);
+  border-color: var(--border);
+  color: var(--text-primary);
+  color-scheme: dark;
+}
+.dark input::placeholder,
+.dark textarea::placeholder { color: var(--text-tertiary); }
+.dark select option          { background-color: var(--surface); color: var(--text-primary); }

@@ -5,8 +5,15 @@ import { TestType, TestScript, BackendTestOptions, FlowStep } from '@alt/shared'
 import { buildK6Options, replaceK6Options } from './options';
 import { log } from './logger';
 
+const canonicalStep = (s: FlowStep): unknown => ({
+  name: s.name, url: s.url, method: s.method,
+  ...(s.body    !== undefined ? { body: s.body }       : {}),
+  ...(s.headers !== undefined ? { headers: s.headers } : {}),
+  ...(s.extract !== undefined ? { extract: s.extract } : {}),
+});
+
 export const stepsToKey = (steps: FlowStep[]): string => {
-  const hash = createHash('sha256').update(JSON.stringify(steps)).digest('hex').slice(0, 16);
+  const hash = createHash('sha256').update(JSON.stringify(steps.map(canonicalStep))).digest('hex').slice(0, 16);
   return `flow:${hash}`;
 };
 
@@ -23,13 +30,15 @@ export const findExistingScript = async (
   testType: TestType,
   options?: BackendTestOptions,
   dbPool: Pool = pool,
-  cacheKey?: string
+  cacheKey?: string,
+  projectId?: string,
 ): Promise<TestScript | null> => {
   const lookupKey = cacheKey ?? targetUrl;
   const lookupType = testType === 'flow' ? 'backend' : testType;
   const { rows } = await dbPool.query(
-    'SELECT * FROM test_scripts WHERE target_url = $1 AND test_type = $2',
-    [lookupKey, lookupType]
+    `SELECT * FROM test_scripts WHERE target_url = $1 AND test_type = $2
+       AND ($3::uuid IS NULL OR project_id = $3::uuid)`,
+    [lookupKey, lookupType, projectId ?? null]
   );
 
   if (rows.length === 0) return null;

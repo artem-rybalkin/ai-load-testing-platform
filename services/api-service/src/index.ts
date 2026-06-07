@@ -1,9 +1,17 @@
+import './tracing'; // must be first — OTel patches modules at import time
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
 
 import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, SLOThresholds, FlowStep } from '@alt/shared';
 import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
 import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount } from './scripts';
+import { verifySession } from './session';
+
+// Augment Fastify request type — must be at module level
+declare module 'fastify' {
+  interface FastifyRequest { projectId: string | undefined; }
+}
 
 const parseDurationSeconds = (d: string): number => {
   const m = d.match(/^(\d+)(s|m|h)$/i);
@@ -42,8 +50,10 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
   await app.register(cors, {
     origin: allowedOrigin,
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
+  await app.register(cookie);
 
   // API key authentication — exempt /health
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
@@ -56,6 +66,20 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       }
     });
   }
+
+  const sessionSecret = process.env.SESSION_SECRET || '';
+
+  // Session auth runs after API key hook
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.url === '/health') return;
+    if (sessionSecret) {
+      const session = verifySession(request.cookies?.['alt_session'], sessionSecret);
+      if (!session) return reply.code(401).send({ error: 'Not authenticated' });
+      request.projectId = session.projectId;
+    } else {
+      request.projectId = undefined;
+    }
+  });
 
   app.get('/health', async (_request, reply) => {
     const checks: Record<string, string> = {};
@@ -88,8 +112,8 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       if (description && description.length > 500) {
         return reply.code(400).send({ error: 'Description must be 500 characters or fewer' });
       }
-      if (steps && steps.length > 20) {
-        return reply.code(400).send({ error: 'Flow tests support a maximum of 20 steps' });
+      if (steps && steps.length > 50) {
+        return reply.code(400).send({ error: 'Flow tests support a maximum of 50 steps' });
       }
 
       // For flow tests, targetUrl defaults to first step's URL
@@ -97,9 +121,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         ? (targetUrl || steps[0].url)
         : targetUrl;
 
-      // Validate URL format
-      try { new URL(effectiveTargetUrl); } catch {
+      // Validate URL format and scheme
+      let parsedUrl: URL;
+      try { parsedUrl = new URL(effectiveTargetUrl); } catch {
         return reply.code(400).send({ error: 'Invalid targetUrl — must be a valid URL' });
+      }
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        return reply.code(400).send({ error: 'Invalid targetUrl — must use http or https' });
       }
 
       const backendOpts = type === 'backend' ? (options as BackendTestOptions) : undefined;
@@ -118,6 +146,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         csvData,
         csvFilename,
         customScript,
+        projectId: request.projectId,
         scriptCacheKey: flowCacheKey,
         createdAt: new Date().toISOString(),
       };
@@ -125,25 +154,41 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       const rawDuration = (options as BackendTestOptions & { duration?: string }).duration;
       const durationSeconds = rawDuration ? parseDurationSeconds(rawDuration) : undefined;
 
-      await fetch(
+      // Create pending record for UI display — non-blocking; a slow or unavailable
+      // results-service must not prevent the test from being queued.
+      fetch(
         `${process.env.RESULTS_URL || 'http://results-service:3004'}/results/pending`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ testId: test.id, type: test.type, targetUrl: test.targetUrl, durationSeconds, steps: test.steps }),
+          body: JSON.stringify({ testId: test.id, type: test.type, targetUrl: test.targetUrl, durationSeconds, steps: test.steps, testData: test.testData, projectId: test.projectId }),
+          signal: AbortSignal.timeout(5000),
         }
-      );
+      ).catch(() => {});
 
       const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+
+      const postMessage = (message: string) =>
+        fetch(`${resultsUrl}/results/${test.id}/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        }).catch(() => {});
+
       const warnIfNoWorker = async () => {
         const consumers = await getWorkerConsumerCount(type);
         if (consumers === 0) {
           const label = type === 'client-side' ? 'browser (Puppeteer)' : 'backend (k6)';
-          fetch(`${resultsUrl}/results/${test.id}/message`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: `No ${label} worker is running — test will start when a worker comes online` }),
-          }).catch(() => {});
+          postMessage(`No ${label} worker is running — test will start when a worker comes online`).catch(() => {});
+        }
+      };
+
+      const tryPublish = (skipAI: boolean) => {
+        try {
+          publishTest(test, skipAI);
+        } catch (err) {
+          postMessage(`Test could not be queued — message broker unavailable. Restart the api-service when RabbitMQ recovers. (${(err as Error).message})`);
+          throw err;
         }
       };
 
@@ -153,16 +198,16 @@ export const buildApp = async (): Promise<FastifyInstance> => {
           return reply.code(400).send({ error: 'Custom script must be 512 KB or smaller' });
         }
         test.generatedScript = customScript;
-        publishTest(test, true);
+        tryPublish(true);
         warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
 
-      const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey);
+      const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey, request.projectId);
 
       if (!existingScript) {
         // Cache miss — generate new script
-        publishTest(test, false);
+        tryPublish(false);
         warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
@@ -174,7 +219,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         test.generatedScript = existingScript.script;
         test.scriptId = existingScript.id;
         test.reusedScript = true;
-        publishTest(test, true);
+        tryPublish(true);
         warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: true, scriptUsedCount: existingScript.usedCount };
       }
@@ -184,7 +229,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       test.cachedScript = existingScript.script;
       test.cachedScriptDescription = existingScript.description;
       test.scriptId = existingScript.id;
-      publishTest(test, false);
+      tryPublish(false);
       warnIfNoWorker();
       return { success: true, test: safeTestResponse(test), scriptReused: false };
     }

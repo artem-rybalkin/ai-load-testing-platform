@@ -55,6 +55,8 @@ function getMainMetric(r: TestResult) {
 export default function ResultsPage() {
   const [results, setResults] = useState<TestResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const navigate = useNavigate();
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -62,7 +64,20 @@ export default function ResultsPage() {
   const refresh = async () => {
     const data = await getResults();
     setResults(data.results || []);
+    setNextBefore(data.nextBefore ?? null);
     setLoading(false);
+  };
+
+  const loadMore = async () => {
+    if (!nextBefore || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const data = await getResults(nextBefore);
+      setResults(prev => [...prev, ...(data.results || [])]);
+      setNextBefore(data.nextBefore ?? null);
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   // Initial load
@@ -190,6 +205,19 @@ export default function ResultsPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Load more */}
+          {nextBefore && (
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="px-4 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] disabled:opacity-50 transition-colors"
+              >
+                {loadingMore ? 'Loading…' : 'Load more'}
+              </button>
+            </div>
+          )}
 
           {/* Mobile card list */}
           <div className="md:hidden space-y-2">

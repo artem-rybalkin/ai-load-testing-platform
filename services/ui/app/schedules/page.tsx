@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getSchedules, createSchedule, updateSchedule, deleteSchedule, runSchedule, Schedule } from '@/lib/api';
+import { getSchedules, createSchedule, updateSchedule, deleteSchedule, runSchedule, convertCron, Schedule } from '@/lib/api';
 
 const EMPTY_FORM = {
   name: '',
@@ -22,6 +22,9 @@ export default function SchedulesPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [cronPhrase, setCronPhrase] = useState('');
+  const [cronConverting, setCronConverting] = useState(false);
+  const [cronPreview, setCronPreview] = useState('');
 
   const load = async () => {
     try {
@@ -35,6 +38,18 @@ export default function SchedulesPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleConvertCron = async () => {
+    if (!cronPhrase) return;
+    setCronConverting(true);
+    try {
+      const { cron, preview } = await convertCron(cronPhrase);
+      setForm(f => ({ ...f, cron }));
+      setCronPreview(`✓ ${preview}`);
+      setCronPhrase('');
+    } catch (e) { setCronPreview(`Error: ${(e as Error).message}`); }
+    finally { setCronConverting(false); }
+  };
 
   const handleCreate = async () => {
     if (!form.name || !form.target_url || !form.cron) { setError('Name, URL and cron are required'); return; }
@@ -116,6 +131,21 @@ export default function SchedulesPage() {
                 <input type="text" value={form.cron}
                   onChange={e => setForm(f => ({ ...f, cron: e.target.value }))}
                   placeholder="0 * * * *" className={`${inputCls} font-mono`} />
+                {cronPreview && <p className="text-[11px] text-[#1f883d] font-mono mt-1">{cronPreview}</p>}
+                {/* AI-5: natural-language cron assistant */}
+                <div className="flex gap-1 mt-1">
+                  <input
+                    type="text" value={cronPhrase}
+                    onChange={e => setCronPhrase(e.target.value)}
+                    onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); handleConvertCron(); } }}
+                    placeholder="every weekday at 9am…"
+                    className="flex-1 border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] text-[#24292f] placeholder-[#8c959f] focus:outline-none focus:border-[#0969da]"
+                  />
+                  <button type="button" onClick={handleConvertCron} disabled={cronConverting || !cronPhrase}
+                    className="px-2 py-1 text-[11px] font-mono rounded-md border border-[#d0d7de] text-[#0969da] hover:bg-[#ddf4ff] disabled:opacity-50">
+                    {cronConverting ? '⏳' : '✨ Convert'}
+                  </button>
+                </div>
               </div>
             </div>
             <div>

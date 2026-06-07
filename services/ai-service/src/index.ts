@@ -1,3 +1,4 @@
+import './tracing';
 import amqplib from 'amqplib';
 import Fastify from 'fastify';
 
@@ -13,8 +14,48 @@ const MAX_RETRIES        = 3;
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '3');
 
 let queueConnected = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 const app = Fastify({ logger: true });
+
+// ── AI-6: Playwright → k6 translator ─────────────────────────────────────
+app.post<{ Body: { script: string; targetUrl?: string } }>('/translate', async (request, reply) => {
+  const { script, targetUrl } = request.body;
+  if (!script || script.length > 256 * 1024) {
+    return reply.code(400).send({ error: 'script is required and must be under 256 KB' });
+  }
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+
+  const prompt = `You are an expert in both Playwright and k6. Translate the following Playwright test script into a k6 load test script.
+
+Rules:
+- Replace Playwright page.goto/click/fill with k6 http.get/post requests
+- Use k6 check() for assertions on response status
+- Keep the URL structure and request bodies intact
+- Add realistic export const options = { vus: 5, duration: '1m' }
+- Use http.batch() for concurrent requests if the test has parallel operations
+- Replace page.waitFor with sleep() using realistic values
+- Return ONLY the k6 JavaScript code, no markdown fences
+${targetUrl ? `- Primary target URL: ${targetUrl}` : ''}
+
+Playwright script to translate:
+\`\`\`
+${script.slice(0, 8000)}
+\`\`\``;
+
+  try {
+    const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
+    const result = await model.generateContent(prompt);
+    let k6Script = result.response.text().trim();
+    // Strip markdown fences if present
+    k6Script = k6Script.replace(/^```(?:javascript|js)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    return { k6Script };
+  } catch (err) {
+    return reply.code(500).send({ error: (err as Error).message });
+  }
+});
 
 app.get('/health', async (_request, reply) => {
   const healthy = queueConnected;
@@ -37,7 +78,6 @@ const startConsumer = async (): Promise<void> => {
     try {
       log.info({ attempt, maxRetries }, 'Connecting to RabbitMQ');
       connection = await amqplib.connect(url);
-      queueConnected = true;
       break;
     } catch (err) {
       log.error({ attempt, err: (err as Error).message }, 'RabbitMQ connection failed');
@@ -46,7 +86,27 @@ const startConsumer = async (): Promise<void> => {
     }
   }
 
+  connection!.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+  });
+  connection!.on('close', () => {
+    log.warn('RabbitMQ connection closed — scheduling reconnect');
+    queueConnected = false;
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null;
+        try { await startConsumer(); } catch (err) {
+          log.error({ err: (err as Error).message }, 'RabbitMQ reconnect failed');
+        }
+      }, 5000);
+    }
+  });
+
   const channel = await connection!.createChannel();
+  channel.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    queueConnected = false;
+  });
 
   await channel.assertQueue(CONSUME_QUEUE, { durable: true });
   await channel.assertQueue(DLQ,           { durable: true });
@@ -54,6 +114,7 @@ const startConsumer = async (): Promise<void> => {
   await channel.assertQueue(CLIENT_QUEUE,  { durable: true });
 
   channel.prefetch(WORKER_CONCURRENCY);
+  queueConnected = true;
   log.info({ queue: CONSUME_QUEUE, concurrency: WORKER_CONCURRENCY }, 'AI-service listening');
 
   channel.consume(CONSUME_QUEUE, async (msg) => {
@@ -68,7 +129,7 @@ const startConsumer = async (): Promise<void> => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
-      }).catch(() => {});
+      }).catch((err: Error) => log.debug({ testId: test.id, err: err.message }, 'postMessage delivery failed'));
 
     try {
       const targetQueue = (test.type === 'backend' || test.type === 'flow') ? BACKEND_QUEUE : CLIENT_QUEUE;

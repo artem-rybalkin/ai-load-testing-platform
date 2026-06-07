@@ -28,9 +28,9 @@ export function ResultsSocketProvider({ children }: { children: React.ReactNode 
       listenersRef.current.forEach(fn => { try { fn(event); } catch { /* guard against listener errors */ } });
     };
 
-    const base = (import.meta.env.VITE_RESULTS_URL ?? 'http://localhost:3004')
-      .replace(/^http/, 'ws');
-    const url = `${base}/ws`;
+    // Use same-origin WebSocket through the Vite proxy (/data → results-service)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${protocol}//${window.location.host}/data/ws`;
 
     let ws: WebSocket | null = null;
     let delay = 1_000;
@@ -60,7 +60,10 @@ export function ResultsSocketProvider({ children }: { children: React.ReactNode 
     return () => {
       dead = true;
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-      ws?.close();
+      if (ws) {
+        ws.onclose = null; // prevent the reconnect handler from firing on intentional close
+        ws.close();
+      }
     };
   }, []);
 

@@ -20,3 +20,6 @@ playwright-report/
 
 # Claude Code — local settings are personal overrides, never shared
 .claude/settings.local.json
+
+# Rosetta — ephemeral flow-execution state files, not project artifacts
+agents/*-flow-state.md

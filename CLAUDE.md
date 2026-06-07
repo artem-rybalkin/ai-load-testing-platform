@@ -44,7 +44,7 @@ node-cron in results-service → POST /tests (auto-trigger on schedule)
 | worker-backend    | 3002       | k6 runner, metrics parsing, live metrics posting      |
 | worker-client     | 3003       | Puppeteer + Lighthouse, Web Vitals collector          |
 | results-service   | 3004       | PostgreSQL storage, REST API + WebSocket (/ws), analyzer, scheduler |
-| ui                | 3006       | Next.js frontend                                      |
+| ui                | 3006       | Vite + React Router v7 SPA                            |
 | recorder-service  | 3007/6080  | Flow recorder (Puppeteer CDP capture + noVNC viewer)  |
 | postgres          | 5432       | Main database                                         |
 | rabbitmq          | 5672       | Message queue (management UI: 15672)                  |
@@ -53,7 +53,7 @@ node-cron in results-service → POST /tests (auto-trigger on schedule)
 ## Tech Stack
 
 - **Runtime:** Node.js 20 + TypeScript
-- **API Framework:** Fastify + @fastify/cors
+- **API Framework:** Fastify + @fastify/cors + @fastify/cookie v11
 - **Message Queue:** RabbitMQ (amqplib)
 - **Database:** PostgreSQL (pg)
 - **AI:** Google Gemini API (@google/generative-ai), model: gemini-2.5-flash
@@ -142,16 +142,19 @@ ai-load-testing-platform/
     ├── results-service/      # @alt/results-service
     │   └── src/
     │       ├── index.ts      # startup: initDb → consumer → scheduler → cleanup → app
-    │       ├── app.ts        # Fastify REST API (all endpoints)
+    │       ├── app.ts        # Fastify REST API (all endpoints + auth: /auth/login, /auth/logout, /auth/me)
+    │       ├── session.ts    # signSession/verifySession — HMAC-SHA256 HttpOnly cookie sessions
     │       ├── consumer.ts   # RabbitMQ consumer, handleResult, webhook firing
     │       ├── analyzer.ts   # analyzeResult: thresholds + regression detection
-    │       ├── db.ts         # PostgreSQL pool, createSchema (all tables + migrations)
+    │       ├── db.ts         # PostgreSQL pool, createSchema (all tables + migrations), findOrCreateProject
     │       ├── scheduler.ts  # node-cron, startScheduler, triggerSchedule
     │       ├── cleanup.ts    # runStaleCleanup: running>15min / pending>30min → failed
     │       └── logger.ts
     │   └── src/__tests__/
     │       ├── api.test.ts       # all REST endpoints (Testcontainers)
-    │       ├── analyzer.test.ts  # analyzeResult unit tests
+    │       ├── analyzer.test.ts  # analyzeResult unit tests (incl. INP/TBT thresholds)
+    │       ├── auth.test.ts      # POST /auth/login, /logout, GET /auth/me, session middleware (Testcontainers)
+    │       ├── session.test.ts   # signSession/verifySession unit tests
     │       ├── consumer.test.ts  # handleResult pipeline, webhooks, baseline ordering
     │       ├── stale.test.ts     # runStaleCleanup unit tests (Testcontainers)
     │       └── scheduler.test.ts # startScheduler, triggerSchedule (mocked node-cron)
@@ -163,17 +166,24 @@ ai-load-testing-platform/
         │   └── App.tsx       # BrowserRouter + route definitions + RootLayout
         ├── vitest.d.ts       # jest-dom type declarations (/// <reference types>)
         ├── lib/
-        │   └── api.ts        # fetch wrappers for all service endpoints + types (uses import.meta.env.VITE_*)
+        │   ├── api.ts        # fetch wrappers for all service endpoints + types (uses import.meta.env.VITE_*)
+        │   │                 #   also: login(), logout(), getMe() for auth
+        │   └── AuthContext.tsx  # AuthProvider + useAuth hook; SessionUser type; getMe() on mount
         ├── __tests__/
         │   ├── setup.ts      # expect.extend(jest-dom matchers)
         │   ├── ActiveTests.test.tsx
         │   ├── AnalysisPanel.test.tsx
-        │   ├── home.test.tsx
+        │   ├── AuthContext.test.tsx    # AuthProvider + AuthGate unit tests
+        │   ├── home.test.tsx           # form validation + INP/TBT SLO inputs
+        │   ├── LoginPage.test.tsx      # login form + API call behaviour
         │   └── results.test.tsx
         └── app/
             ├── globals.css   # Tailwind 4 CSS-first config; CSS vars for Command Center palette
             ├── layout.tsx    # shell: Sidebar + TopBar + ActiveTests strip + main + BottomNav
             ├── page.tsx      # New Test — 2-col bento: form left, quick-stats panel right
+            │                 #   + INP/TBT SLO threshold inputs for browser type
+            ├── login/
+            │   └── page.tsx  # login form: username + project name → POST /auth/login
             ├── results/
             │   ├── page.tsx              # 2-line table rows (desktop) + card list (mobile)
             │   ├── [testId]/page.tsx     # 12-col bento grid: metric cells + charts + analysis
@@ -189,7 +199,7 @@ ai-load-testing-platform/
                 ├── SystemHealth.tsx  # amber warning strip — polls /system/health every 15s; handles saturated
                 ├── WorkerHealth.tsx  # compact CPU/memory/active-test bars per worker (polls /system/health)
                 ├── BackendChart.tsx  # bar charts: response time distribution + request breakdown
-                ├── ClientChart.tsx   # radar chart for Web Vitals + Lighthouse gauge dials
+                ├── ClientChart.tsx   # radar + Core Web Vitals cards (INP/TBT incl.) + Page Health + Resource Breakdown
                 ├── FlowStepChart.tsx # grouped bar chart: avg+p95 per step (flow results)
                 ├── AnalysisPanel.tsx # perf status badge + threshold violations + regression diffs
                 ├── RealtimeChart.tsx # 3-panel live metrics (response time, error rate, throughput)
@@ -301,6 +311,15 @@ CREATE TABLE test_presets (
   used_count  INTEGER DEFAULT 0,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Auth projects (multi-tenancy) — migration #5
+-- All resource tables carry project_id FK; null = auth disabled (dev mode)
+CREATE TABLE projects (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- project_id added to: test_results, test_scripts, test_presets, schedules, webhooks, log_sources
 ```
 
 ## Shared Types (@alt/shared)
@@ -330,6 +349,7 @@ interface LiveStepMetric { name: string; avgResponseTime: number; rps: number; e
 interface SLOThresholds {
   p95?: number; avg?: number; errorRate?: number; serverErrorRate?: number; timeoutRate?: number
   lcp?: number; fcp?: number; ttfb?: number; cls?: number
+  inp?: number; tbt?: number
 }
 
 interface ErrorBreakdown { success, clientError, serverError, timeout, networkError: number }
@@ -371,8 +391,14 @@ interface BackendMetrics {
 interface WorkerMetrics { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: number }
 interface ServiceHealth { name, status: 'ok'|'degraded'|'saturated'|'unreachable'; checks: Record<string,string>; metrics?: WorkerMetrics }
 
+interface ResourceBreakdown { jsSize, cssSize, imageSize, fontSize, xhrSize, totalSize, requestCount: number }
 interface LighthouseScore { performance, accessibility, bestPractices, seo } // 0-100
-interface ClientMetrics   { type: 'client', lcp, fid, cls, ttfb, fcp, lighthouseScore? }
+interface ClientMetrics {
+  type: 'client'; lcp: number; fid: number; cls: number; ttfb: number; fcp: number
+  inp?: number; tbt?: number; tti?: number
+  jsErrors?: number; longTaskCount?: number; domNodeCount?: number
+  resourceBreakdown?: ResourceBreakdown; lighthouseScore?: LighthouseScore
+}
 
 interface TestScript { id, targetUrl, testType, script, description?, usedCount, createdAt, updatedAt }
 interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics?: LiveStepMetric[] }
@@ -437,6 +463,11 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `GET    /log-sources`      — list all log sources
 - `POST   /log-sources`      — create `{ name, platform?, urlTemplate }` — `urlTemplate` supports `{startedAtMs}`, `{completedAtMs}`, `{startedAtISO}`, `{completedAtISO}`, `{targetUrl}`, `{targetUrlEncoded}`, `{testId}`
 - `DELETE /log-sources/:id`  — delete log source
+
+**Auth (cookie session — requires SESSION_SECRET)**
+- `POST /auth/login`  — `{ username, projectName }` → creates or joins project → sets `alt_session` HttpOnly cookie; returns `{ projectId, username, projectName }`. If SESSION_SECRET empty: returns `{ dev: true }` with no cookie
+- `POST /auth/logout` — clears `alt_session` cookie → `{ success: true }`
+- `GET  /auth/me`     — returns current session payload or `401` if no valid cookie
 
 ## RabbitMQ Queues & Exchanges
 
@@ -531,6 +562,7 @@ FCP < 1800ms, TTFB < 800ms, CLS < 0.1, Lighthouse performance ≥ 50.
 ### Execution Timeouts
 - worker-backend: `K6_MAX_DURATION_MS` (default 600000 = 10 min) → SIGTERM + 30s grace SIGKILL
 - worker-client: `PUPPETEER_MAX_DURATION_MS` (default 300000 = 5 min) → same pattern
+- worker-client: `PUPPETEER_NAV_TIMEOUT_MS` (default 60000 = 1 min) → `page.goto()` navigation timeout; raise for slow/heavy/bot-protected sites
 
 ### Stale Test Cleanup (results-service/cleanup.ts)
 `setInterval` every 60 seconds:
@@ -549,9 +581,27 @@ After `handleResult()` saves a result with non-null `perf_status`:
 - If `secret` is set, sends `X-Webhook-Signature: sha256=<hmac>` header
 - Fired as fire-and-forget (`.catch(() => {})`) — does not block result save
 
+### Extended Browser Metrics (worker-client/src/index.ts)
+
+In addition to Core Web Vitals (LCP, FCP, CLS, TTFB), worker-client now collects:
+
+| Metric | Source | Notes |
+|--------|--------|-------|
+| `inp` | Lighthouse `interaction-to-next-paint` audit (preferred) OR PerformanceObserver `event` type | INP replaced FID as a Core Web Vital (March 2024); threshold: 200ms |
+| `tbt` | Lighthouse `total-blocking-time` audit | threshold: 200ms |
+| `tti` | Lighthouse `interactive` audit | display only, no threshold |
+| `jsErrors` | `page.on('pageerror', ...)` accumulator | count across all sessions |
+| `longTaskCount` | PerformanceObserver `longtask` type with `{buffered: true}` | count per session |
+| `domNodeCount` | Lighthouse `dom-size` audit `numericValue` | count of DOM nodes |
+| `resourceBreakdown` | `performance.getEntriesByType('resource')` grouped by `initiatorType` | sizes in KB per type |
+
+`avgResourceBreakdown()` helper averages across sessions that have resource data, then rounds to 1 decimal place.
+All new fields are optional in `ClientMetrics` — absent when Lighthouse is not run or the metric is unsupported.
+
 ### Lighthouse Integration (worker-client)
 - Runs after Puppeteer sessions, reuses the same Chrome instance via remote debugging port
 - Collects performance, accessibility, best-practices, SEO scores (0–100)
+- Extracts `interaction-to-next-paint`, `total-blocking-time`, `interactive`, `dom-size` audits
 - `performance < 50` → analyzer treats as threshold violation → `perf_status = 'failed'`
 
 ### UI Layout — Command Center Design (Phase 6)
@@ -596,12 +646,13 @@ The UI follows a "Command Center" aesthetic: GitHub-style color palette, collaps
   - **Numeric params:** VUs, sessions, duration (many formats), ramp-up
   - **Load profile:** spike / soak / capacity / load keywords
   - Advanced settings section auto-opens when any numeric param is detected
-- **SLO thresholds:** collapsible section; backend/flow gets p95/avg/errorRate, browser gets LCP/FCP/TTFB/CLS
+- **SLO thresholds:** collapsible section; backend/flow gets p95/avg/errorRate, browser gets LCP/FCP/TTFB/CLS/INP/TBT
 - **Presets:** save/load includes description, URL, VUs, duration, profile, peakVus, thresholds; dropdown is controlled (always resets to placeholder after selection)
 - **Flow runner selector** — below FlowBuilder, a toggle "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" controls `flowRunner` state (`'k6'` | `'browser'`); when `'browser'` is selected `handleSubmit` sends `type: 'client-side'` with `sessions/duration/collectWebVitals` options; auto-set by `applyDescriptionParams` type detection
 
 ### UI Real-time Strategy
 Real-time updates use **WebSocket push** (`ws://localhost:3004/ws`) for the highest-frequency events; low-frequency diagnostics remain as polling.
+WebSocket server: `ws` package with `{ noServer: true }` attached to Fastify's `http.Server` via `server.on('upgrade', ...)`. `@fastify/websocket` not used — incompatible with Fastify v5 (requires `^4.x`).
 
 - **WebSocket** (`useResultsSocket` hook, `services/ui/lib/useResultsSocket.ts`):
   - Result detail page: `test:status` event → update status immediately; `test:live` event → append metric point (replaces 2s polls)
@@ -631,6 +682,7 @@ Real-time updates use **WebSocket push** (`ws://localhost:3004/ws`) for the high
 ### Script Dry-Run Validation
 Before executing any k6 script, `validateScript(scriptPath)` spawns `k6 inspect`.
 On non-zero exit the script is rejected; the message is nacked and retried / DLQ'd.
+k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with metrics), other non-zero = hard failure (reject → DLQ retry).
 
 ### Status Messages & Worker Health (ai-service/index.ts, api-service/index.ts)
 
@@ -660,12 +712,19 @@ On non-zero exit the script is rejected; the message is nacked and retried / DLQ
 - Regression diffs are computed against the baseline, not the previous run
 - UI shows amber "baseline" badge; Set/Clear buttons on result detail page
 
-### Security (Phase 7)
+### Security
 
 **API Key Authentication** (`api-service/src/index.ts`, `results-service/src/app.ts`):
 - `onRequest` hook checks `X-API-Key` header against `API_KEYS` env var (comma-separated list)
 - Returns `401` on missing/invalid key; `/health` and internal `/results/pending` are exempt
 - Empty `API_KEYS` disables auth entirely — safe for local dev, required for cloud
+
+**Cookie Session Authentication** (`results-service/src/session.ts`, `results-service/src/app.ts`):
+- `POST /auth/login { username, projectName }` → `findOrCreateProject(name)` → HMAC-SHA256 sign payload → set `alt_session` cookie (HttpOnly, SameSite=Strict)
+- `SESSION_SECRET` env var controls signing. Empty = auth disabled (no cookie, dev mode)
+- Session middleware (Fastify `onRequest` hook) on all results-service routes except `/health`, `/auth/*`, internal `/results/pending`, `/results/:id/running|fail|message`, `/results/pending`
+- Project isolation: all resource queries filter by `($N::uuid IS NULL OR project_id = $N::uuid)` — null when SESSION_SECRET is empty
+- `signSession` / `verifySession` use `crypto.createHmac` + `timingSafeEqual` (constant-time comparison)
 
 **CORS**: `ALLOWED_ORIGIN` env var replaces hardcoded `*` in both services. Defaults to `*` in dev.
 
@@ -680,9 +739,10 @@ On non-zero exit the script is rejected; the message is nacked and retried / DLQ
 **Deployment checklist:**
 1. Rotate `GEMINI_API_KEY` (never commit `.env`)
 2. Set strong random `API_KEYS` + `API_KEY`
-3. Set `DOMAIN=yourdomain.com` and add DNS A records for `yourdomain.com`, `api.yourdomain.com`, `data.yourdomain.com`
-4. Set `ALLOWED_ORIGIN=https://yourdomain.com`
-5. Run with `docker-compose.prod.yml` — Caddy handles HTTPS automatically
+3. Set `SESSION_SECRET` to a 32+ char random string
+4. Set `DOMAIN=yourdomain.com` and add DNS A records for `yourdomain.com`, `api.yourdomain.com`, `data.yourdomain.com`
+5. Set `ALLOWED_ORIGIN=https://yourdomain.com`
+6. Run with `docker-compose.prod.yml` — Caddy handles HTTPS automatically
 
 **HTTPS via Caddy** (`Caddyfile` + `docker-compose.prod.yml`):
 - Caddy service listens on ports 80/443; auto-provisions TLS via Let's Encrypt
@@ -708,6 +768,7 @@ VITE_RESULTS_URL=http://localhost:3004
 DOMAIN=yourdomain.com         # used by Caddy for TLS + UI env var rewrites
 API_KEYS=key1,key2            # comma-separated; empty string = auth disabled (dev only)
 API_KEY=key1                  # single key passed to UI as VITE_API_KEY
+SESSION_SECRET=change-me-...  # results-service: HMAC-SHA256 cookie signing; empty = auth disabled
 ALLOWED_ORIGIN=https://yourdomain.com  # CORS origin; defaults to * in dev
 
 # Worker tuning (optional, have defaults):
@@ -716,6 +777,7 @@ WORKER_CONCURRENCY=1          # worker-backend (default 1)
 # WORKER_CONCURRENCY=3        # ai-service     (default 3)
 K6_MAX_DURATION_MS=600000     # 10 minutes hard limit per k6 test
 PUPPETEER_MAX_DURATION_MS=300000  # 5 minutes hard limit per Puppeteer test
+PUPPETEER_NAV_TIMEOUT_MS=60000    # page.goto() navigation timeout (default 60s; raise for slow/heavy sites)
 
 # Stale cleanup (results-service):
 STALE_RUNNING_MINUTES=15      # running tests older than this → failed
@@ -755,7 +817,7 @@ docker compose down -v
 # Build shared types (required after any change to packages/shared/src/index.ts)
 npm run build:shared
 
-# Run unit + integration tests (~261 tests)
+# Run unit + integration tests (~430 tests)
 npm test
 
 # Run tests in watch mode
@@ -782,13 +844,14 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~261 tests passing across 14 test files
+**Total:** ~430 tests passing across 18+ test files
 
 ### Unit Tests
 | File | Subject | Tests |
 |------|---------|-------|
 | `worker-backend/src/__tests__/parser.test.ts` | `parseK6Output`, `aggregateWindow` (per-step), `parseK6Errors` (error categorization) | 25 |
-| `results-service/src/__tests__/analyzer.test.ts` | `analyzeResult` thresholds + regression + error breakdown thresholds | 34 |
+| `results-service/src/__tests__/analyzer.test.ts` | `analyzeResult` thresholds + regression + error breakdown + INP/TBT thresholds | 44 |
+| `results-service/src/__tests__/session.test.ts` | `signSession`, `verifySession` (tamper, wrong secret, invalid base64) | 11 |
 | `api-service/src/__tests__/options.test.ts` | `buildK6Options`, `replaceK6Options`, `httpOptions` (http2, discard) | 16 |
 | `api-service/src/__tests__/index.test.ts` | POST /tests routing, parameterization passthrough, cancel, health, sensitive-field redaction | 23 |
 | `results-service/src/__tests__/scheduler.test.ts` | `startScheduler`, `triggerSchedule` (mocked cron) | 12 |
@@ -798,6 +861,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | File | Subject | Tests |
 |------|---------|-------|
 | `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description in result response | 64 |
+| `results-service/src/__tests__/auth.test.ts` | POST /auth/login, /logout, GET /auth/me, session middleware, dev mode | 18 |
 | `results-service/src/__tests__/consumer.test.ts` | `handleResult`, webhook firing, baseline ordering | 11 |
 | `results-service/src/__tests__/stale.test.ts` | `runStaleCleanup` | 10 |
 | `api-service/src/__tests__/scripts.test.ts` | `findExistingScript` + description field + no auto-increment | 9 |
@@ -807,7 +871,9 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 |------|---------|-------|
 | `ui/__tests__/AnalysisPanel.test.tsx` | threshold violations, diff rows, badges | 9 |
 | `ui/__tests__/ActiveTests.test.tsx` | count display, link, WS-triggered refetch | 6 |
-| `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, rerun pre-fill | 11 |
+| `ui/__tests__/AuthContext.test.tsx` | AuthProvider loading/user state, AuthGate redirect/render | 6 |
+| `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, INP/TBT SLO inputs | 14 |
+| `ui/__tests__/LoginPage.test.tsx` | renders inputs, calls login(), setUser+navigate on success, error, disabled during submit | 5 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |
 
 ### Playwright E2E (requires `docker compose up`)
@@ -816,235 +882,6 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `e2e/happy-path.spec.ts` | fill URL → run → poll → completed status |
 | `e2e/cancel.spec.ts` | soak test → cancel button → cancelled status |
 | `e2e/compare.spec.ts` | create 2 tests via API → select both → compare view |
-
-## Current Status
-
-All phases complete:
-
-### Phase 1 — Core Platform
-- ✅ Microservices architecture with RabbitMQ message routing
-- ✅ Gemini AI script generation (backend, client-side, flow prompts)
-- ✅ k6 backend testing with full metrics parsing (avg, p50, p95, p99, rps, error rate, status codes)
-- ✅ Puppeteer client-side testing with Web Vitals (LCP, FID, CLS, TTFB, FCP)
-- ✅ Lighthouse integration (performance / accessibility / best-practices / SEO scores)
-- ✅ Results storage in PostgreSQL with performance analyzer
-- ✅ Load profiles: load / spike / capacity / soak (UI selector + prompt engineering)
-- ✅ Next.js UI: test form, results dashboard, charts, live metrics
-
-### Phase 2 — Reliability & Features
-- ✅ Dead-letter queues + 3-retry policy (`x-retry-count` header across all consumers)
-- ✅ Test cancellation (cancel-fanout exchange, all worker replicas)
-- ✅ Concurrent workers (`WORKER_CONCURRENCY` env var, default per service)
-- ✅ Execution timeouts (k6: 10 min, Puppeteer: 5 min; SIGTERM + SIGKILL)
-- ✅ Stale test cleanup (every 60s; configurable running/pending thresholds)
-- ✅ Baseline management (regression vs baseline instead of previous run)
-- ✅ Configurable SLO thresholds per test request (UI + API)
-- ✅ p50 + status code breakdown in backend metrics
-- ✅ Script dry-run validation (`k6 inspect` before execution)
-- ✅ Manual run comparison (`/results/compare?a=&b=`)
-- ✅ Trend chart per URL (p95 / LCP over time)
-- ✅ Webhooks (fire on failed/degraded; optional HMAC secret)
-- ✅ Deep health checks (503 when DB or RabbitMQ is down)
-- ✅ Docker restart policy (`unless-stopped` on all services)
-- ✅ PostgreSQL indexes (status, url+type+status, test_id on live_metrics)
-- ✅ Structured Pino logging (JSON, testId in every line)
-- ✅ Horizontal worker scaling + cancel fanout exchange
-- ✅ Scheduled tests (node-cron, CRUD API + manual trigger)
-- ✅ Test preset library (save/load including thresholds, profile, ramp-up)
-- ✅ PDF report generation (pdfkit, Download PDF button)
-- ✅ Dev hot-reload (docker-compose.dev.yml + tsx watch + WATCHPACK_POLLING for Windows)
-- ✅ Real-time charts during k6 execution (5s live metric windows)
-
-### Phase 3 — Test Coverage (202 tests)
-- ✅ Unit tests: parser, analyzer, options builder, api-service handler (routing branches)
-- ✅ Integration tests: all REST endpoints (incl. preset target_url regression), consumer pipeline, stale cleanup, scheduler
-- ✅ UI tests: RTL component + page tests (home form, results list, analysis panel, active tests)
-- ✅ Playwright E2E: happy path, cancel flow, compare flow
-- ✅ `vitest.config.ts` env placeholders — `DATABASE_URL`/`RABBITMQ_URL` set so tests never fail on missing env vars
-
-### Phase 4 — Multi-step Flow Testing
-- ✅ `FlowStep` / `StepMetrics` / `LiveStepMetric` types in `@alt/shared`; `'flow'` added to `TestType`
-- ✅ `FLOW_PROMPT` in ai-service: k6 script with `group()` per step + variable chaining
-- ✅ Flow cache key: SHA-256 hash of steps JSON (`flow:<hex16>`) in `test_scripts`
-- ✅ `POST /tests` accepts `steps[]` + `envVars` (credentials passed as k6 `--env`, never stored)
-- ✅ `parseK6GroupMetrics` in worker-backend: per-step avg/p95/requests from k6 JSON group tags
-- ✅ `aggregateWindow` emits per-step live metrics (avg RT, rps, error rate) stored in `live_metrics.step_metrics`
-- ✅ `RealtimeChart` shows one colored line per step across all 3 charts (response time, error rate, throughput)
-- ✅ `FlowStepChart` shows grouped bar chart (avg + p95) for completed flow results
-- ✅ `FlowBuilder` UI: add/remove/reorder steps, method+URL+body+extract editor, env vars panel
-- ✅ HAR import: parse Chrome DevTools HAR → auto-generate `steps[]`, pre-fill builder
-- ✅ Result detail page shows `FlowStepChart` + `StepMetricsTable` when step metrics present
-
-### Phase 5 — UX & Intelligence
-- ✅ Countdown timer + progress bar on result page (requires `started_at` + `duration_seconds`)
-- ✅ Elapsed time X-axis on live charts (vs wall-clock time)
-- ✅ Description-field auto-extraction: parses VUs, duration, ramp-up, profile from natural language
-- ✅ Advanced settings collapsible (load profile, VUs, duration, ramp-up hidden by default)
-- ✅ SLO threshold inputs in UI (collapsible, type-aware: backend vs browser fields)
-- ✅ Preset save/load fully fixed: description, URL, duration, profile, peakVus, thresholds all round-trip
-- ✅ **Semantic script reuse:** Gemini `compareDescriptions()` decides REUSE vs REGENERATE based on description match; `test_scripts.description` stores the generating prompt; legacy rows (null description) always regenerate
-- ✅ Type-aware icons in ActiveTests strip (⚡ backend, 🔗 flow, 🌐 browser)
-- ✅ Status-aware pending/running messages on result detail page
-
-### Phase 9 — Production Readiness
-- ✅ **Caddy HTTPS** (`Caddyfile` + `docker-compose.prod.yml`) — automatic TLS via Let's Encrypt; subdomain routing: `yourdomain.com` → UI, `api.yourdomain.com` → api-service, `data.yourdomain.com` → results-service
-- ✅ **k6 exit code handling** — explicit: `0` = success, `99` = threshold violation (test ran; resolve with metrics), other + no requests = hard failure (reject → DLQ retry)
-- ✅ **SystemHealth dismissal persisted** — `localStorage` keyed by sorted service name list; re-shows automatically when a different/new service goes down
-- ✅ **`started_at` set on k6 spawn** — countdown timer starts from when k6 actually executes, not when the worker receives the message (script validation delay excluded)
-- ✅ **Live metrics immediate fetch** — effect fetches once immediately on mount/status-change then polls every 3s; previously the 3s wait reset on every 2s result poll, causing charts to never appear during the test
-- ✅ **`status_message` cleared on cancel/fail** — stale Gemini retry messages no longer shown after test is cancelled or fails
-- ✅ **Fastify added to worker packages** — `worker-backend` and `worker-client` `package.json` now declare `fastify` as a dependency; Dockerfiles use `--ignore-scripts && npm rebuild esbuild` to avoid parallel build race condition
-
-### Phase 8 — Observability & Resilience
-- ✅ **`status_message` field** on `test_results` — ai-service writes real-time progress (retry count, errors, success) displayed in the pending block
-- ✅ **Worker health servers** — `worker-backend` (port 3002) and `worker-client` (port 3003) now expose `GET /health` via Fastify; checks DB + queue connection
-- ✅ **System health aggregation** — `GET /system/health` on results-service aggregates all 5 service health checks in parallel; used by UI
-- ✅ **SystemHealth UI strip** — amber dismissible banner when any service is down; per-service impact description; polls every 15s
-- ✅ **Worker availability warning** — api-service checks consumer count on target queue after publishing; sets `status_message` if 0 workers running
-- ✅ **DLQ → failed** — ai-service marks test as `failed` immediately when max retries exhausted (no more 30-min stale wait)
-- ✅ **browser test `running` status** — worker-client POSTs to `/results/:testId/running` when it starts processing (sets `started_at`, shows countdown in UI)
-- ✅ **Preset `target_url` bug fixed** — results-service endpoint now accepts `target_url` (snake_case) matching what the UI sends (was silently dropped as camelCase mismatch)
-- ✅ **Preset regression tests** — 7 new tests covering `target_url`, `description`, `options` (including `rampUp`), `thresholds` round-trip
-
-### Phase 7 — Security Hardening
-- ✅ **API key authentication** on api-service + results-service (`X-API-Key` header, `API_KEYS` env var)
-- ✅ **CORS** restricted via `ALLOWED_ORIGIN` env var (default `*` for dev, set domain for prod)
-- ✅ **No hardcoded fallback credentials** — all services fail fast on missing env vars
-- ✅ **envVar injection protection** — k6 `--env` args validated before spawn
-- ✅ **Input validation** — URL format, description length ≤ 500, steps count ≤ 20
-- ✅ **`docker-compose.prod.yml`** — removes all internal port bindings, adds memory/CPU resource limits
-- ✅ **UI auth** — all `fetch()` calls in `api.ts` send `X-API-Key` from `NEXT_PUBLIC_API_KEY`
-- ✅ **Preset `target_url` snake_case bug** — results-service POST `/presets` now correctly reads `target_url` (was silently dropped as `targetUrl` mismatch)
-
-### Phase 6 — UI Redesign (Command Center)
-- ✅ **Command Center design system:** GitHub-palette CSS vars in `globals.css` (Tailwind 4 CSS-first `@theme inline`)
-- ✅ **Collapsible sidebar:** `Sidebar.tsx` — 220px ↔ 48px icon-rail toggle, state in `localStorage`, active item highlighted
-- ✅ **Mobile navigation:** `BottomNav.tsx` (5-tab fixed bottom bar) + `TopBar.tsx` (h-10 sticky header), both `lg:hidden`
-- ✅ **ActiveTests as inline strip:** replaces blue banner with compact `bg-[#ddf4ff]` row; inline font-mono links
-- ✅ **Home page bento:** 2-column layout — form on left, quick-stats panel on right (active tests, recent runs, presets)
-- ✅ **Results list:** 2-line table rows with monospace meta; mobile card list (`md:hidden`)
-- ✅ **Test detail bento grid:** `grid-cols-12` responsive layout; metric cells `col-span-3`, chart+analysis side-by-side, trend full-width
-- ✅ **Chart reskin:** all 5 chart components — horizontal-only grid, `#0969da` primary, monospace axis ticks, plain white tooltip
-- ✅ **Remaining pages:** compare, schedules, presets, webhooks — GitHub-style cards, no shadows, tight `rounded-md`
-- ✅ **29/29 UI tests passing** after updating mocks and component text to match new design
-
-### Phase 10 — Parameterization & Correlation
-- ✅ **`ExtractRule` type** — `FlowStep.extract` changed from `Record<string,string>` to `Record<string, ExtractRule>` with `source: 'jsonpath'|'header'|'cookie'|'regex'` + `expression`
-- ✅ **FlowBuilder extract source selector** — dropdown per extract row with context-sensitive placeholder; backwards-compatible (jsonpath is default)
-- ✅ **Extraction error handling in FLOW_PROMPT** — AI instructed to import `exec` from `k6/execution` and call `exec.test.abort()` when extracted variable is empty; prevents VUs from continuing with missing correlation data
-- ✅ **Header/cookie/regex extraction** — `FLOW_PROMPT` renders each rule explicitly and instructs Gemini on how to implement each source type
-- ✅ **Inline data table (parameterization)** — FlowBuilder "Test data" section with add/remove rows+columns; stored as `testData?: Array<Record<string,string>>` on `TestRequest` — NOT persisted in DB (like envVars)
-- ✅ **CSV file upload** — FlowBuilder CSV upload; base64-encoded in `csvData` on `TestRequest` — NOT persisted in DB
-- ✅ **`SharedArray` generation** — `FLOW_PROMPT` generates `SharedArray` + `open('./data.json')` or `open('./data.csv')` with round-robin VU distribution `data[(__VU-1) % data.length]` when data is provided
-- ✅ **Per-test run directory** — worker-backend switches from flat tmpdir files to `os.tmpdir()/k6-run-{testId}/`; avoids file collisions at `WORKER_CONCURRENCY > 1`; writes `data.json`/`data.csv` alongside script; cleanup via `rm -rf runDir`
-- ✅ **HTTP options** — `BackendTestOptions.httpOptions?: { keepAlive, timeout, http2, discardResponseBodies }`; injected into k6 options via `buildK6Options()`; UI "HTTP Settings" sub-section in Advanced accordion
-- ✅ **Error categorization** — `parseK6StatusCodes` → `parseK6Errors` returning `{ statusCodes, errorBreakdown: { success, clientError, serverError, timeout, networkError } }`; uses k6 `error_code` tags for timeout/network errors
-- ✅ **Error breakdown UI card** — result page shows counts + percentages per error category; raw status codes in collapsible `<details>`
-- ✅ **SLO thresholds for error categories** — `serverErrorRate` and `timeoutRate` in `SLOThresholds`; checked by analyzer; inputs in UI threshold panel
-- ✅ **Load generator health monitoring** — workers expose CPU%, memory MB/%, active/max test count via `/health`; `GET /system/health` passes `metrics` through; `WorkerHealth` component shows compact resource bars per worker; saturated status triggers amber SystemHealth strip
-- ✅ **Generator tests** — new `ai-service/src/__tests__/generator.test.ts` covering `ExtractRule` rendering, parameterization `SharedArray`, `compareDescriptions` verdicts (12 tests)
-
-### Phase 11 — Re-run from Results List
-- ✅ **`script_description` in result response** — `GET /results`, `GET /results/:testId`, `GET /results/compare` now join `s.description AS script_description` from `test_scripts`; `TestResult` interface updated
-- ✅ **Re-run button** — results list desktop table and mobile card both show `↻ Re-run` for completed tests; navigates to `/?rerun=<testId>`
-- ✅ **Home page rerun handling** — `?rerun=<testId>` param triggers `getResult()` fetch on mount; pre-fills `type`, `targetUrl`, `description` (from `script_description`), `duration` (snapped from `duration_seconds`); opens Advanced settings automatically; script reuse happens via the existing 3-way api-service routing (same URL+type → cached script reused, no full AI generation)
-- ✅ **Re-run banner** — dismissible info strip above the form card: `↻ Pre-filled from previous run of <url> — script will be reused`; clears on `✕` click
-- ✅ **`snapDuration` / `DURATION_OPTIONS` promoted to module scope** — moved out of `HomeContent` so the `useEffect` re-run handler can call them without stale-closure issues
-- ✅ **15 new tests** — `results.test.tsx`: Re-run buttons visible for completed; navigates `/?rerun=<id>`; absent for non-completed. `home.test.tsx`: form pre-fills URL+description; banner shown; banner dismisses. `api.test.ts`: `script_description` returned from linked script; `null` when no script linked
-
-### Phase 12 — Non-root Containers
-- ✅ **All 6 Dockerfiles hardened** — every service now runs as the built-in `node` user (UID 1000) from `node:20-alpine`; no new user creation needed
-- ✅ **Pattern applied** — all root-level `RUN` steps (apk installs, npm install, builds) complete first, then `RUN chown -R node:node /app` fixes ownership, followed by `USER node` before `EXPOSE`/`CMD`
-- ✅ **worker-backend** — k6 binary at `/usr/local/bin/k6` is world-executable; per-test run dirs are created in `/tmp` (world-writable); no extra permissions needed
-- ✅ **worker-client** — Chromium runs correctly as non-root; existing `--no-sandbox` / `--disable-setuid-sandbox` Puppeteer launch flags remain valid and are unchanged
-- ✅ **ui** — Vite `dist/` build output is created as root then chowned before `USER node`; `vite preview` serves it without needing write access to the build dir
-
-### Phase 13 — Sensitive Field Protection
-- ✅ **Pino `redact` on all 5 loggers** — every `logger.ts` now configures `redact: { paths: ['envVars', 'testData', 'csvData'], censor: '[REDACTED]' }`; acts as a safety net so accidental `log.info(test, ...)` can never expose credentials or parameterization data in structured logs regardless of nesting
-- ✅ **`POST /tests` response sanitised** — `safeTestResponse()` strips internal/sensitive fields before the HTTP response leaves api-service: `envVars`, `testData`, `csvData`, `csvFilename`, `customScript` (credentials / test data / user scripts), `generatedScript`, `cachedScript`, `cachedScriptDescription` (large internal blobs). `test.id`, `targetUrl`, `type`, `reusedScript`, and other non-sensitive fields are still returned for the UI.
-- ✅ **4 new security tests** — `api-service/src/__tests__/index.test.ts`: `envVars` absent; `testData` absent; `csvData`+`csvFilename` absent; `id`/`targetUrl`/`type` still present
-
-### Phase 14 — Flow Recorder
-- ✅ **New `recorder-service`** (port 3007) — standalone Fastify service; launches non-headless Chromium via `puppeteer-core`; captures all XHR/fetch/navigation requests via CDP `Network.*` domain events; filters out static assets (JS/CSS/images/fonts)
-- ✅ **noVNC browser viewer** (port 6080) — Xvfb virtual display + x11vnc + noVNC proxy; user opens `http://localhost:6080` in their browser to interact with the recording browser inside Docker; non-Docker: `DISPLAY=:0` uses the real screen
-- ✅ **REST API** — `POST /recordings/start` (launches browser, optionally navigates to targetUrl), `GET /recordings/:id` (poll for live step count), `POST /recordings/:id/stop` (stops browser + runs AI correlation), `DELETE /recordings/:id` (abort without returning steps)
-- ✅ **AI correlation detection** (`correlator.ts`) — after recording stops, sends request/response pairs to `gemini-2.5-flash` with a structured prompt; identifies tokens from response N that appear in later requests; maps correlations back to `FlowStep.extract` fields with correct `ExtractSource` + `expression`; best-effort (never blocks the response on AI failure)
-- ✅ **`RecordingSession` + `RecordedRequest` types** added to `@alt/shared`
-- ✅ **"🔴 Record" button** in `FlowBuilder.tsx` — third option alongside existing "Import HAR" + manual steps; HAR import and manual editor unchanged; polling (`GET /recordings/:id` every 1s) shows live captured request count; "⏹ Stop Recording" calls stop endpoint + populates FlowBuilder with returned steps + correlation rules; error banner if recorder-service is unreachable
-- ✅ **`VITE_RECORDER_URL`** added to UI environment (default `http://localhost:3007`); `startRecording`, `stopRecording`, `getRecording` added to `ui/lib/api.ts`
-- ✅ **recorder-service added to `GET /system/health`** aggregation in results-service (shows as unreachable if not running — optional service)
-- ✅ **`RECORDER_URL` env var** in results-service + docker-compose
-- ✅ **Non-root** — recorder Dockerfile follows same `chown -R node:node /app && USER node` pattern; Chromium works as non-root with `--no-sandbox`
-
-### Phase 15 — Bugfixes & Polish
-- ✅ **Flow test re-run steps restored** — `steps JSONB` column added to `test_results`; `POST /results/pending` accepts and stores `steps[]`; api-service passes steps to pending record; `TestResult` interface gains `steps?: FlowStep[]`; home page re-run handler restores steps into FlowBuilder (works for tests run after this fix)
-- ✅ **p99 always populated** — worker-backend spawns k6 with `--summary-trend-stats avg,min,med,max,p(90),p(95),p(99)` flag; `parseK6Output` regex already extracted p99 but k6 default summary omitted it
-- ✅ **RealtimeChart fixed height** — Recharts `<Legend>` removed from all three `<LineChart>` instances (it was expanding `ResponsiveContainer` height as step count grew); replaced with a single external collapsible legend below the three charts: first 4 steps visible, `+ N more…` button expands; chart panel stays at `CHART_H = 160px` regardless of step count
-- ✅ **`status_message` cleared on worker start** — `POST /results/:testId/running` now includes `status_message = NULL` in the UPDATE; stale "Script ready — starting test…" message no longer shown while test is running
-- ✅ **POST /schedules 400 fixed** — results-service endpoint body type changed from camelCase `targetUrl` to snake_case `target_url` to match UI payload
-- ✅ **Flow runner selector** — "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" toggle below FlowBuilder on home page; `flowRunner` state (`'k6' | 'browser'`) is independent of `form.type`; when browser is selected, submit sends `type: 'client-side'` with Puppeteer options + `steps[]`
-- ✅ **Description type auto-detection** — `applyDescriptionParams()` now detects test type: "browser/puppeteer/web vitals/lighthouse/client-side" keywords → `client-side`; "backend/api test/load test/http test/k6/performance test" keywords → `backend`; also flips `flowRunner` for flow tab; ambiguous descriptions leave type unchanged
-- ✅ **recorder-service dev entrypoint fixed** — removed `command: npx tsx watch src/index.ts` override from `docker-compose.dev.yml` for recorder-service; the override bypassed `docker-entrypoint-dev.sh` (which starts Xvfb first), causing `Missing X server or $DISPLAY` crash
-- ✅ **`ERR_CONNECTION_RESET` on first load addressed** — root cause was Docker Desktop Windows filesystem latency (~574ms/op); Turbopack lazy-compiles vendor chunks on first browser request which exceeded browser connection timeout. Temporarily mitigated with named `ui_next_cache` Docker volume (now removed in Phase 21 migration).
-- ✅ **TypeScript strict-mode fixes** — `page.tsx`: `(thresholds as unknown as Record<string, string>)[key]`; `results/[testId]/page.tsx`: `const m = result.metrics as Record<string, any>` to allow nested property access without cascading assertions
-- ~~`COMPOSE_BAKE=true`~~ — **reverted**: Docker Compose Bake has a Windows path bug where it prepends the project root to the `dockerfile:` field a second time, producing an invalid doubled absolute path. Commented out in `.env`; parallel builds work fine without it on Windows.
-
-### Phase 16 — Custom Script & Download
-- ✅ **Custom k6 script upload/paste** — Backend type gets a "Script source" toggle: "🤖 AI Generate" | "📄 Custom Script"; custom mode shows a monospace textarea + "↑ Upload .js" file picker; description field is hidden in custom mode; script validated ≤ 512 KB client-side and server-side; bypasses ai-service and script cache entirely, routes directly to worker-backend queue via `publishTest(test, true)`; switching away from Backend type resets the toggle back to AI Generate
-- ✅ **`customScript` field** added to `TestRequest` / `EnrichedTestRequest` in `@alt/shared`; stripped from `POST /tests` HTTP response by `safeTestResponse()` alongside `envVars`/`csvData`; `POST /tests` body docs updated: `customScript?` field listed
-- ✅ **Download generated script** — "↓ Download .js" button in the Generated Script card header on result detail page; creates a `Blob` URL, triggers an `<a>` click, revokes the URL; filename `script-<testId[:8]>.js`; works for both AI-generated and custom scripts
-
-### Phase 17 — WebSocket Push (replaces UI polling)
-- ✅ **`ws` package** (already a dependency) used for WebSocket server in results-service; `@fastify/websocket` was **not** used — it requires Fastify `^4.x` and is incompatible with Fastify v5. Instead, `WebSocketServer({ noServer: true })` is attached to `fastify.server` (the underlying `http.Server`) via `server.on('upgrade', ...)` — works with any Fastify version. `WS_PORT: 3005` removed from docker-compose.
-- ✅ **`services/results-service/src/ws.ts`** — `WebSocketServer` attached to the HTTP server via the `upgrade` event; module-level `Set<WebSocket>` of connected clients; `setupWebSocketServer(server)` + `broadcast(event)` exports; auto-removes closed/errored sockets; `@types/ws` in devDependencies for types
-- ✅ **Three event types** pushed to all connected UI clients:
-  - `{ type: 'test:status', testId, status, perfStatus }` — emitted from consumer after handleResult, and from `/running`, `/fail`, `/cancel` endpoints
-  - `{ type: 'test:live', testId, point }` — emitted from `POST /results/:testId/live` after INSERT; ships the full metric point so UI doesn't need to refetch
-  - `{ type: 'tests:changed' }` — emitted alongside status events; signals results list and active strip to refetch
-- ✅ **`services/ui/lib/useResultsSocket.ts`** — `'use client'` hook; stable connection (empty `[]` deps); `useRef` for callback so handler changes don't reconnect; exponential backoff (1s→2s→4s…→30s cap); resets delay on successful open
-- ✅ **Result detail page** (`results/[testId]/page.tsx`) — replaced two 2s `setInterval` polls (status + live metrics) with `useResultsSocket`; initial load still fetches once on mount; on `test:status = completed` re-fetches full result from DB to get metrics/analysis
-- ✅ **ActiveTests strip** (`components/ActiveTests.tsx`) — replaced 3s `setInterval` with WS-triggered `getActiveTests()` refetch on `tests:changed` or `test:status` events
-- ✅ **Results list** (`results/page.tsx`) — replaced 5s `setInterval` with WS-triggered `getResults()` refetch on `tests:changed` or `test:status` events
-- ✅ **Caddy-compatible** — Caddy passes WebSocket upgrade headers through automatically; no Caddyfile changes needed; `wss://data.yourdomain.com/ws` works in production
-
-### Phase 18 — Dedicated Analyser Service
-- ✅ **`analyser-service`** (port 3008) — standalone Fastify service; runs both deterministic threshold/regression analysis and Gemini AI insights per test result
-- ✅ **`POST /analyse`** — accepts `{ testId, targetUrl, type, metrics, previousMetrics, thresholds }`; runs deterministic checks first (always), then `generateAiInsights()` (best-effort, 1 retry)
-- ✅ **`GET /health`** — returns `{ status: 'ok', checks: { gemini: 'configured' | 'missing_key' } }`; always healthy (AI is optional)
-- ✅ **Deterministic analysis moved** — `analyser-service/src/analyzer.ts` mirrors results-service `analyzer.ts`; both use shared `AnalysisResult` / `MetricDiff` types from `@alt/shared`
-- ✅ **Gemini AI insights** (`aiInsights.ts`) — structured prompt to `gemini-2.5-flash`; returns `AiInsights { narrative, anomalies[], rootCauses[], recommendations[], severity }`; returns `null` on quota/parse/timeout errors (never throws)
-- ✅ **`AiInsights`, `AnalysisResult`, `MetricDiff` exported from `@alt/shared`** — `TestResult.analysis` now typed as `AnalysisResult` (previously inline type); backwards-compatible since `aiInsights` is optional
-- ✅ **results-service fallback** — `consumer.ts` calls analyser-service with 12s `AbortSignal.timeout`; on any error falls back to local `analyzeResult()` so results are never blocked
-- ✅ **Health aggregation** — `GET /system/health` includes `analyser-service` (shows `unreachable` if not running — optional service)
-- ✅ **`AnalysisPanel.tsx` extended** — collapsible `AiInsightsPanel` below existing threshold/diff sections; shows severity icon, narrative, anomalies, root causes, recommendations; only rendered when `aiInsights` is present
-
-### Phase 19 — External Log Source Links
-- ✅ **`log_sources` table** — `id`, `name`, `platform VARCHAR(30)`, `url_template TEXT`, `created_at`; added to `createSchema` in `db.ts`
-- ✅ **CRUD endpoints** on results-service: `GET /log-sources`, `POST /log-sources` `{ name, platform?, urlTemplate }`, `DELETE /log-sources/:id`
-- ✅ **`interpolateLogSourceUrl(template, result)`** in `ui/lib/api.ts` — pure client-side substitution of 7 template variables (`{startedAtMs}`, `{completedAtMs}`, `{startedAtISO}`, `{completedAtISO}`, `{targetUrl}`, `{targetUrlEncoded}`, `{testId}`) — no server round-trip
-- ✅ **Log Sources section on Integrations page** (`/webhooks`) — second section below Webhooks; name + platform select (Grafana/Datadog/Kibana/Loki/OpenSearch/Custom) + URL template textarea with platform-specific placeholder + collapsible variable reference panel
-- ✅ **"External Logs" card on result detail page** — shown when log sources are configured and `started_at` is non-null (test actually ran); one link-button per source, opens pre-filled URL in new tab; hidden when no sources configured
-
-### Phase 20 — Templates → Presets rename
-- ✅ **DB table** renamed `test_templates` → `test_presets`; safe migration in `createSchema`: `DO $$ BEGIN IF EXISTS ... ALTER TABLE test_templates RENAME TO test_presets; END $$`
-- ✅ **API routes** renamed `/templates` → `/presets`; response keys `template` / `templates` → `preset` / `presets`
-- ✅ **UI page** `app/templates/page.tsx` → `app/presets/page.tsx`; nav (Sidebar, BottomNav, TopBar) updated to `/presets` and "Presets"
-- ✅ **`api.ts`** interface `Template` → `Preset`; all function names `getTemplates/createTemplate/getTemplate/deleteTemplate` → `getPresets/createPreset/getPreset/deletePreset`
-- ✅ **Home page** all state, handlers, and UI strings updated; "Load from template…" → "Load from preset…"; "Save template" → "Save preset"
-- ✅ **Test files** — all TRUNCATE statements, describe blocks, test descriptions, and JSON keys updated
-
-### Phase 21 — Next.js → Vite + React Router migration
-- ✅ **Framework replaced** — Next.js 16 (Turbopack) replaced by Vite 6 + React Router v7; root cause was Docker Desktop Windows filesystem latency (~574ms/op) making Next.js lazy chunk compilation exceed browser connection timeout. See [`docs/vite-migration.md`](docs/vite-migration.md) for full history.
-- ✅ **`src/main.tsx` + `src/App.tsx`** — new Vite entry point and root router/layout replacing `app/layout.tsx`
-- ✅ **`vite.config.ts`** — `@tailwindcss/vite` plugin (replaces postcss.config.mjs), `@vitejs/plugin-react`, `@/` alias, `server.watch.usePolling: true` for Docker Desktop Windows file watching
-- ✅ **React Router v7** — all `next/navigation` hooks replaced: `useRouter` → `useNavigate`, `usePathname` → `useLocation`, `useSearchParams` returns `[params, setter]` tuple; all `next/link` `href=` → `to=`
-- ✅ **`React.lazy` + `<Suspense>`** replaces `next/dynamic` for deferred chart imports in result detail page
-- ✅ **`@fontsource-variable/geist`** replaces `next/font/google` Geist font loading
-- ✅ **`import.meta.env.VITE_*`** replaces all `process.env.NEXT_PUBLIC_*` env vars (including in `ResultsSocketContext.tsx`)
-- ✅ **`ui_node_modules` named volume** replaces old anonymous + `ui_next_cache` volumes; Docker copies image's npm-installed packages into the volume on first use
-- ✅ **`optimizeDeps.include`** pre-bundles react/react-dom/react-router-dom/recharts at startup so no compilation happens on first browser request
-- ✅ **All vitest tests updated** — `next/navigation` and `next/link` mocks replaced with `react-router-dom` mocks
-- ✅ **Zombie port-conflict fix documented** — `[::1]:3006` was squatted by a leftover Node.js process; `Stop-Process -Id <pid>` resolved it; `netstat -ano | findstr :3006` is the diagnostic command
 
 ## Known Issues / Tech Debt
 - Redis is running but not used (planned: caching, rate limiting, pub/sub)

@@ -67,7 +67,7 @@ describe('analyzeResult — backend thresholds', () => {
 
   it('does not include aiInsights (that field is added by the caller)', () => {
     const result = analyzeResult(backend(), null);
-    expect((result as Record<string, unknown>).aiInsights).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>).aiInsights).toBeUndefined();
   });
 });
 

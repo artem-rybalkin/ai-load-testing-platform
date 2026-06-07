@@ -23,7 +23,8 @@ if [ ! -e /tmp/.X11-unix/X99 ]; then
   echo "Warning: Xvfb did not start — recording browser will run headlessly"
 else
   # ── 2. Start x11vnc VNC server ─────────────────────────────────────────────
-  x11vnc -display :99 -nopw -listen 0.0.0.0 -forever -quiet -bg 2>/dev/null || true
+  x11vnc -display :99 -nopw -listen 0.0.0.0 -forever -quiet > /dev/null 2>&1 &
+  sleep 1  # give x11vnc time to bind port 5900 before websockify starts
 
   # ── 3. Start websockify (noVNC WebSocket-to-VNC proxy) ────────────────────
   # Alpine installs noVNC web files to /usr/share/webapps/novnc

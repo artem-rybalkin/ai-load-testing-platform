@@ -1,4 +1,5 @@
 import amqplib from 'amqplib';
+import { createHmac } from 'crypto';
 import { Pool } from 'pg';
 
 import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult } from '@alt/shared';
@@ -9,6 +10,52 @@ import { broadcast } from './ws';
 
 const ANALYSER_URL = process.env.ANALYSER_URL || 'http://analyser-service:3008';
 
+/** Fetch external observability data from configured log sources for this test's time window. */
+const fetchExternalMetricsForTest = async (
+  targetUrl: string,
+  startedAt: string | null,
+  completedAt: string | null,
+  projectId?: string | null,
+): Promise<Array<{ sourceName: string; platform: string | null; data: string }>> => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT name, platform, metrics_endpoint_template, auth_header
+       FROM log_sources WHERE metrics_endpoint_template IS NOT NULL
+         AND ($1::uuid IS NULL OR project_id = $1::uuid)`,
+      [projectId ?? null]
+    );
+    if (rows.length === 0) return [];
+
+    const started   = startedAt   ? new Date(startedAt)   : new Date(Date.now() - 3_600_000);
+    const completed = completedAt ? new Date(completedAt) : new Date();
+
+    const interpolate = (t: string) =>
+      t.replaceAll('{startedAtMs}',  String(started.getTime()))
+       .replaceAll('{completedAtMs}', String(completed.getTime()))
+       .replaceAll('{startedAtS}',   String(Math.floor(started.getTime() / 1000)))
+       .replaceAll('{completedAtS}', String(Math.floor(completed.getTime() / 1000)))
+       .replaceAll('{startedAtISO}', started.toISOString())
+       .replaceAll('{completedAtISO}', completed.toISOString())
+       .replaceAll('{targetUrl}', targetUrl)
+       .replaceAll('{targetUrlEncoded}', encodeURIComponent(targetUrl));
+
+    const results: Array<{ sourceName: string; platform: string | null; data: string }> = [];
+    await Promise.allSettled(
+      rows.map(async (row: { name: string; platform: string | null; metrics_endpoint_template: string; auth_header: string | null }) => {
+        try {
+          const headers: Record<string, string> = { 'Accept': 'application/json' };
+          if (row.auth_header) headers['Authorization'] = row.auth_header;
+          const res = await fetch(interpolate(row.metrics_endpoint_template), { headers, signal: AbortSignal.timeout(5000) });
+          if (!res.ok) return;
+          const text = await res.text();
+          results.push({ sourceName: row.name, platform: row.platform, data: text.slice(0, 3000) });
+        } catch { /* non-fatal */ }
+      })
+    );
+    return results;
+  } catch { return []; }
+};
+
 /** Call analyser-service; returns null on any error so caller falls back to local analysis. */
 const callAnalyserService = async (
   testId: string,
@@ -16,37 +63,125 @@ const callAnalyserService = async (
   type: string,
   metrics: BackendMetrics | ClientMetrics,
   previousMetrics: BackendMetrics | ClientMetrics | null,
-  thresholds: TestResult['thresholds']
+  thresholds: TestResult['thresholds'],
+  startedAt: string | null = null,
+  completedAt: string | null = null,
+  projectId: string | null = null,
 ): Promise<AnalysisResult | null> => {
+  const externalMetrics = await fetchExternalMetricsForTest(targetUrl, startedAt, completedAt, projectId);
   try {
     const res = await fetch(`${ANALYSER_URL}/analyse`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testId, targetUrl, type, metrics, previousMetrics, thresholds: thresholds ?? null }),
+      body: JSON.stringify({ testId, targetUrl, type, metrics, previousMetrics, thresholds: thresholds ?? null, externalMetrics }),
       signal: AbortSignal.timeout(12000),
     });
     if (!res.ok) return null;
-    return await res.json() as AnalysisResult;
+    const body = await res.json() as AnalysisResult & { geminiRateLimited?: boolean };
+    if (body.geminiRateLimited) {
+      // Persist a status_message so /system/ai-status can surface this to the UI
+      fetch(`${process.env.RESULTS_URL || 'http://results-service:3004'}/results/${testId}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Gemini quota exceeded — AI insights unavailable until quota resets (midnight UTC)' }),
+      }).catch(() => {});
+    }
+    const { geminiRateLimited: _, ...analysis } = body;
+    return analysis as AnalysisResult;
   } catch {
     return null;
   }
 };
 
+const buildWebhookPayload = (
+  format: string,
+  result: TestResult,
+  perfStatus: string,
+): { body: string; contentType: string } => {
+  const ts = new Date().toISOString();
+  const icon = perfStatus === 'failed' ? '🔴' : '🟡';
+  const color = perfStatus === 'failed' ? '#cf222e' : '#9a6700';
+
+  if (format === 'slack') {
+    return {
+      contentType: 'application/json',
+      body: JSON.stringify({
+        text: `${icon} Load test *${perfStatus.toUpperCase()}*`,
+        attachments: [{
+          color,
+          fields: [
+            { title: 'URL',    value: result.targetUrl, short: false },
+            { title: 'Status', value: perfStatus,        short: true  },
+            { title: 'Test ID', value: result.testId,   short: true  },
+          ],
+          footer: 'AI Load Testing Platform',
+          ts: Math.floor(Date.now() / 1000),
+        }],
+      }),
+    };
+  }
+
+  if (format === 'pagerduty') {
+    return {
+      contentType: 'application/json',
+      body: JSON.stringify({
+        routing_key: '', // user fills in integration key via webhook URL
+        event_action: perfStatus === 'failed' ? 'trigger' : 'acknowledge',
+        payload: {
+          summary:   `Load test ${perfStatus}: ${result.targetUrl}`,
+          severity:  perfStatus === 'failed' ? 'error' : 'warning',
+          source:    result.targetUrl,
+          timestamp: ts,
+          custom_details: { testId: result.testId, perfStatus },
+        },
+      }),
+    };
+  }
+
+  if (format === 'opsgenie') {
+    return {
+      contentType: 'application/json',
+      body: JSON.stringify({
+        message: `Load test ${perfStatus}: ${result.targetUrl}`,
+        alias:   result.testId,
+        priority: perfStatus === 'failed' ? 'P2' : 'P3',
+        details:  { testId: result.testId, targetUrl: result.targetUrl, perfStatus },
+        source:   'AI Load Testing Platform',
+      }),
+    };
+  }
+
+  // Generic (default)
+  const body = JSON.stringify({ perfStatus, testId: result.testId, targetUrl: result.targetUrl, timestamp: ts });
+  return { body, contentType: 'application/json' };
+};
+
 const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string): Promise<void> => {
   const { rows } = await p.query(
-    `SELECT url, secret FROM webhooks WHERE $1 = ANY(events)`,
+    `SELECT url, secret, format FROM webhooks WHERE $1 = ANY(events)`,
     [perfStatus]
   );
-  await Promise.allSettled(rows.map(({ url, secret }: { url: string; secret: string | null }) =>
-    fetch(url, {
+  const deliveries = rows.map(({ url, secret, format }: { url: string; secret: string | null; format: string | null }) => {
+    const fmt = format ?? 'generic';
+    const { body, contentType } = buildWebhookPayload(fmt, result, perfStatus);
+    const sig = (fmt === 'generic' && secret)
+      ? createHmac('sha256', secret).update(body).digest('hex')
+      : null;
+    return { url, promise: fetch(url, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        ...(secret ? { 'X-Webhook-Secret': secret } : {})
+        'Content-Type': contentType,
+        ...(sig ? { 'X-Webhook-Signature': `sha256=${sig}` } : {}),
       },
-      body: JSON.stringify({ perfStatus, testId: result.testId, targetUrl: result.targetUrl, timestamp: new Date().toISOString() })
-    })
-  ));
+      body,
+    }) };
+  });
+  const results = await Promise.allSettled(deliveries.map(d => d.promise));
+  results.forEach((res, i) => {
+    if (res.status === 'rejected') {
+      log.warn({ url: deliveries[i].url, err: (res.reason as Error).message }, 'Webhook delivery failed');
+    }
+  });
 };
 
 const QUEUE       = 'test-results';
@@ -57,42 +192,46 @@ let consumerConnected = false;
 export const isConsumerConnected = (): boolean => consumerConnected;
 
 export const handleResult = async (p: Pool, result: TestResult): Promise<void> => {
-  const client = await p.connect();
-  let analysis: AnalysisResult | null = null;
+  const projectId = result.projectId ?? null;
 
+  // 1. Fetch previous metrics (read-only — no pg client held during slow analyser call)
+  const { rows: prevRows } = await p.query(
+    `SELECT metrics FROM test_results
+     WHERE target_url = $1
+       AND type = $2
+       AND status = 'completed'
+       AND test_id != $3
+       AND ($4::uuid IS NULL OR project_id = $4::uuid)
+     ORDER BY is_baseline DESC, created_at DESC
+     LIMIT 1`,
+    [result.targetUrl, result.metrics.type, result.testId, projectId]
+  );
+  const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
+
+  // 2. Call analyser-service (up to 12 s) without holding a pg client
+  const analysis: AnalysisResult = await callAnalyserService(
+    result.testId,
+    result.targetUrl,
+    result.metrics.type,
+    result.metrics as BackendMetrics | ClientMetrics,
+    previousMetrics as BackendMetrics | ClientMetrics | null,
+    result.thresholds,
+    result.startedAt ?? null,
+    result.completedAt ?? null,
+    projectId,
+  ) ?? analyzeResult(
+    result.metrics as BackendMetrics | ClientMetrics,
+    previousMetrics as BackendMetrics | ClientMetrics | null,
+    result.thresholds
+  );
+
+  // 3. Persist result in a short-lived transaction
+  const client = await p.connect();
   try {
     await client.query('BEGIN');
-
-    const { rows: prevRows } = await client.query(
-      `SELECT metrics FROM test_results
-       WHERE target_url = $1
-         AND type = $2
-         AND status = 'completed'
-         AND test_id != $3
-       ORDER BY is_baseline DESC, created_at DESC
-       LIMIT 1`,
-      [result.targetUrl, result.metrics.type, result.testId]
-    );
-
-    const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
-
-    // Try analyser-service (deterministic + AI insights); fall back to local if unavailable
-    analysis = await callAnalyserService(
-      result.testId,
-      result.targetUrl,
-      result.metrics.type,
-      result.metrics as BackendMetrics | ClientMetrics,
-      previousMetrics as BackendMetrics | ClientMetrics | null,
-      result.thresholds
-    ) ?? analyzeResult(
-      result.metrics as BackendMetrics | ClientMetrics,
-      previousMetrics as BackendMetrics | ClientMetrics | null,
-      result.thresholds
-    );
-
     await client.query(
-      `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis, script_id, reused_script)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis, script_id, reused_script, project_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (test_id) DO UPDATE SET
          status        = EXCLUDED.status,
          metrics       = EXCLUDED.metrics,
@@ -101,7 +240,8 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
          perf_status   = EXCLUDED.perf_status,
          analysis      = EXCLUDED.analysis,
          script_id     = COALESCE(EXCLUDED.script_id, test_results.script_id),
-         reused_script = COALESCE(EXCLUDED.reused_script, test_results.reused_script)`,
+         reused_script = COALESCE(EXCLUDED.reused_script, test_results.reused_script),
+         project_id    = COALESCE(EXCLUDED.project_id, test_results.project_id)`,
       [
         result.testId,
         result.metrics.type,
@@ -114,9 +254,9 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
         JSON.stringify(analysis),
         result.scriptId ?? null,
         result.reusedScript ?? false,
+        projectId,
       ]
     );
-
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -125,12 +265,12 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
     client.release();
   }
 
-  if (analysis!.perfStatus === 'failed' || analysis!.perfStatus === 'degraded') {
-    fireWebhooks(p, result, analysis!.perfStatus).catch(() => {});
+  if (analysis.perfStatus === 'failed' || analysis.perfStatus === 'degraded') {
+    fireWebhooks(p, result, analysis.perfStatus).catch(() => {});
   }
 
   // Push real-time updates to all connected UI clients
-  broadcast({ type: 'test:status', testId: result.testId, status: result.status, perfStatus: analysis!.perfStatus ?? null });
+  broadcast({ type: 'test:status', testId: result.testId, status: result.status, perfStatus: analysis.perfStatus ?? null });
   broadcast({ type: 'tests:changed' });
 };
 
@@ -167,6 +307,11 @@ export const startConsumer = async (): Promise<void> => {
     const result: TestResult = JSON.parse(msg.content.toString());
     const testLog = log.child({ testId: result.testId });
     testLog.info('Saving result');
+
+    // Tag the active OTel span so traces are searchable by testId in Tempo
+    const { trace } = await import('@opentelemetry/api');
+    const span = trace.getActiveSpan();
+    if (span) { span.setAttribute('test.id', result.testId); span.setAttribute('test.url', result.targetUrl); }
 
     try {
       await handleResult(pool, result);

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getSystemHealth, ServiceHealth } from '@/lib/api';
+import { ServiceHealth } from '@/lib/api';
+import { useHealth } from '@/lib/HealthContext';
 
 const SERVICE_LABELS: Record<string, string> = {
   'results-service': 'Results DB',
@@ -25,31 +26,20 @@ const issueKey = (services: ServiceHealth[]) =>
   services.map(s => s.name).sort().join(',');
 
 export default function SystemHealth() {
-  const [issues, setIssues] = useState<ServiceHealth[]>([]);
+  const { services } = useHealth();
+  const issues = services.filter(s => s.status !== 'ok');
   const [dismissedKey, setDismissedKey] = useState<string>(() => {
     try { return localStorage.getItem(STORAGE_KEY) ?? ''; } catch { return ''; }
   });
 
+  // Auto-clear dismissal when the set of unhealthy services changes
   useEffect(() => {
-    const check = async () => {
-      try {
-        const data = await getSystemHealth();
-        const newIssues = data.services.filter(s => s.status !== 'ok');
-        setIssues(newIssues);
-        // Auto-clear dismissal when the set of unhealthy services changes
-        if (newIssues.length > 0) {
-          const current = issueKey(newIssues);
-          setDismissedKey(prev => {
-            const stored = (() => { try { return localStorage.getItem(STORAGE_KEY) ?? ''; } catch { return ''; } })();
-            return current === stored ? prev : '';
-          });
-        }
-      } catch { /* network error — don't surface */ }
-    };
-    check();
-    const interval = setInterval(check, 15000);
-    return () => clearInterval(interval);
-  }, []);
+    if (issues.length > 0) {
+      const current = issueKey(issues);
+      const stored = (() => { try { return localStorage.getItem(STORAGE_KEY) ?? ''; } catch { return ''; } })();
+      if (current !== stored) setDismissedKey('');
+    }
+  }, [issues.map(s => s.name).sort().join(',')]);
 
   const dismiss = () => {
     const key = issueKey(issues);

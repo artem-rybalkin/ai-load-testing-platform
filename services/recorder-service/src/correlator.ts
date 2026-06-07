@@ -24,40 +24,55 @@ const CORRELATION_PROMPT = (requestSummary: string) => `
 You are an expert in HTTP traffic analysis and load testing.
 Analyze the following HTTP request/response pairs from a recorded user session.
 Identify "correlation points": places where a value from a response body or header
-appears verbatim in a later request (authentication tokens, session IDs, CSRF tokens,
-entity IDs, etc.).
+appears in a later request body or header.
 
-For each correlation found, return an object with:
+KEY PATTERNS TO DETECT:
+1. OAuth/JWT: response body contains "access_token" or "token" → later requests send it as "Authorization: Bearer <value>"
+2. CSRF tokens: response header or body contains a CSRF value → later requests send it as a header or form field
+3. Session IDs: Set-Cookie response header → later requests send it as Cookie
+4. Entity IDs: response body contains an ID → later requests use it in the URL path or body
+5. API keys: response body contains a key → later requests use it in a header
+
+For each correlation found, return:
 - sourceStepIndex: 0-based index of the response that produced the value
-- variableName: a snake_case name for the extracted variable (e.g. "access_token", "csrf_token", "user_id")
-- source: one of "jsonpath" (for JSON body), "header" (response header), "cookie" (Set-Cookie), "regex" (other)
-- expression: the extraction expression (examples: "$.data.token", "X-Auth-Token", "session", "token=([^;]+)")
-- usedInStepIndices: array of 0-based indices of later steps that use this value
+- variableName: snake_case name (e.g. "access_token", "csrf_token", "user_id")
+- source: "jsonpath" (JSON body field), "header" (response header), "cookie" (Set-Cookie), "regex" (other)
+- expression: extraction expression — for jsonpath use "$.fieldName" or "$.nested.field"; for header use the exact header name; for cookie use the cookie name
+- usedInStepIndices: array of 0-based step indices that USE this value (in their requestHeaders or requestBody)
 
-Return ONLY valid JSON with this exact shape:
+IMPORTANT: Check requestHeaders of each step for "Authorization", "X-Auth-Token", etc. to find where tokens are consumed.
+
+Return ONLY valid JSON:
 {"correlations":[...]}
 
-If no correlations are found, return: {"correlations":[]}
+If no correlations found: {"correlations":[]}
 
-HTTP traffic (JSON):
+HTTP traffic:
 ${requestSummary}
 `.trim();
 
 /** Build a compact summary of request/response pairs to send to Gemini */
 function buildSummary(requests: RecordedRequest[]): string {
-  const pairs = requests.slice(0, 15).map((r, i) => ({
+  const pairs = requests.slice(0, 20).map((r, i) => ({
     index: i,
     method: r.method,
     url: r.url,
+    // Include auth-related request headers so Gemini can see tokens being USED
+    requestHeaders: Object.fromEntries(
+      Object.entries(r.headers).filter(([k]) =>
+        /^authorization$|x-auth|x-csrf|x-token|x-api-key/i.test(k)
+      )
+    ),
     requestBody: r.body ? r.body.slice(0, 500) : undefined,
     responseStatus: r.responseStatus,
-    // Only include response headers that commonly carry tokens
+    // Include response headers that commonly carry tokens
     responseHeaders: Object.fromEntries(
       Object.entries(r.responseHeaders).filter(([k]) =>
         /set-cookie|x-auth|authorization|token|location/i.test(k)
       )
     ),
-    responseBody: r.responseBody ? r.responseBody.slice(0, 1000) : undefined,
+    // 2000 chars — JWT access_token values are typically 800-1500 chars
+    responseBody: r.responseBody ? r.responseBody.slice(0, 2000) : undefined,
   }));
   return JSON.stringify(pairs, null, 2);
 }
@@ -84,6 +99,129 @@ function applyCorrelations(steps: FlowStep[], correlations: CorrelationEntry[]):
   return result;
 }
 
+/** Last time the correlator hit a Gemini rate limit — reset when a call succeeds. */
+export let correlatorRateLimited = false;
+
+/** Analyse all captured domains and suggest ignore patterns for next recording. */
+export async function suggestIgnorePatterns(requests: RecordedRequest[]): Promise<string[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || requests.length === 0) return [];
+
+  // Count requests per domain
+  const domainCounts: Record<string, number> = {};
+  for (const r of requests) {
+    try {
+      const host = new URL(r.url).hostname;
+      domainCounts[host] = (domainCounts[host] ?? 0) + 1;
+    } catch { /* skip invalid URLs */ }
+  }
+  const domains = Object.entries(domainCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([host, count]) => ({ host, count }));
+
+  const prompt = `You are an expert in HTTP traffic analysis.
+These domains were captured during a browser recording session. Identify which ones are analytics, tracking, CDN, or background noise that should be ignored in a load test (not the application being tested).
+
+Domains:
+${JSON.stringify(domains, null, 2)}
+
+Return ONLY valid JSON array of domain strings to ignore. Use exact hostnames only, no wildcards, no regexes:
+["domain1.com", "domain2.com", ...]
+
+If all domains are relevant, return: []`;
+
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim();
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    const patterns: unknown[] = JSON.parse(match[0]);
+    return patterns.filter((p): p is string => typeof p === 'string' && p.length > 0);
+  } catch (err) {
+    log.warn({ err }, 'Ignore-pattern suggestion failed');
+    return [];
+  }
+}
+
+export interface DeduplicationSuggestion {
+  indices: number[];          // step indices that are near-duplicates
+  commonPath: string;         // shared endpoint path
+  suggestion: string;         // human-readable merge suggestion
+  paramKey?: string;          // suggested query-param key to parameterise
+}
+
+/** Identify near-duplicate steps (same endpoint, varying query params) and suggest consolidation. */
+export function detectDuplicateSteps(steps: FlowStep[]): DeduplicationSuggestion[] {
+  const pathGroups: Record<string, Array<{ index: number; url: string }>> = {};
+
+  for (let i = 0; i < steps.length; i++) {
+    try {
+      const parsed = new URL(steps[i].url);
+      const pathKey = `${steps[i].method}\x00${parsed.origin}${parsed.pathname}`;
+      if (!pathGroups[pathKey]) pathGroups[pathKey] = [];
+      pathGroups[pathKey].push({ index: i, url: steps[i].url });
+    } catch { /* ignore invalid URLs */ }
+  }
+
+  const suggestions: DeduplicationSuggestion[] = [];
+  for (const [pathKey, group] of Object.entries(pathGroups)) {
+    if (group.length < 2) continue;
+    const [, path] = pathKey.split('\x00');
+    // Find the query param that varies between calls
+    const paramSets = group.map(g => {
+      try { return Object.fromEntries(new URL(g.url).searchParams); } catch { return {}; }
+    });
+    const varyingKeys = Object.keys(paramSets[0] ?? {}).filter(k =>
+      new Set(paramSets.map(p => p[k])).size > 1
+    );
+
+    suggestions.push({
+      indices: group.map(g => g.index),
+      commonPath: path,
+      suggestion: `Steps ${group.map(g => g.index + 1).join(', ')} all call the same endpoint${varyingKeys.length ? ` with different ${varyingKeys.join(', ')} values` : ''}. Consider keeping one step and parameterising it with test data.`,
+      paramKey: varyingKeys[0],
+    });
+  }
+
+  return suggestions;
+}
+
+/** Ask Gemini to replace mechanical step names with human-readable labels. */
+export async function suggestStepNames(steps: FlowStep[]): Promise<FlowStep[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || steps.length === 0) return steps;
+
+  const input = steps.map((s, i) => ({ index: i, method: s.method, url: s.url }));
+  const prompt = `You are an expert in web APIs and load testing.
+Rename these HTTP steps with short, human-readable labels describing what each step does.
+Examples: "Authenticate — get bearer token", "Load homepage", "Search for products", "Add item to cart", "Checkout".
+
+Steps:
+${JSON.stringify(input, null, 2)}
+
+Return ONLY valid JSON array with one name string per step (same order, same count):
+["name for step 0", "name for step 1", ...]`;
+
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim();
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) return steps;
+    const names: string[] = JSON.parse(match[0]);
+    if (!Array.isArray(names) || names.length !== steps.length) return steps;
+    return steps.map((s, i) => ({ ...s, name: names[i] || s.name }));
+  } catch (err) {
+    log.warn({ err }, 'Step naming failed — keeping original names');
+    return steps;
+  }
+}
+
 /** Run AI correlation detection; returns steps enriched with extract rules. */
 export async function detectCorrelations(
   requests: RecordedRequest[],
@@ -102,7 +240,7 @@ export async function detectCorrelations(
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
     const result = await model.generateContent(CORRELATION_PROMPT(summary));
     const text = result.response.text().trim();
 
@@ -119,10 +257,18 @@ export async function detectCorrelations(
     }
 
     const enriched = applyCorrelations(steps, parsed.correlations);
+    correlatorRateLimited = false;
     log.info({ correlationCount: parsed.correlations.length }, 'Correlation detection complete');
     return enriched;
   } catch (err) {
-    log.warn({ err }, 'Correlation detection failed — returning steps without extraction rules');
+    const msg = (err as Error).message ?? '';
+    const status = (err as { status?: number }).status;
+    if (status === 429 || msg.includes('429') || msg.includes('quota')) {
+      correlatorRateLimited = true;
+      log.warn('Gemini rate limited during correlation detection');
+    } else {
+      log.warn({ err }, 'Correlation detection failed — returning steps without extraction rules');
+    }
     return steps;
   }
 }

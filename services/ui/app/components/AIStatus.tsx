@@ -47,16 +47,16 @@ export default function AIStatus() {
     <div className="bg-[#fff8c5] border-b border-[#e3b341] px-4 py-2 flex items-start gap-3">
       <span className="text-[#9a6700] text-[13px] mt-0.5 shrink-0">⚠</span>
       <div className="flex-1 min-w-0">
-        <span className="text-[12px] font-semibold text-[#9a6700]">Gemini API — досягнуто денного ліміту</span>
+        <span className="text-[12px] font-semibold text-[#9a6700]">Gemini API — daily quota exceeded</span>
         <p className="text-[11px] font-mono text-[#9a6700] mt-0.5">
-          Генерація нових скриптів недоступна до скидання квоти (опівніч за UTC).
-          Тести з кешованими скриптами продовжують працювати.
+          AI features (script generation, insights, correlation detection) are unavailable until quota resets at midnight UTC.
+          Tests with cached scripts continue to work normally.
         </p>
       </div>
       <button
         onClick={dismiss}
         className="text-[#9a6700] hover:text-[#7a5100] text-[14px] shrink-0 leading-none"
-        aria-label="Закрити"
+        aria-label="Dismiss"
       >
         ×
       </button>

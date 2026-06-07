@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   getWebhooks, createWebhook, deleteWebhook, Webhook,
   getLogSources, createLogSource, deleteLogSource, LogSource,
+  predictWebhookNoise,
 } from '@/lib/api';
 
 const PLATFORMS = ['Grafana', 'Datadog', 'Kibana', 'Loki', 'OpenSearch', 'Custom'] as const;
@@ -18,9 +19,11 @@ const PLATFORM_PLACEHOLDER: Record<string, string> = {
 };
 
 const TEMPLATE_VARS = [
-  ['{startedAtMs}',      'test start — epoch ms (Grafana, Datadog)'],
-  ['{completedAtMs}',    'test end — epoch ms'],
-  ['{startedAtISO}',     'test start — ISO 8601 (Kibana, OpenSearch)'],
+  ['{startedAtMs}',      'test start — epoch milliseconds (Grafana Explore, Datadog)'],
+  ['{completedAtMs}',    'test end — epoch milliseconds'],
+  ['{startedAtS}',       'test start — epoch seconds (Prometheus query_range API)'],
+  ['{completedAtS}',     'test end — epoch seconds'],
+  ['{startedAtISO}',     'test start — ISO 8601 (Kibana, OpenSearch, Loki API)'],
   ['{completedAtISO}',   'test end — ISO 8601'],
   ['{targetUrl}',        'raw target URL'],
   ['{targetUrlEncoded}', 'URL-encoded target URL'],
@@ -29,12 +32,22 @@ const TEMPLATE_VARS = [
 
 // ── Webhooks section ──────────────────────────────────────────────────────────
 
+const WEBHOOK_FORMATS = [
+  { value: 'generic',   label: 'Generic JSON',  hint: 'Standard JSON payload — works with any HTTP endpoint' },
+  { value: 'slack',     label: 'Slack',          hint: 'Slack Incoming Webhooks — shows coloured attachment' },
+  { value: 'pagerduty', label: 'PagerDuty',      hint: 'PagerDuty Events API v2 — triggers/acknowledges incidents' },
+  { value: 'opsgenie',  label: 'OpsGenie',       hint: 'OpsGenie Alert API — creates alerts with priority' },
+] as const;
+
 function WebhooksSection() {
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<string[]>(['failed', 'degraded']);
+  const [format, setFormat] = useState<string>('generic');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [noiseWarning, setNoiseWarning] = useState<{ level: string; message: string } | null>(null);
+  const [checkingNoise, setCheckingNoise] = useState(false);
 
   const load = async () => {
     try {
@@ -52,8 +65,9 @@ function WebhooksSection() {
     setSaving(true);
     setError('');
     try {
-      await createWebhook(url.trim(), events);
+      await createWebhook(url.trim(), events, format);
       setUrl('');
+      setFormat('generic');
       await load();
     } catch {
       setError('Failed to save webhook');
@@ -62,8 +76,16 @@ function WebhooksSection() {
     }
   };
 
-  const toggleEvent = (e: string) =>
-    setEvents(prev => prev.includes(e) ? prev.filter(x => x !== e) : [...prev, e]);
+  const toggleEvent = async (ev: string) => {
+    const next = events.includes(ev) ? events.filter(x => x !== ev) : [...events, ev];
+    setEvents(next);
+    if (next.length > 0) {
+      setCheckingNoise(true);
+      try { const r = await predictWebhookNoise(next); setNoiseWarning(r.warning ? r : null); }
+      catch { setNoiseWarning(null); }
+      finally { setCheckingNoise(false); }
+    } else { setNoiseWarning(null); }
+  };
 
   return (
     <section>
@@ -95,6 +117,37 @@ function WebhooksSection() {
               </label>
             ))}
           </div>
+          {/* Format selector */}
+          <div>
+            <span className="text-[#57606a] text-[13px] mr-2">Format:</span>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {WEBHOOK_FORMATS.map(f => (
+                <label key={f.value} className="flex items-center gap-1.5 cursor-pointer" title={f.hint}>
+                  <input
+                    type="radio"
+                    name="webhook-format"
+                    value={f.value}
+                    checked={format === f.value}
+                    onChange={() => setFormat(f.value)}
+                    className="text-[#0969da]"
+                  />
+                  <span className="text-[13px] font-mono">{f.label}</span>
+                </label>
+              ))}
+            </div>
+            {format !== 'generic' && (
+              <p className="text-[11px] text-[#57606a] mt-1">
+                {WEBHOOK_FORMATS.find(f => f.value === format)?.hint}
+              </p>
+            )}
+          </div>
+
+          {checkingNoise && <p className="text-[11px] text-[#57606a] font-mono">✨ Checking noise level…</p>}
+          {noiseWarning && (
+            <p className={`text-[12px] font-mono ${noiseWarning.level === 'noisy' ? 'text-[#9a6700]' : 'text-[#57606a]'}`}>
+              {noiseWarning.level === 'noisy' ? '⚠ ' : 'ℹ '}{noiseWarning.message}
+            </p>
+          )}
           {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
         </div>
         <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de]">
@@ -143,6 +196,8 @@ function LogSourcesSection() {
   const [name, setName] = useState('');
   const [platform, setPlatform] = useState<string>('Grafana');
   const [urlTemplate, setUrlTemplate] = useState('');
+  const [metricsEndpointTemplate, setMetricsEndpointTemplate] = useState('');
+  const [authHeader, setAuthHeader] = useState('');
   const [showVars, setShowVars] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -163,9 +218,15 @@ function LogSourcesSection() {
     setSaving(true);
     setError('');
     try {
-      await createLogSource({ name: name.trim(), platform, urlTemplate: urlTemplate.trim() });
+      await createLogSource({
+        name: name.trim(), platform, urlTemplate: urlTemplate.trim(),
+        ...(metricsEndpointTemplate.trim() ? { metricsEndpointTemplate: metricsEndpointTemplate.trim() } : {}),
+        ...(authHeader.trim() ? { authHeader: authHeader.trim() } : {}),
+      });
       setName('');
       setUrlTemplate('');
+      setMetricsEndpointTemplate('');
+      setAuthHeader('');
       await load();
     } catch {
       setError('Failed to save log source');
@@ -231,6 +292,35 @@ function LogSourcesSection() {
                 ))}
               </div>
             )}
+          </div>
+
+          {/* AI Analysis: optional metrics API endpoint */}
+          <div className="pt-2 border-t border-[#eaeef2]">
+            <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
+              Metrics API endpoint <span className="text-[#8c959f] normal-case font-normal tracking-normal">(optional — fetched during AI analysis)</span>
+            </label>
+            <textarea
+              rows={2}
+              value={metricsEndpointTemplate}
+              onChange={e => setMetricsEndpointTemplate(e.target.value)}
+              placeholder={`https://grafana.example.com/api/datasources/proxy/1/api/v1/query_range?query=http_requests_total&start={startedAtMs}&end={completedAtMs}`}
+              className="w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[12px] font-mono bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] placeholder-[#8c959f] resize-none"
+            />
+            <p className="text-[11px] text-[#57606a] mt-0.5">
+              Returns JSON data included in AI Insights and Diagnose prompts. Supports the same template variables as the dashboard URL above.
+            </p>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
+              Auth header <span className="text-[#8c959f] normal-case font-normal tracking-normal">(optional — sent as Authorization header)</span>
+            </label>
+            <input
+              type="password"
+              value={authHeader}
+              onChange={e => setAuthHeader(e.target.value)}
+              placeholder="Bearer eyJhbGci…  or  Api-Key abc123"
+              className="w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[12px] font-mono bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] placeholder-[#8c959f]"
+            />
           </div>
 
           {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}

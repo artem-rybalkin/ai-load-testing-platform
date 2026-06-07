@@ -1,0 +1,66 @@
+# PostgreSQL streaming read replica — optional overlay
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.replica.yml up -d
+#
+# After first start the replica takes a base backup from primary and begins
+# streaming WAL. Allow 30-60 seconds before pointing traffic at it.
+#
+# The results-service will automatically route read-only queries to the replica
+# when READ_DATABASE_URL is set (already wired in docker-compose.yml).
+
+services:
+  postgres-replica:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     alt_user
+      POSTGRES_PASSWORD: alt_password
+      POSTGRES_DB:       alt_db
+      # Standby configuration — streams WAL from primary
+      PGUSER:            alt_user
+      PGPASSWORD:        alt_password
+    command: >
+      sh -c "
+        if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
+          echo 'Taking base backup from primary...'
+          pg_basebackup -h postgres -p 5432 -U alt_user -D /var/lib/postgresql/data -Fp -Xs -P -R
+          echo 'standby_mode = on' >> /var/lib/postgresql/data/postgresql.auto.conf
+          echo 'primary_conninfo = host=postgres port=5432 user=alt_user password=alt_password' >> /var/lib/postgresql/data/postgresql.auto.conf
+        fi
+        exec docker-entrypoint.sh postgres -c hot_standby=on
+      "
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alt_user -d alt_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 90s   # base backup takes time on first start
+
+  # Override primary postgres to enable WAL streaming
+  postgres:
+    command: >
+      postgres
+        -c wal_level=replica
+        -c max_wal_senders=3
+        -c wal_keep_size=64
+        -c hot_standby=on
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-replication.sh:/docker-entrypoint-initdb.d/01-replication.sh:ro
+
+  # Override results-service to point reads at the replica
+  results-service:
+    environment:
+      READ_DATABASE_URL: postgresql://alt_user:alt_password@postgres-replica:5432/alt_db
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+
+volumes:
+  postgres_replica_data:

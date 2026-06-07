@@ -1,26 +1,20 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const RESULTS_URL = import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004';
+import type { ExtractSource, ExtractRule, FlowStep } from '@alt/shared';
+
+export type { ExtractSource, ExtractRule, FlowStep };
+
+// Base paths — all routed through Vite proxy (same-origin, cookies work)
+const API_URL     = '/api';
+const RESULTS_URL = '/data';
+// RECORDER_URL keeps its absolute URL for the opener window
 export const RECORDER_URL = import.meta.env.VITE_RECORDER_URL || 'http://localhost:3007';
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 const authHeaders = (): Record<string, string> =>
   API_KEY ? { 'X-API-Key': API_KEY } : {};
 
-export type ExtractSource = 'jsonpath' | 'header' | 'cookie' | 'regex';
-
-export interface ExtractRule {
-  source: ExtractSource;
-  expression: string;
-}
-
-export interface FlowStep {
-  name: string;
-  url: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  body?: string;
-  headers?: Record<string, string>;
-  extract?: Record<string, ExtractRule>;
-}
+// All fetch calls use credentials: 'include' so the session cookie is sent
+const f = (url: string, init?: RequestInit) =>
+  fetch(url, { ...init, credentials: 'include', headers: { ...authHeaders(), ...(init?.headers ?? {}) } });
 
 export interface TestRequest {
   type: 'backend' | 'client-side' | 'flow';
@@ -67,6 +61,7 @@ export interface TestResult {
   completed_at: string | null;
   created_at: string;
   steps?: FlowStep[];
+  test_data?: Array<Record<string, string>>;
   perf_status?: string;
   status_message?: string | null;
   analysis?: {
@@ -91,26 +86,28 @@ export interface TestResult {
 }
 
 export const createTest = async (data: TestRequest) => {
-  const res = await fetch(`${API_URL}/tests`, {
+  const res = await f(`${API_URL}/tests`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   return res.json();
 };
 
-export const getResults = async (): Promise<{ results: TestResult[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results`, { cache: 'no-store', headers: authHeaders() });
+export const getResults = async (before?: string, limit = 50): Promise<{ results: TestResult[]; nextBefore: string | null }> => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set('before', before);
+  const res = await f(`${RESULTS_URL}/results?${params}`, { cache: 'no-store' });
   return res.json();
 };
 
 export const getResult = async (testId: string): Promise<{ result: TestResult }> => {
-  const res = await fetch(`${RESULTS_URL}/results/${testId}`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/results/${testId}`, { cache: 'no-store' });
   return res.json();
 };
 
 export const getScripts = async () => {
-  const res = await fetch(`${RESULTS_URL}/scripts`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/scripts`, { cache: 'no-store' });
   return res.json();
 };
 export interface ActiveTest {
@@ -122,7 +119,7 @@ export interface ActiveTest {
 }
 
 export const getActiveTests = async (): Promise<{ active: ActiveTest[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results/active`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/results/active`, { cache: 'no-store' });
   return res.json();
 };
 
@@ -136,24 +133,24 @@ export interface LiveMetricPoint {
 }
 
 export const getLiveMetrics = async (testId: string): Promise<{ points: LiveMetricPoint[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results/${testId}/live`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/results/${testId}/live`, { cache: 'no-store' });
   return res.json();
 };
 
 export const cancelTest = async (testId: string): Promise<void> => {
-  await fetch(`${API_URL}/tests/${testId}/cancel`, { method: 'POST', headers: authHeaders() });
+  await f(`${API_URL}/tests/${testId}/cancel`, { method: 'POST' });
 };
 
 export const setBaseline = async (testId: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'POST', headers: authHeaders() });
+  await f(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'POST' });
 };
 
 export const clearBaseline = async (testId: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'DELETE', headers: authHeaders() });
+  await f(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'DELETE' });
 };
 
 export const compareResults = async (a: string, b: string): Promise<{ resultA: TestResult; resultB: TestResult }> => {
-  const res = await fetch(`${RESULTS_URL}/results/compare?a=${a}&b=${b}`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/results/compare?a=${a}&b=${b}`, { cache: 'no-store' });
   return res.json();
 };
 
@@ -166,7 +163,7 @@ export interface TrendPoint {
 }
 
 export const getTrend = async (url: string): Promise<{ url: string; trend: TrendPoint[] }> => {
-  const res = await fetch(`${RESULTS_URL}/results/trend?url=${encodeURIComponent(url)}`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/results/trend?url=${encodeURIComponent(url)}`, { cache: 'no-store' });
   return res.json();
 };
 
@@ -174,25 +171,26 @@ export interface Webhook {
   id: string;
   url: string;
   events: string[];
+  format: 'generic' | 'slack' | 'pagerduty' | 'opsgenie';
   created_at: string;
 }
 
 export const getWebhooks = async (): Promise<{ webhooks: Webhook[] }> => {
-  const res = await fetch(`${RESULTS_URL}/webhooks`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/webhooks`, { cache: 'no-store' });
   return res.json();
 };
 
-export const createWebhook = async (url: string, events?: string[]): Promise<{ webhook: Webhook }> => {
-  const res = await fetch(`${RESULTS_URL}/webhooks`, {
+export const createWebhook = async (url: string, events?: string[], format?: string): Promise<{ webhook: Webhook }> => {
+  const res = await f(`${RESULTS_URL}/webhooks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ url, events })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, events, format })
   });
   return res.json();
 };
 
 export const deleteWebhook = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/webhooks/${id}`, { method: 'DELETE', headers: authHeaders() });
+  await f(`${RESULTS_URL}/webhooks/${id}`, { method: 'DELETE' });
 };
 
 export interface Schedule {
@@ -210,34 +208,34 @@ export interface Schedule {
 }
 
 export const getSchedules = async (): Promise<{ schedules: Schedule[] }> => {
-  const res = await fetch(`${RESULTS_URL}/schedules`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/schedules`, { cache: 'no-store' });
   return res.json();
 };
 
 export const createSchedule = async (data: Omit<Schedule, 'id' | 'last_run_at' | 'created_at'>): Promise<{ schedule: Schedule }> => {
-  const res = await fetch(`${RESULTS_URL}/schedules`, {
+  const res = await f(`${RESULTS_URL}/schedules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return res.json();
 };
 
 export const updateSchedule = async (id: string, data: Partial<Omit<Schedule, 'id' | 'created_at'>>): Promise<{ schedule: Schedule }> => {
-  const res = await fetch(`${RESULTS_URL}/schedules/${id}`, {
+  const res = await f(`${RESULTS_URL}/schedules/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return res.json();
 };
 
 export const deleteSchedule = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/schedules/${id}`, { method: 'DELETE', headers: authHeaders() });
+  await f(`${RESULTS_URL}/schedules/${id}`, { method: 'DELETE' });
 };
 
 export const runSchedule = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/schedules/${id}/run`, { method: 'POST', headers: authHeaders() });
+  await f(`${RESULTS_URL}/schedules/${id}/run`, { method: 'POST' });
 };
 
 export interface Preset {
@@ -253,26 +251,26 @@ export interface Preset {
 }
 
 export const getPresets = async (): Promise<{ presets: Preset[] }> => {
-  const res = await fetch(`${RESULTS_URL}/presets`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/presets`, { cache: 'no-store' });
   return res.json();
 };
 
 export const createPreset = async (data: Omit<Preset, 'id' | 'used_count' | 'created_at'>): Promise<{ preset: Preset }> => {
-  const res = await fetch(`${RESULTS_URL}/presets`, {
+  const res = await f(`${RESULTS_URL}/presets`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return res.json();
 };
 
 export const getPreset = async (id: string): Promise<{ preset: Preset }> => {
-  const res = await fetch(`${RESULTS_URL}/presets/${id}`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/presets/${id}`, { cache: 'no-store' });
   return res.json();
 };
 
 export const deletePreset = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/presets/${id}`, { method: 'DELETE', headers: authHeaders() });
+  await f(`${RESULTS_URL}/presets/${id}`, { method: 'DELETE' });
 };
 
 export interface WorkerMetrics {
@@ -296,7 +294,7 @@ export interface SystemHealth {
 }
 
 export const getSystemHealth = async (): Promise<SystemHealth> => {
-  const res = await fetch(`${RESULTS_URL}/system/health`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/system/health`, { cache: 'no-store' });
   return res.json();
 };
 
@@ -307,7 +305,7 @@ export interface AIStatus {
 }
 
 export const getAIStatus = async (): Promise<AIStatus> => {
-  const res = await fetch(`${RESULTS_URL}/system/ai-status`, { cache: 'no-store' });
+  const res = await f(`${RESULTS_URL}/system/ai-status`, { cache: 'no-store' });
   return res.json();
 };
 
@@ -318,6 +316,8 @@ export interface LogSource {
   name: string;
   platform: string | null;
   url_template: string;
+  metrics_endpoint_template: string | null;
+  auth_header: string | null;
   created_at: string;
 }
 
@@ -343,6 +343,8 @@ export const interpolateLogSourceUrl = (
   return template
     .replaceAll('{startedAtMs}',      String(startedAt.getTime()))
     .replaceAll('{completedAtMs}',    String(completedAt.getTime()))
+    .replaceAll('{startedAtS}',       String(Math.floor(startedAt.getTime() / 1000)))
+    .replaceAll('{completedAtS}',     String(Math.floor(completedAt.getTime() / 1000)))
     .replaceAll('{startedAtISO}',     startedAt.toISOString())
     .replaceAll('{completedAtISO}',   completedAt.toISOString())
     .replaceAll('{targetUrl}',        result.target_url)
@@ -351,21 +353,21 @@ export const interpolateLogSourceUrl = (
 };
 
 export const getLogSources = async (): Promise<{ logSources: LogSource[] }> => {
-  const res = await fetch(`${RESULTS_URL}/log-sources`, { cache: 'no-store', headers: authHeaders() });
+  const res = await f(`${RESULTS_URL}/log-sources`, { cache: 'no-store' });
   return res.json();
 };
 
-export const createLogSource = async (data: { name: string; platform?: string; urlTemplate: string }): Promise<{ logSource: LogSource }> => {
-  const res = await fetch(`${RESULTS_URL}/log-sources`, {
+export const createLogSource = async (data: { name: string; platform?: string; urlTemplate: string; metricsEndpointTemplate?: string; authHeader?: string }): Promise<{ logSource: LogSource }> => {
+  const res = await f(`${RESULTS_URL}/log-sources`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return res.json();
 };
 
 export const deleteLogSource = async (id: string): Promise<void> => {
-  await fetch(`${RESULTS_URL}/log-sources/${id}`, { method: 'DELETE', headers: authHeaders() });
+  await f(`${RESULTS_URL}/log-sources/${id}`, { method: 'DELETE' });
 };
 
 // ── Flow Recording ────────────────────────────────────────────────────────────
@@ -380,23 +382,145 @@ export interface RecordingSession {
 }
 
 export const startRecording = async (targetUrl?: string, ignorePatterns?: string[]): Promise<RecordingSession> => {
-  const res = await fetch(`${RECORDER_URL}/recordings/start`, {
+  const res = await fetch(`/recordings/start`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ targetUrl, ignorePatterns }),
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
   return res.json();
 };
 
 export const stopRecording = async (id: string): Promise<RecordingSession> => {
-  const res = await fetch(`${RECORDER_URL}/recordings/${id}/stop`, { method: 'POST' });
+  const res = await fetch(`/recordings/${id}/stop`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+    signal: AbortSignal.timeout(120_000), // 2 min — AI correlation can be slow
+    credentials: 'include',
+  });
   if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
   return res.json();
 };
 
 export const getRecording = async (id: string): Promise<RecordingSession> => {
-  const res = await fetch(`${RECORDER_URL}/recordings/${id}`, { cache: 'no-store' });
+  const res = await fetch(`/recordings/${id}`, { cache: 'no-store', headers: authHeaders(), credentials: 'include' });
   if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
   return res.json();
 };
+
+// ── AI features ──────────────────────────────────────────────────────────────
+
+export interface ThresholdSuggestion {
+  p95: number;
+  avg: number;
+  errorRate: number;
+  reasoning: string;
+}
+
+export interface ErrorDiagnosis {
+  category: 'serverError' | 'clientError' | 'timeout' | 'networkError';
+  count: number;
+  likelyCause: string;
+  nextStep: string;
+}
+
+export const diagnoseErrors = async (testId: string): Promise<{ diagnoses: ErrorDiagnosis[]; message?: string }> => {
+  const res = await f(`${RESULTS_URL}/results/${testId}/diagnose`, { cache: 'no-store' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+export const predictWebhookNoise = async (events: string[]): Promise<{ level: string; warning: string | null; message: string }> => {
+  const res = await f(`${RESULTS_URL}/ai/webhook-noise`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ events }),
+  });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export const suggestPresetName = async (params: { url: string; type: string; vus?: number; duration?: string; profile?: string; stepCount?: number }): Promise<{ name: string; tags: string[] }> => {
+  const res = await f(`${RESULTS_URL}/ai/preset-name`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export const suggestParamColumns = async (steps: FlowStep[]): Promise<{ columns: string[]; reasoning: string }> => {
+  const res = await f(`${RESULTS_URL}/ai/param-suggestions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ steps: steps.map(s => ({ url: s.url, method: s.method, body: s.body })) }),
+  });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export const translatePlaywright = async (script: string, targetUrl?: string): Promise<{ k6Script: string }> => {
+  const res = await f(`${API_URL}/translate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ script, targetUrl }),
+  });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export const convertCron = async (phrase: string): Promise<{ cron: string; preview: string }> => {
+  const res = await f(`${RESULTS_URL}/ai/cron`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phrase }),
+  });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export interface SettingsSuggestion { vus: number; duration: string; profile: string; reasoning: string }
+export const suggestSettings = async (url: string, type = 'backend'): Promise<SettingsSuggestion> => {
+  const res = await f(`${RESULTS_URL}/results/suggest-settings?url=${encodeURIComponent(url)}&type=${type}`, { cache: 'no-store' });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export const getTrendNarrative = async (trend: Array<{ created_at: string; metrics: Record<string,number>; perf_status?: string }>): Promise<{ narrative: string }> => {
+  const res = await f(`${RESULTS_URL}/ai/trend-narrative`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trend }),
+  });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export const suggestThresholds = async (url: string, type = 'backend'): Promise<{ suggestions: ThresholdSuggestion; runsAnalysed: number }> => {
+  const res = await f(
+    `${RESULTS_URL}/results/suggest-thresholds?url=${encodeURIComponent(url)}&type=${type}`,
+    { cache: 'no-store' }
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+export interface AuthUser { projectId: string; username: string; projectName: string }
+
+export const login = (username: string, projectName: string): Promise<AuthUser> =>
+  f(`${RESULTS_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, projectName }),
+  }).then(r => r.json());
+
+export const logout = (): Promise<void> =>
+  f(`${RESULTS_URL}/auth/logout`, { method: 'POST' }).then(() => undefined);
+
+export const getMe = (): Promise<AuthUser> =>
+  f(`${RESULTS_URL}/auth/me`).then(r => {
+    if (!r.ok) throw new Error('Not authenticated');
+    return r.json();
+  });

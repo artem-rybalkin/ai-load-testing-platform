@@ -12,12 +12,16 @@ interface LighthouseScore {
   seo: number;
 }
 
+interface ResourceBreakdown {
+  jsSize: number; cssSize: number; imageSize: number;
+  fontSize: number; xhrSize: number; totalSize: number; requestCount: number;
+}
+
 interface ClientMetrics {
-  lcp: number;
-  fcp: number;
-  ttfb: number;
-  fid: number;
-  cls: number;
+  lcp: number; fcp: number; ttfb: number; fid: number; cls: number;
+  inp?: number; tbt?: number; tti?: number;
+  jsErrors?: number; longTaskCount?: number; domNodeCount?: number;
+  resourceBreakdown?: ResourceBreakdown;
   lighthouseScore?: LighthouseScore;
 }
 
@@ -26,6 +30,8 @@ const vitalThresholds = {
   fcp:  { good: 1800, poor: 3000 },
   ttfb: { good: 800,  poor: 1800 },
   fid:  { good: 100,  poor: 300  },
+  inp:  { good: 200,  poor: 500  },
+  tbt:  { good: 200,  poor: 600  },
 };
 
 const getVitalStatus = (key: string, value: number): 'good' | 'needs-improvement' | 'poor' => {
@@ -63,6 +69,13 @@ const VitalCard = ({ label, value, unit, metricKey }: {
     </div>
   );
 };
+
+const InfoRow = ({ label, value }: { label: string; value: string | number }) => (
+  <div className="flex items-center justify-between py-1.5 border-b border-[#eaeef2] last:border-0">
+    <span className="text-[11px] text-[#57606a]">{label}</span>
+    <span className="text-[11px] font-mono font-medium text-[#24292f]">{value}</span>
+  </div>
+);
 
 const lhColor = (score: number) =>
   score >= 90 ? '#1f883d' : score >= 50 ? '#9a6700' : '#cf222e';
@@ -103,11 +116,12 @@ const TOOLTIP_STYLE = {
 };
 
 export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
+  // INP is the current Core Web Vital (replaced FID March 2024); include both in radar
   const radarData = [
     { metric: 'LCP',  score: Math.max(0, 100 - (metrics.lcp  / 4000) * 100) },
     { metric: 'FCP',  score: Math.max(0, 100 - (metrics.fcp  / 3000) * 100) },
     { metric: 'TTFB', score: Math.max(0, 100 - (metrics.ttfb / 1800) * 100) },
-    { metric: 'FID',  score: Math.max(0, 100 - (metrics.fid  / 300)  * 100) },
+    { metric: 'INP',  score: metrics.inp != null ? Math.max(0, 100 - (metrics.inp / 500) * 100) : Math.max(0, 100 - (metrics.fid / 300) * 100) },
     { metric: 'CLS',  score: Math.max(0, 100 - (metrics.cls  / 0.25) * 100) },
   ];
   const overallScore = Math.round(radarData.reduce((s, d) => s + d.score, 0) / radarData.length);
@@ -155,14 +169,51 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
         </ResponsiveContainer>
       </div>
 
-      {/* Individual vitals */}
-      <div className="grid grid-cols-2 gap-2">
-        <VitalCard label="LCP"  value={metrics.lcp}  unit="ms" metricKey="lcp" />
-        <VitalCard label="FCP"  value={metrics.fcp}  unit="ms" metricKey="fcp" />
-        <VitalCard label="TTFB" value={metrics.ttfb} unit="ms" metricKey="ttfb" />
-        <VitalCard label="FID"  value={metrics.fid}  unit="ms" metricKey="fid" />
-        <VitalCard label="CLS"  value={metrics.cls}  unit=""   metricKey="cls" />
+      {/* Core Web Vitals */}
+      <div>
+        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">Core Web Vitals</span>
+        <div className="grid grid-cols-2 gap-2">
+          <VitalCard label="LCP"  value={metrics.lcp}  unit="ms" metricKey="lcp" />
+          <VitalCard label="FCP"  value={metrics.fcp}  unit="ms" metricKey="fcp" />
+          <VitalCard label="TTFB" value={metrics.ttfb} unit="ms" metricKey="ttfb" />
+          <VitalCard label="CLS"  value={metrics.cls}  unit=""   metricKey="cls" />
+          {metrics.inp != null && <VitalCard label="INP" value={metrics.inp} unit="ms" metricKey="inp" />}
+          {metrics.tbt != null && <VitalCard label="TBT" value={metrics.tbt} unit="ms" metricKey="tbt" />}
+          {metrics.fid > 0 && <VitalCard label="FID (legacy)" value={metrics.fid} unit="ms" metricKey="fid" />}
+        </div>
       </div>
+
+      {/* Additional timing & page health */}
+      {(metrics.tti != null || metrics.jsErrors != null || metrics.longTaskCount != null || metrics.domNodeCount != null) && (
+        <div>
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">Page Health</span>
+          <div className="bg-[#f6f8fa] border border-[#d0d7de] rounded-md px-3 py-1">
+            {metrics.tti        != null && <InfoRow label="Time to Interactive (TTI)" value={`${Math.round(metrics.tti)} ms`} />}
+            {metrics.longTaskCount != null && <InfoRow label="Long Tasks (>50ms)"        value={metrics.longTaskCount} />}
+            {metrics.jsErrors   != null && <InfoRow label="JS Errors"                  value={metrics.jsErrors} />}
+            {metrics.domNodeCount != null && <InfoRow label="DOM Nodes"                  value={metrics.domNodeCount.toLocaleString()} />}
+          </div>
+        </div>
+      )}
+
+      {/* Resource breakdown */}
+      {metrics.resourceBreakdown && (
+        <div>
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">
+            Resource Breakdown
+            <span className="ml-2 font-normal text-[#8c959f]">
+              {metrics.resourceBreakdown.requestCount} requests · {metrics.resourceBreakdown.totalSize.toFixed(1)} KB total
+            </span>
+          </span>
+          <div className="bg-[#f6f8fa] border border-[#d0d7de] rounded-md px-3 py-1">
+            <InfoRow label="JavaScript"  value={`${metrics.resourceBreakdown.jsSize.toFixed(1)} KB`} />
+            <InfoRow label="CSS"         value={`${metrics.resourceBreakdown.cssSize.toFixed(1)} KB`} />
+            <InfoRow label="Images"      value={`${metrics.resourceBreakdown.imageSize.toFixed(1)} KB`} />
+            <InfoRow label="Fonts"       value={`${metrics.resourceBreakdown.fontSize.toFixed(1)} KB`} />
+            <InfoRow label="XHR / Fetch" value={`${metrics.resourceBreakdown.xhrSize.toFixed(1)} KB`} />
+          </div>
+        </div>
+      )}
 
       {/* Lighthouse */}
       {lh && (

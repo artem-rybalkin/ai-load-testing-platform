@@ -1,5 +1,7 @@
-import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Outlet, Navigate } from 'react-router-dom';
 import { ResultsSocketProvider } from '@/lib/ResultsSocketContext';
+import { HealthProvider } from '@/lib/HealthContext';
+import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import Sidebar from '@/app/components/Sidebar';
 import BottomNav from '@/app/components/BottomNav';
 import TopBar from '@/app/components/TopBar';
@@ -9,13 +11,21 @@ import SystemHealth from '@/app/components/SystemHealth';
 import AIStatus from '@/app/components/AIStatus';
 import { lazy, Suspense } from 'react';
 
-const HomePage        = lazy(() => import('@/app/page'));
-const ResultsPage     = lazy(() => import('@/app/results/page'));
-const ResultDetailPage = lazy(() => import('@/app/results/[testId]/page'));
-const ComparePage     = lazy(() => import('@/app/results/compare/page'));
-const PresetsPage     = lazy(() => import('@/app/presets/page'));
-const SchedulesPage   = lazy(() => import('@/app/schedules/page'));
-const WebhooksPage    = lazy(() => import('@/app/webhooks/page'));
+const HomePage         = lazy(() => import('@/app/page'));
+const ResultsPage      = lazy(() => import('@/app/results/page'));
+const ResultDetailPage = lazy(() => import('@/app/results/testId/page'));
+const ComparePage      = lazy(() => import('@/app/results/compare/page'));
+const PresetsPage      = lazy(() => import('@/app/presets/page'));
+const SchedulesPage    = lazy(() => import('@/app/schedules/page'));
+const WebhooksPage     = lazy(() => import('@/app/webhooks/page'));
+const LoginPage        = lazy(() => import('@/app/login/page'));
+
+function AuthGate() {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  return <Outlet />;
+}
 
 function RootLayout() {
   return (
@@ -33,26 +43,34 @@ function RootLayout() {
           </Suspense>
         </main>
       </div>
+      <BottomNav />
     </div>
   );
 }
 
 export default function App() {
   return (
-    <ResultsSocketProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route element={<RootLayout />}>
-            <Route path="/"                   element={<HomePage />} />
-            <Route path="/results"            element={<ResultsPage />} />
-            <Route path="/results/compare"    element={<ComparePage />} />
-            <Route path="/results/:testId"    element={<ResultDetailPage />} />
-            <Route path="/presets"            element={<PresetsPage />} />
-            <Route path="/schedules"          element={<SchedulesPage />} />
-            <Route path="/webhooks"           element={<WebhooksPage />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </ResultsSocketProvider>
+    <AuthProvider>
+      <ResultsSocketProvider>
+        <HealthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<Suspense fallback={null}><LoginPage /></Suspense>} />
+              <Route element={<AuthGate />}>
+                <Route element={<RootLayout />}>
+                  <Route path="/"                element={<HomePage />} />
+                  <Route path="/results"         element={<ResultsPage />} />
+                  <Route path="/results/compare" element={<ComparePage />} />
+                  <Route path="/results/:testId" element={<ResultDetailPage />} />
+                  <Route path="/presets"         element={<PresetsPage />} />
+                  <Route path="/schedules"       element={<SchedulesPage />} />
+                  <Route path="/webhooks"        element={<WebhooksPage />} />
+                </Route>
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </HealthProvider>
+      </ResultsSocketProvider>
+    </AuthProvider>
   );
 }

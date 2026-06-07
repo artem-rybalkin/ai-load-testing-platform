@@ -1,29 +1,73 @@
-import Fastify from 'fastify';
+import './tracing';
+import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
-import { RecordingSession } from '@alt/shared';
-import { startSession, stopSession, toFlowSteps, compileIgnorePatterns, RecordingSessionInternal } from './recorder';
-import { detectCorrelations } from './correlator';
+import { RecordingSession, FlowStep } from '@alt/shared';
+import { startSession, stopSession, toFlowSteps, computeThinkTimes, compileIgnorePatterns, RecordingSessionInternal } from './recorder';
+import { detectCorrelations, suggestStepNames, suggestIgnorePatterns, detectDuplicateSteps, correlatorRateLimited } from './correlator';
 import { log } from './logger';
 
 const PORT = Number(process.env.PORT) || 3007;
-const NOVNC_URL = process.env.NOVNC_URL || `http://localhost:6080/vnc.html?autoconnect=true`;
+const NOVNC_URL = process.env.NOVNC_URL || `http://localhost:6080/vnc.html?autoconnect=true&resize=scale`;
+
+// RFC-1918 + link-local + loopback + Docker-internal SSRF blocklist
+const BLOCKED_HOSTNAME_RE = /^(localhost|.*\.local|host\.docker\.internal|.*\.internal|metadata\.google\.internal)$/i;
+const PRIVATE_IPV4_RE = /^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|169\.254\.\d+\.\d+)$/;
+
+const validateRecorderUrl = (raw: string): string | null => {
+  let parsed: URL;
+  try { parsed = new URL(raw); } catch { return 'Invalid URL'; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'URL must use http or https';
+  const host = parsed.hostname.toLowerCase();
+  if (BLOCKED_HOSTNAME_RE.test(host)) return 'URL targets a blocked internal hostname';
+  if (PRIVATE_IPV4_RE.test(host)) return 'URL targets a private/internal IP range';
+  return null;
+};
 
 // Active sessions: sessionId → internal state
 const sessions = new Map<string, RecordingSessionInternal>();
 
-const app = Fastify({ logger: false });
+// Completed results kept for 10 min so the UI can retrieve steps after an external stop
+const completedResults = new Map<string, { steps: FlowStep[]; at: number }>();
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [id, r] of completedResults) {
+    if (r.at < cutoff) completedResults.delete(id);
+  }
+}, 5 * 60 * 1000);
 
-(async () => {
+// ── App factory (exported for testing) ───────────────────────────────────────
+
+export async function buildApp(
+  _sessions = sessions,
+  _completed = completedResults,
+): Promise<FastifyInstance> {
+  const app = Fastify({ logger: false });
+
   await app.register(cors, {
     origin: process.env.ALLOWED_ORIGIN || '*',
     methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   });
 
+  // API key auth — exempt /health and /viewer/:id (browser UI page, opened directly)
+  const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+  if (apiKeys.length > 0) {
+    app.addHook('onRequest', async (request, reply) => {
+      if (request.url === '/health' || request.url.startsWith('/viewer/')) return;
+      const key = request.headers['x-api-key'];
+      if (!key || !apiKeys.includes(key as string)) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+      }
+    });
+  }
+
   // ── Health ──────────────────────────────────────────────────────────────────
   app.get('/health', async () => ({
     status: 'ok',
     service: 'recorder-service',
-    checks: { sessions: `${sessions.size} active` },
+    checks: {
+      sessions: `${_sessions.size} active`,
+      gemini: correlatorRateLimited ? 'rate_limited' : 'ok',
+    },
     timestamp: new Date().toISOString(),
   }));
 
@@ -40,10 +84,15 @@ const app = Fastify({ logger: false });
       return reply.code(500).send({ error: 'Failed to launch recording browser — is DISPLAY set or noVNC running?' });
     }
 
-    sessions.set(sessionId, session);
+    _sessions.set(sessionId, session);
 
-    // Navigate to targetUrl immediately if provided
     if (request.body?.targetUrl) {
+      const urlError = validateRecorderUrl(request.body.targetUrl);
+      if (urlError) {
+        await stopSession(session).catch(() => {});
+        _sessions.delete(sessionId);
+        return reply.code(400).send({ error: urlError });
+      }
       try {
         await session.page.goto(request.body.targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
       } catch { /* navigation may fail — user can type the URL manually in the browser */ }
@@ -61,20 +110,33 @@ const app = Fastify({ logger: false });
 
   // ── GET /recordings/:id — polled by UI every second for live step count ─────
   app.get<{ Params: { id: string } }>('/recordings/:id', async (request, reply) => {
-    const session = sessions.get(request.params.id);
-    if (!session) return reply.code(404).send({ error: 'Session not found' });
-    const response: RecordingSession = {
-      id: session.id,
-      status: session.status,
-      noVncUrl: NOVNC_URL,
-      stepCount: session.stepCount,
-    };
-    return response;
+    const session = _sessions.get(request.params.id);
+    if (session) {
+      return {
+        id: session.id,
+        // Normalize internal 'stopping' to 'active' — the UI polls until 'completed'
+        // which only appears once the session moves to the completedResults cache.
+        status: session.status === 'stopping' ? 'active' : session.status,
+        noVncUrl: NOVNC_URL,
+        stepCount: session.stepCount,
+      } as RecordingSession;
+    }
+    const done = _completed.get(request.params.id);
+    if (done) {
+      return {
+        id: request.params.id,
+        status: 'completed',
+        noVncUrl: NOVNC_URL,
+        steps: done.steps,
+        stepCount: done.steps.length,
+      } as RecordingSession;
+    }
+    return reply.code(404).send({ error: 'Session not found' });
   });
 
   // ── POST /recordings/:id/stop ───────────────────────────────────────────────
   app.post<{ Params: { id: string } }>('/recordings/:id/stop', async (request, reply) => {
-    const session = sessions.get(request.params.id);
+    const session = _sessions.get(request.params.id);
     if (!session) return reply.code(404).send({ error: 'Session not found' });
     if (session.status === 'stopping' || session.status === 'completed') {
       return reply.code(409).send({ error: 'Session already stopped' });
@@ -88,27 +150,35 @@ const app = Fastify({ logger: false });
       capturedRequests = [...session.completed];
     }
 
-    // Convert to FlowSteps
     const rawSteps = toFlowSteps(capturedRequests);
+    const thinkTimes = computeThinkTimes(capturedRequests);
+    const correlatedSteps = await detectCorrelations(capturedRequests, rawSteps);
+    const [enrichedSteps, suggestedIgnore] = await Promise.all([
+      suggestStepNames(correlatedSteps),
+      suggestIgnorePatterns(capturedRequests),
+    ]);
+    const duplicates = detectDuplicateSteps(enrichedSteps);
 
-    // AI correlation enrichment (best-effort — never fails the whole response)
-    const enrichedSteps = await detectCorrelations(capturedRequests, rawSteps);
+    _sessions.delete(request.params.id);
+    _completed.set(request.params.id, { steps: enrichedSteps, at: Date.now() });
 
-    sessions.delete(request.params.id);
-
-    const response: RecordingSession = {
+    const response: RecordingSession & { geminiRateLimited?: boolean; suggestedIgnore?: string[]; thinkTimes?: number[]; duplicates?: typeof duplicates } = {
       id: request.params.id,
       status: 'completed',
       noVncUrl: NOVNC_URL,
       steps: enrichedSteps,
       stepCount: enrichedSteps.length,
+      ...(correlatorRateLimited ? { geminiRateLimited: true } : {}),
+      ...(suggestedIgnore.length > 0 ? { suggestedIgnore } : {}),
+      ...(thinkTimes.some(t => t > 500) ? { thinkTimes } : {}),
+      ...(duplicates.length > 0 ? { duplicates } : {}),
     };
 
-    log.info({ sessionId: request.params.id, stepCount: enrichedSteps.length }, 'Recording completed');
+    log.info({ sessionId: request.params.id, stepCount: enrichedSteps.length, correlatorRateLimited }, 'Recording completed');
     return response;
   });
 
-  // ── GET /viewer/:id — wrapper page with noVNC iframe + Stop toolbar ─────────
+  // ── GET /viewer/:id — recording control panel (noVNC opens in its own tab) ───
   app.get<{ Params: { id: string } }>('/viewer/:id', async (request, reply) => {
     const { id } = request.params;
     const html = `<!DOCTYPE html>
@@ -120,76 +190,91 @@ const app = Fastify({ logger: false });
   <title>Recording — ${id.slice(0, 8)}</title>
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-    body{background:#0d1117;display:flex;flex-direction:column;height:100vh;overflow:hidden;
-         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    .bar{display:flex;align-items:center;gap:12px;padding:0 14px;
-         background:#161b22;border-bottom:1px solid #30363d;height:42px;flex-shrink:0}
-    .dot{width:8px;height:8px;border-radius:50%;background:#f85149;
-         animation:blink 1.2s ease-in-out infinite;flex-shrink:0}
+    body{background:#0d1117;display:flex;flex-direction:column;align-items:center;justify-content:center;
+         min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e6edf3;padding:24px}
+    .card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:480px;width:100%}
+    .header{display:flex;align-items:center;gap:10px;margin-bottom:24px}
+    .dot{width:10px;height:10px;border-radius:50%;background:#f85149;flex-shrink:0;
+         animation:blink 1.2s ease-in-out infinite}
     @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
-    .lbl{font-size:12px;font-family:ui-monospace,monospace;color:#e6edf3;font-weight:600}
-    .steps{font-size:11px;font-family:ui-monospace,monospace;color:#8b949e}
-    .gap{flex:1}
-    .msg{font-size:11px;font-family:ui-monospace,monospace;color:#3fb950}
-    .btn{padding:4px 14px;border-radius:6px;border:1px solid #f85149;background:transparent;
-         color:#f85149;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s,color .15s}
-    .btn:hover:not(:disabled){background:#f85149;color:#fff}
-    .btn:disabled{border-color:#30363d;color:#8b949e;cursor:default}
-    .frame-wrap{flex:1;position:relative;overflow:hidden}
-    iframe{position:absolute;inset:0;border:none;width:100%;height:100%}
-    .novnc-wait{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
-                justify-content:center;gap:10px;color:#8b949e;font-family:ui-monospace,monospace;font-size:12px}
-    .novnc-wait .spinner{width:20px;height:20px;border:2px solid #30363d;border-top-color:#8b949e;
-                         border-radius:50%;animation:spin .8s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    .novnc-wait a{color:#0969da;text-decoration:none}
-    .novnc-wait a:hover{text-decoration:underline}
+    h1{font-size:16px;font-weight:600;margin:0}
+    .steps{font-size:12px;font-family:ui-monospace,monospace;color:#8b949e;margin-top:2px}
+    .open-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 16px;
+              border-radius:8px;border:1px solid #388bfd;background:transparent;color:#388bfd;
+              font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;margin-bottom:12px;
+              transition:background .15s,color .15s}
+    .open-btn:hover{background:#388bfd;color:#fff}
+    .hint{font-size:11px;color:#57606a;text-align:center;margin-bottom:20px;line-height:1.6}
+    .hint code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:1px 5px;
+               font-family:ui-monospace,monospace;color:#a5d6ff}
+    hr{border:none;border-top:1px solid #21262d;margin:20px 0}
+    .stop-btn{width:100%;padding:10px 16px;border-radius:8px;border:1px solid #f85149;background:transparent;
+              color:#f85149;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,color .15s}
+    .stop-btn:hover:not(:disabled){background:#f85149;color:#fff}
+    .stop-btn:disabled{border-color:#30363d;color:#8b949e;cursor:default}
+    .msg{font-size:11px;font-family:ui-monospace,monospace;color:#3fb950;text-align:center;margin-top:10px;min-height:16px}
   </style>
 </head>
 <body>
-  <div class="bar">
-    <div class="dot" id="dot"></div>
-    <span class="lbl" id="lbl">Recording…</span>
-    <span class="steps" id="steps"></span>
-    <div class="gap"></div>
-    <span class="msg" id="msg"></span>
-    <button class="btn" id="btn" onclick="doStop()">⏹ Stop Recording</button>
-  </div>
-  <div class="frame-wrap">
-    <div class="novnc-wait" id="wait">
-      <div class="spinner"></div>
-      <span>Connecting to browser…</span>
-      <span style="color:#57606a;font-size:11px">If this takes more than 10 s, <a href="${NOVNC_URL}" target="_blank">open noVNC directly ↗</a></span>
+  <div class="card">
+    <div class="header">
+      <div class="dot" id="dot"></div>
+      <div>
+        <h1 id="lbl">Recording in progress…</h1>
+        <div class="steps" id="steps">0 requests captured</div>
+      </div>
     </div>
-    <iframe id="vnc" src="${NOVNC_URL}" allow="clipboard-read; clipboard-write; autoplay"
-            onload="document.getElementById('wait').style.display='none'"></iframe>
+
+    <a class="open-btn" href="${NOVNC_URL}" target="_blank" rel="noopener" id="open-link">
+      🖥 Open Browser (noVNC) ↗
+    </a>
+    <p class="hint">
+      Navigate your app in the browser tab that opens.<br>
+      Use <code>host.docker.internal</code> instead of <code>localhost</code><br>
+      to reach services on your host machine.
+    </p>
+
+    <hr>
+
+    <button class="stop-btn" id="btn" onclick="doStop()">⏹ Stop Recording &amp; Import Steps</button>
+    <div class="msg" id="msg"></div>
   </div>
   <script>
     var SID='${id}',done=false;
+    window.open('${NOVNC_URL}','_blank','noopener,noreferrer');
     var poll=setInterval(function(){
       fetch('/recordings/'+SID).then(function(r){return r.json();}).then(function(d){
         var el=document.getElementById('steps');
-        if(el)el.textContent=d.stepCount?(d.stepCount+' request'+(d.stepCount===1?'':'s')+' captured'):'';
+        if(el)el.textContent=(d.stepCount||0)+' request'+(d.stepCount===1?'':'s')+' captured';
         if(d.status!=='active'&&!done){done=true;clearInterval(poll);markStopped();}
       }).catch(function(){});
     },1000);
     function doStop(){
       if(done)return;
       var btn=document.getElementById('btn');
-      btn.disabled=true;btn.textContent='Stopping…';
+      btn.disabled=true;btn.textContent='⏳ Processing…';
+      document.getElementById('msg').textContent='Running AI correlation…';
       fetch('/recordings/'+SID+'/stop',{method:'POST'})
-        .then(function(){done=true;clearInterval(poll);markStopped();})
+        .then(function(r){return r.json();})
+        .then(function(result){
+          done=true;clearInterval(poll);
+          if(window.opener&&typeof window.opener.__recordingDone==='function'){
+            window.opener.__recordingDone(result.steps||[]);
+          }
+          markStopped();
+        })
         .catch(function(){
-          btn.disabled=false;btn.textContent='⏹ Stop Recording';
+          btn.disabled=false;btn.textContent='⏹ Stop Recording &amp; Import Steps';
           document.getElementById('msg').textContent='Error — try again';
         });
     }
     function markStopped(){
       var dot=document.getElementById('dot'),lbl=document.getElementById('lbl'),btn=document.getElementById('btn');
-      dot.style.background='#8b949e';dot.style.animation='none';
-      lbl.textContent='Stopped';lbl.style.color='#8b949e';
-      btn.textContent='✓ Stopped';
-      document.getElementById('msg').textContent='Steps captured — you can close this tab';
+      dot.style.background='#3fb950';dot.style.animation='none';
+      lbl.textContent='Recording stopped';lbl.style.color='#3fb950';
+      btn.textContent='✓ Done — you can close this tab';
+      document.getElementById('msg').textContent='Steps will appear in the FlowBuilder automatically.';
+      document.getElementById('open-link').style.display='none';
     }
   </script>
 </body>
@@ -199,14 +284,19 @@ const app = Fastify({ logger: false });
 
   // ── DELETE /recordings/:id — abort a session without returning steps ────────
   app.delete<{ Params: { id: string } }>('/recordings/:id', async (request, reply) => {
-    const session = sessions.get(request.params.id);
+    const session = _sessions.get(request.params.id);
     if (!session) return reply.code(404).send({ error: 'Session not found' });
     try { await stopSession(session); } catch { /* ignore */ }
-    sessions.delete(request.params.id);
+    _sessions.delete(request.params.id);
     return { success: true };
   });
 
-  // ── Start ───────────────────────────────────────────────────────────────────
+  return app;
+}
+
+// ── Startup ───────────────────────────────────────────────────────────────────
+(async () => {
+  const app = await buildApp(sessions, completedResults);
   try {
     await app.listen({ port: PORT, host: '0.0.0.0' });
     log.info({ port: PORT }, 'recorder-service started');

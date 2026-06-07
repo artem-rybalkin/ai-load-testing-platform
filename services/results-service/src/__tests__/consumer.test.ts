@@ -109,7 +109,7 @@ describe('handleResult — analyser-service integration', () => {
     await handleResult(pool, result);
 
     const { rows } = await pool.query(
-      'SELECT analysis FROM test_results WHERE test_id = $1',
+      'SELECT analysis, perf_status FROM test_results WHERE test_id = $1',
       [result.testId]
     );
     // Local analyzeResult produces no diffs (no previous run) and no aiInsights
@@ -326,7 +326,8 @@ describe('handleResult — webhook firing', () => {
     const result = makeResult(); // all metrics fine, no previous → passed
     await handleResult(pool, result);
     await new Promise(resolve => setTimeout(resolve, 50));
-    expect(mockFetch).not.toHaveBeenCalled();
+    // analyser-service IS called (that's expected); only assert the webhook URL was not called
+    expect(mockFetch).not.toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything());
   });
 
   it('does not fire a webhook when its events list does not match the perf_status', async () => {
@@ -334,24 +335,27 @@ describe('handleResult — webhook firing', () => {
     const result = makeResult({ metrics: failedMetrics }); // triggers 'failed'
     await handleResult(pool, result);
     await new Promise(resolve => setTimeout(resolve, 50));
-    expect(mockFetch).not.toHaveBeenCalled();
+    // analyser-service IS called (that's expected); only assert the webhook URL was not called
+    expect(mockFetch).not.toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything());
   });
 
-  it('includes X-Webhook-Secret header when webhook has a secret', async () => {
+  it('includes X-Webhook-Signature header (sha256 HMAC) when webhook has a secret', async () => {
     await insertWebhook(['failed'], 'my-secret-token');
     const result = makeResult({ metrics: failedMetrics });
     await handleResult(pool, result);
     await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()), { timeout: 1000 });
     const callWithSecret = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
-    expect(callWithSecret![1].headers['X-Webhook-Secret']).toBe('my-secret-token');
+    const sig = callWithSecret![1].headers['X-Webhook-Signature'] as string;
+    expect(sig).toBeDefined();
+    expect(sig).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
 
-  it('does not include X-Webhook-Secret header when webhook has no secret', async () => {
+  it('does not include X-Webhook-Signature header when webhook has no secret', async () => {
     await insertWebhook(['failed'], undefined);
     const result = makeResult({ metrics: failedMetrics });
     await handleResult(pool, result);
     await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()), { timeout: 1000 });
     const callWithoutSecret = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
-    expect(callWithoutSecret![1].headers['X-Webhook-Secret']).toBeUndefined();
+    expect(callWithoutSecret![1].headers['X-Webhook-Signature']).toBeUndefined();
   });
 });

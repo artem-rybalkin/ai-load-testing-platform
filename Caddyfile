@@ -18,3 +18,7 @@ api.{$DOMAIN} {
 data.{$DOMAIN} {
     reverse_proxy results-service:3004
 }
+
+recorder.{$DOMAIN} {
+    reverse_proxy recorder-service:3007
+}

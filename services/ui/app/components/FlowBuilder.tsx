@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect } from 'react';
-import { FlowStep, ExtractRule, ExtractSource, RecordingSession, startRecording, stopRecording, getRecording, RECORDER_URL } from '@/lib/api';
+import { FlowStep, ExtractRule, ExtractSource, RecordingSession, startRecording, stopRecording, getRecording, suggestParamColumns, RECORDER_URL } from '@/lib/api';
 
 interface EnvVar { key: string; value: string }
 
@@ -34,22 +34,29 @@ const emptyStep = (): FlowStep => ({
   extract: {},
 });
 
+const STATIC_ASSET_RE = /\.(js|mjs|cjs|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|webp|avif|mp4|mp3|webm|pdf|map|xml|txt|csv)(\?.*)?$/i;
+const STATIC_MIME_RE  = /^(text\/css|application\/javascript|font\/|image\/|audio\/|video\/|application\/pdf)/i;
+
 const parseHar = (raw: string): FlowStep[] => {
   try {
     const har = JSON.parse(raw);
     const entries: unknown[] = har?.log?.entries ?? [];
     return entries
       .filter((e: unknown) => {
-        const entry = e as { request: { url: string; method: string } };
+        const entry = e as {
+          request: { url: string; method: string };
+          response?: { content?: { mimeType?: string } };
+        };
         const { url, method } = entry.request;
-        // keep only XHR-like requests (skip static assets)
+        const mimeType = entry.response?.content?.mimeType ?? '';
         return (
           /^https?:\/\//.test(url) &&
           ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].includes(method.toUpperCase()) &&
-          !url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|webp)(\?.*)?$/i)
+          !STATIC_ASSET_RE.test(url) &&
+          !STATIC_MIME_RE.test(mimeType)
         );
       })
-      .slice(0, 20)
+      .slice(0, 50)
       .map((e: unknown, i: number) => {
         const entry = e as {
           request: {
@@ -88,8 +95,19 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
   // ── Flow Recording state ────────────────────────────────────────────────────
   const [recording, setRecording] = useState<RecordingSession | null>(null);
+  const [recordingLaunching, setRecordingLaunching] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
-  const [ignorePatterns, setIgnorePatterns] = useState<string[]>([]);
+  const [recordingNote, setRecordingNote] = useState<string | null>(null);
+  const [suggestedIgnore, setSuggestedIgnore] = useState<string[]>([]);
+  const [thinkTimes, setThinkTimes] = useState<number[]>([]);
+  const [duplicates, setDuplicates] = useState<Array<{ indices: number[]; suggestion: string }>>([]);
+  const IGNORE_STORAGE_KEY = 'recorderIgnorePatterns';
+  const [ignorePatterns, setIgnorePatterns] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem(IGNORE_STORAGE_KEY);
+      return stored ? (JSON.parse(stored) as string[]) : [];
+    } catch { return []; }
+  });
   const [ignoreInput, setIgnoreInput] = useState('');
   const [showIgnore, setShowIgnore] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -103,23 +121,86 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     pollRef.current = setInterval(async () => {
       try {
         const data = await getRecording(recording.id);
-        setRecording(prev => prev ? { ...prev, stepCount: data.stepCount, status: data.status } : data);
-      } catch { /* recorder may be temporarily unreachable — keep polling */ }
+        if (data.status === 'completed' || data.status === 'error') {
+          // Session ended externally (stopped from noVNC toolbar) — import steps and clear state
+          if (data.steps && data.steps.length > 0) onChange(data.steps);
+          setRecording(null);
+        } else {
+          setRecording(prev => prev ? {
+            ...prev,
+            stepCount: data.stepCount,
+            // Don't propagate server-side 'stopping' into local state — it would stop the poll.
+            // Only handleStopRecording (triggered by user) should set local status to 'stopping'.
+            status: data.status === 'stopping' ? prev.status : data.status,
+          } : data);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.includes('404')) {
+          // Session expired from cache (>10 min) — just clear the stale UI state
+          setRecording(null);
+        }
+        // Other errors (network hiccup): keep polling silently
+      }
     }, 1000);
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [recording?.id, recording?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // When the user switches back to this tab from the viewer, immediately check
+  // for completion — the 1s interval is throttled in background tabs and
+  // window.opener is null for cross-origin tabs (port 3006 → 3007).
+  const recordingRef = useRef(recording);
+  recordingRef.current = recording;
+  useEffect(() => {
+    const onVisible = async () => {
+      if (document.hidden) return;
+      const rec = recordingRef.current;
+      if (!rec || rec.status !== 'active') return;
+      try {
+        const data = await getRecording(rec.id);
+        if (data.status === 'completed' || data.status === 'error') {
+          if (data.steps && data.steps.length > 0) onChange(data.steps);
+          setRecording(null);
+        } else {
+          setRecording(prev => prev ? {
+            ...prev,
+            stepCount: data.stepCount,
+            status: data.status === 'stopping' ? prev.status : data.status,
+          } : data);
+        }
+      } catch { /* ignore */ }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleStartRecording = async () => {
     setRecordingError(null);
+    setRecordingLaunching(true);
     try {
       const session = await startRecording(steps[0]?.url, ignorePatterns.length ? ignorePatterns : undefined);
       setRecording(session);
-      // Open the recorder viewer (noVNC + Stop toolbar) in a new tab
-      window.open(`${RECORDER_URL}/viewer/${session.id}`, '_blank', 'noopener,noreferrer');
+      // Register a callback so the viewer tab can push steps back directly via window.opener
+      (window as any).__recordingDone = (steps: import('@/lib/api').FlowStep[]) => {
+        if (steps && steps.length > 0) onChange(steps);
+        setRecording(null);
+        delete (window as any).__recordingDone;
+      };
+      // Open the viewer via the Vite proxy (/viewer proxied to localhost:3007).
+      // Same-origin (both localhost:3006) so window.opener.__recordingDone() works.
+      window.open(`/viewer/${session.id}`, '_blank');
     } catch (err) {
       setRecordingError(err instanceof Error ? err.message : 'Failed to start recording — is recorder-service running?');
+    } finally {
+      setRecordingLaunching(false);
     }
   };
+
+  // Persist ignore patterns to localStorage whenever they change
+  useEffect(() => {
+    try { localStorage.setItem(IGNORE_STORAGE_KEY, JSON.stringify(ignorePatterns)); }
+    catch { /* private browsing or storage full */ }
+  }, [ignorePatterns]);
 
   const addIgnorePattern = () => {
     const v = ignoreInput.trim();
@@ -135,14 +216,45 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     setRecording(prev => prev ? { ...prev, status: 'stopping' } : prev);
     try {
-      const result = await stopRecording(recording.id);
+      const captured = recording.stepCount ?? 0;
+      const result = await stopRecording(recording.id) as RecordingSession & { geminiRateLimited?: boolean; suggestedIgnore?: string[]; thinkTimes?: number[]; duplicates?: Array<{ indices: number[]; suggestion: string }> };
+      if (result.suggestedIgnore && result.suggestedIgnore.length > 0) {
+        setSuggestedIgnore(result.suggestedIgnore);
+      }
+      if (result.thinkTimes && result.thinkTimes.length > 0) {
+        setThinkTimes(result.thinkTimes);
+      }
+      if (result.duplicates && result.duplicates.length > 0) {
+        setDuplicates(result.duplicates);
+      }
       if (result.steps && result.steps.length > 0) {
         onChange(result.steps);
+        if (result.geminiRateLimited) {
+          setRecordingNote(
+            'Gemini quota exceeded — correlation detection skipped. Extract variables were not auto-detected. ' +
+            'Add them manually or retry after midnight UTC when the quota resets.'
+          );
+        } else if (captured > result.steps.length) {
+          setRecordingNote(
+            `${result.steps.length} of ${captured} captured requests imported (max 50). ` +
+            `Use the 🚫 Ignore list to filter analytics/background requests before recording.`
+          );
+        }
       }
       setRecording(null);
     } catch (err) {
-      setRecordingError(err instanceof Error ? err.message : 'Failed to stop recording');
-      setRecording(prev => prev ? { ...prev, status: 'active' } : prev); // revert status
+      const msg = err instanceof Error ? err.message : '';
+      const isTimeout = err instanceof Error && (err.name === 'TimeoutError' || msg.includes('timed out'));
+      if (msg.includes('404') || msg.includes('not found')) {
+        // Session already ended (stopped from noVNC toolbar) — just clear state
+        setRecording(null);
+      } else if (isTimeout) {
+        // Server is still running AI correlation — revert to active so poll can detect completion
+        setRecording(prev => prev ? { ...prev, status: 'active' } : prev);
+      } else {
+        setRecordingError(msg || 'Failed to stop recording');
+        setRecording(prev => prev ? { ...prev, status: 'active' } : prev);
+      }
     }
   };
 
@@ -187,9 +299,22 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     if (!file) return;
     const reader = new FileReader();
     reader.onload = ev => {
-      const parsed = parseHar(ev.target?.result as string);
-      if (parsed.length > 0) onChange(parsed);
-      else alert('No XHR requests found in HAR file. Make sure to export a network recording.');
+      const raw = ev.target?.result as string;
+      const parsed = parseHar(raw);
+      if (parsed.length > 0) {
+        onChange(parsed);
+        // Show note if entries were filtered (count all HAR entries vs imported)
+        try {
+          const total = (JSON.parse(raw)?.log?.entries ?? []).length;
+          if (total > parsed.length) {
+            setRecordingNote(
+              `${parsed.length} of ${total} HAR entries imported — static assets (JS, CSS, images, fonts, media) were filtered out.`
+            );
+          }
+        } catch { /* ignore */ }
+      } else {
+        alert('No XHR/API requests found in HAR file. Make sure to export a network recording that includes API calls.');
+      }
     };
     reader.readAsText(file);
     if (fileRef.current) fileRef.current.value = '';
@@ -257,7 +382,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
         <button
           type="button"
           onClick={recording ? handleStopRecording : handleStartRecording}
-          disabled={recording?.status === 'stopping'}
+          disabled={recording?.status === 'stopping' || recordingLaunching}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors font-mono ${
             recording && recording.status !== 'stopping'
               ? 'bg-[#cf222e] border-[#cf222e] text-white hover:bg-[#a0151a]'
@@ -266,12 +391,26 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 : 'border-[#d0d7de] text-[#24292f] hover:bg-[#f3f4f6]'
           }`}
         >
-          {recording?.status === 'stopping'
-            ? '⏳ Processing…'
-            : recording
-              ? `⏹ Stop Recording (${recording.stepCount ?? 0})`
-              : '🔴 Record'}
+          {recordingLaunching
+            ? '⏳ Launching…'
+            : recording?.status === 'stopping'
+              ? '⏳ Processing…'
+              : recording
+                ? `⏹ Stop Recording (${recording.stepCount ?? 0})`
+                : '🔴 Record'}
         </button>
+
+        {/* Escape hatch — shown when stop is taking too long or AI correlation timed out */}
+        {recording?.status === 'stopping' && (
+          <button
+            type="button"
+            onClick={() => setRecording(null)}
+            className="px-2 py-1.5 text-xs rounded-md border border-[#d0d7de] text-[#57606a] hover:bg-[#f3f4f6] transition-colors"
+            title="Dismiss and return to manual editing"
+          >
+            ✕ Skip
+          </button>
+        )}
 
         {/* Ignore list toggle — only shown when not recording */}
         {!recording && (
@@ -356,6 +495,25 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
         </div>
       )}
 
+      {/* Launching info panel — shown while recorder-service starts Chromium (5–10 s) */}
+      {recordingLaunching && (
+        <div className="p-3 bg-[#ddf4ff] border border-[#79c0ff] rounded-md text-[12px] space-y-1.5">
+          <p className="font-semibold text-[#0969da] flex items-center gap-2">
+            <span className="inline-block animate-spin">⟳</span>
+            Launching browser recorder…
+          </p>
+          <p className="text-[#57606a]">
+            Chromium is starting inside the container — this takes <strong>5–10 seconds</strong> on first use.
+            The noVNC browser tab (<code className="bg-[#f6f8fa] border border-[#d0d7de] rounded px-1">localhost:6080</code>) will open automatically when ready.
+          </p>
+          <p className="text-[#57606a]">
+            Once the browser opens, navigate to your target app using{' '}
+            <code className="bg-[#f6f8fa] border border-[#d0d7de] rounded px-1">host.docker.internal</code>{' '}
+            instead of <code className="bg-[#f6f8fa] border border-[#d0d7de] rounded px-1">localhost</code>.
+          </p>
+        </div>
+      )}
+
       {/* Recording active overlay */}
       {recording && recording.status === 'active' && (
         <div className="p-3 bg-[#fff8c5] border border-[#d4a72c] rounded-md text-[12px]">
@@ -364,7 +522,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               🔴 Recording — {recording.stepCount ?? 0} request{recording.stepCount !== 1 ? 's' : ''} captured
             </span>
             <a
-              href={`${RECORDER_URL}/viewer/${recording.id}`}
+              href={recording.noVncUrl}
               target="_blank"
               rel="noreferrer"
               className="text-[#0969da] hover:underline font-mono text-[11px]"
@@ -377,6 +535,64 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
             <strong>⏹ Stop Recording</strong> when done.
             Steps will automatically populate below.
           </p>
+        </div>
+      )}
+
+      {/* AI correlation progress — shown while stop request is in flight */}
+      {recording?.status === 'stopping' && (
+        <div className="p-2 bg-[#ddf4ff] border border-[#54aeff66] rounded-md text-[12px] text-[#0550ae] flex items-center gap-2">
+          <span className="animate-spin">⏳</span>
+          <span>Running AI correlation detection… this may take 30–60 s. Steps will appear automatically when done.</span>
+        </div>
+      )}
+
+      {/* AI-13: Step deduplication suggestions */}
+      {duplicates.length > 0 && (
+        <div className="p-2 bg-[#fff8c5] border border-[#e3b34166] rounded-md text-[12px]">
+          <div className="flex items-start justify-between gap-2">
+            <span className="font-semibold text-[#9a6700]">✨ Duplicate steps detected</span>
+            <button onClick={() => setDuplicates([])} className="text-[#9a6700] hover:opacity-70 shrink-0 text-[13px]">✕</button>
+          </div>
+          {duplicates.map((d, i) => (
+            <p key={i} className="text-[11px] text-[#57606a] font-mono mt-1">{d.suggestion}</p>
+          ))}
+        </div>
+      )}
+
+      {/* AI-suggested ignore patterns for next recording */}
+      {suggestedIgnore.length > 0 && (
+        <div className="p-2 bg-[#ddf4ff] border border-[#54aeff66] rounded-md text-[12px] text-[#0550ae]">
+          <div className="flex items-start justify-between gap-2">
+            <span className="font-semibold">✨ Suggested ignore patterns for next recording</span>
+            <button onClick={() => setSuggestedIgnore([])} className="text-[#0550ae] hover:opacity-70 shrink-0">✕</button>
+          </div>
+          <div className="flex flex-wrap gap-1 mt-1">
+            {suggestedIgnore.map(p => (
+              <span key={p} className="px-1.5 py-0.5 bg-white border border-[#54aeff66] rounded text-[11px] font-mono">{p}</span>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setIgnorePatterns(prev => {
+                const next = [...prev];
+                for (const p of suggestedIgnore) { if (!next.includes(p)) next.push(p); }
+                return next;
+              });
+              setSuggestedIgnore([]);
+            }}
+            className="mt-1.5 text-[11px] text-[#0550ae] hover:underline font-medium"
+          >
+            + Add all to Ignore list
+          </button>
+        </div>
+      )}
+
+      {/* Recording truncation notice */}
+      {recordingNote && (
+        <div className="p-2 bg-[#ddf4ff] border border-[#54aeff66] rounded-md text-[12px] text-[#0550ae] flex items-center justify-between">
+          <span>ℹ {recordingNote}</span>
+          <button onClick={() => setRecordingNote(null)} className="text-[#0550ae] ml-2 hover:opacity-70">✕</button>
         </div>
       )}
 
@@ -394,6 +610,9 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
           <div key={i} className="border border-gray-200 rounded-xl p-4 bg-white space-y-3">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-gray-400 w-6">{i + 1}</span>
+              {thinkTimes[i] > 500 && (
+                <span className="text-[10px] font-mono text-[#8c959f]" title="Observed think time before this step">⏱ {(thinkTimes[i] / 1000).toFixed(1)}s</span>
+              )}
               <input
                 type="text"
                 placeholder="Step name (e.g. Login)"
@@ -531,8 +750,8 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 <table className="text-xs w-full border-collapse">
                   <thead>
                     <tr>
-                      {columns.map(col => (
-                        <th key={col} className="border border-gray-200 px-1 py-0.5">
+                      {columns.map((col, ci) => (
+                        <th key={ci} className="border border-gray-200 px-1 py-0.5">
                           <input
                             type="text"
                             value={col}
@@ -566,13 +785,31 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 </table>
               </div>
             )}
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button type="button" onClick={() => {
                 if (testData.length === 0) onTestDataChange([{ col1: '', col2: '' }]);
                 else addDataRow();
               }} className="text-xs text-blue-600 hover:underline">+ add row</button>
               {testData.length > 0 && (
                 <button type="button" onClick={addDataColumn} className="text-xs text-blue-600 hover:underline">+ add column</button>
+              )}
+              {steps.length > 0 && (
+                <button type="button"
+                  onClick={async () => {
+                    try {
+                      const { columns, reasoning } = await suggestParamColumns(steps);
+                      if (columns.length === 0) return;
+                      const row: Record<string, string> = {};
+                      for (const c of columns) row[c] = '';
+                      onTestDataChange(testData.length > 0
+                        ? testData.map(r => ({ ...row, ...r }))
+                        : [row]);
+                      alert(`Suggested: ${columns.join(', ')}\n${reasoning}`);
+                    } catch (e) { alert(`Failed: ${(e as Error).message}`); }
+                  }}
+                  className="text-xs text-[#0969da] hover:underline font-mono">
+                  ✨ Suggest columns
+                </button>
               )}
             </div>
           </>

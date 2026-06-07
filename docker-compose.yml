@@ -1,4 +1,11 @@
 
+# ── OpenTelemetry — reuse across all services via YAML anchor ────────────────
+x-otel: &otel
+  OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+  # host.docker.internal reaches host machine from inside Docker (where Tempo runs)
+  # Override: OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318 if Tempo is in this compose
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
+
 services:
   # ── Infrastructure ──────────────────────────────────────
   postgres:
@@ -58,6 +65,8 @@ services:
     ports:
       - "3000:3000"
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: api-service
       PORT: 3000
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       REDIS_URL: redis://redis:6379
@@ -65,6 +74,7 @@ services:
       RESULTS_URL: http://results-service:3004
       API_KEYS: ${API_KEYS:-}          # comma-separated keys; empty = auth disabled (dev only)
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-local-secret-change-for-production}
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -81,6 +91,8 @@ services:
     ports:
       - "3002:3002"
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: worker-backend
       PORT: 3002
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       REDIS_URL: redis://redis:6379
@@ -104,10 +116,13 @@ services:
     ports:
       - "3001:3001"
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: ai-service
       PORT: 3001
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       RESULTS_URL: http://results-service:3004
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
       WORKER_CONCURRENCY: 3          # AI calls are I/O-bound, parallelise
     depends_on:
       rabbitmq:
@@ -121,6 +136,8 @@ services:
     ports:
       - "3003:3003"
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: worker-client
       PORT: 3003
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       REDIS_URL: redis://redis:6379
@@ -140,14 +157,18 @@ services:
     ports:
       - "3004:3004"   # REST API + WebSocket (/ws on same port)
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: results-service
       PORT: 3004
       DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
+      READ_DATABASE_URL: ${READ_DATABASE_URL:-}
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
       STALE_RUNNING_MINUTES: 15      # mark running tests failed after 15 min
       STALE_PENDING_MINUTES: 30      # mark pending tests failed after 30 min
       API_KEYS: ${API_KEYS:-}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-local-secret-change-for-production}
       RECORDER_URL: http://recorder-service:3007
       ANALYSER_URL: http://analyser-service:3008
     depends_on:
@@ -166,8 +187,11 @@ services:
     ports:
       - "3008:3008"
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: analyser-service
       PORT: 3008
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
       RESULTS_URL: http://results-service:3004
     # No hard dependencies — degrades gracefully if unreachable
 
@@ -180,9 +204,12 @@ services:
       - "3007:3007"   # REST + WebSocket API
       - "6080:6080"   # noVNC browser viewer (open in browser to see the recording window)
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: recorder-service
       PORT: 3007
       LOG_LEVEL: info
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
       CHROMIUM_PATH: /usr/bin/chromium-browser
       NOVNC_URL: http://localhost:6080/vnc.html?autoconnect=true
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
@@ -205,6 +232,9 @@ services:
       VITE_RESULTS_URL: http://localhost:3004
       VITE_RECORDER_URL: http://localhost:3007
       VITE_API_KEY: ${API_KEY:-}
+      API_SERVICE_URL: http://api-service:3000
+      RESULTS_SERVICE_URL: http://results-service:3004
+      RECORDER_SERVICE_URL: http://recorder-service:3007
     depends_on:
       - api-service
       - results-service

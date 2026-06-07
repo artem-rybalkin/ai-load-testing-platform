@@ -1,7 +1,7 @@
 import amqplib from 'amqplib';
 import { log } from './logger';
 
-const MAX_RETRIES = 3;
+export const MAX_RETRIES = 3;
 
 export const handleRetry = (
   channel: amqplib.Channel,

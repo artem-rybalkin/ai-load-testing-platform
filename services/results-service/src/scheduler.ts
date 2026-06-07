@@ -1,4 +1,4 @@
-import cron from 'node-cron';
+import cron, { ScheduledTask } from 'node-cron';
 import { Pool } from 'pg';
 import { log } from './logger';
 
@@ -16,13 +16,17 @@ interface Schedule {
   enabled: boolean;
 }
 
-const activeTasks = new Map<string, cron.ScheduledTask>();
+const activeTasks = new Map<string, ScheduledTask>();
 
 const triggerSchedule = async (pool: Pool, schedule: Schedule): Promise<void> => {
   try {
+    const apiKey = process.env.API_KEY || '';
     const res = await fetch(`${API_URL}/tests`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+      },
       body: JSON.stringify({
         type: schedule.type,
         targetUrl: schedule.target_url,
@@ -48,7 +52,8 @@ const registerSchedule = (pool: Pool, schedule: Schedule): void => {
   if (activeTasks.has(schedule.id)) {
     activeTasks.get(schedule.id)!.stop();
   }
-  const task = cron.schedule(schedule.cron, () => triggerSchedule(pool, schedule), { scheduled: schedule.enabled });
+  const task = cron.schedule(schedule.cron, () => triggerSchedule(pool, schedule));
+  if (!schedule.enabled) task.stop();
   activeTasks.set(schedule.id, task);
   log.info({ scheduleId: schedule.id, name: schedule.name, cron: schedule.cron }, 'Schedule registered');
 };

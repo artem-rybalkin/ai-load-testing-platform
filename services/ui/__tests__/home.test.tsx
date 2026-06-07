@@ -23,6 +23,10 @@ vi.mock('@/lib/api', () => ({
   getResults: vi.fn().mockResolvedValue({ results: [] }),
   getActiveTests: vi.fn().mockResolvedValue({ active: [] }),
   getResult: vi.fn().mockResolvedValue({ result: null }),
+  suggestThresholds: vi.fn().mockResolvedValue({}),
+  suggestSettings: vi.fn().mockResolvedValue({}),
+  translatePlaywright: vi.fn().mockResolvedValue({}),
+  suggestPresetName: vi.fn().mockResolvedValue({ name: 'Suggested preset' }),
 }));
 
 import { createTest, getPresets, getResult } from '@/lib/api';
@@ -125,6 +129,114 @@ describe('Home page — preset dropdown', () => {
     await waitFor(() => screen.getByDisplayValue('Load from preset…'));
     fireEvent.change(screen.getByDisplayValue('Load from preset…'), { target: { value: 'tmpl-1' } });
     expect((screen.getByPlaceholderText('https://example.com') as HTMLInputElement).value).toBe('http://preset.com');
+  });
+});
+
+// Helper: fill the description textarea and blur it to trigger applyDescriptionParams
+const blurDescription = (text: string) => {
+  const ta = screen.getByPlaceholderText(/e\.g\. load test/i);
+  fireEvent.change(ta, { target: { value: text } });
+  fireEvent.blur(ta);
+};
+
+describe('Home page — applyDescriptionParams (description blur)', () => {
+  it('extracts VU count and shows it in the settings summary', () => {
+    render(<Home />);
+    blurDescription('load test with 50 VUs for 2 minutes');
+    // Advanced settings auto-opens; summary strip shows "50 VUs"
+    expect(screen.getByText(/50\s*VUs/)).toBeInTheDocument();
+  });
+
+  it('extracts duration in minutes and shows it in the settings summary', () => {
+    render(<Home />);
+    blurDescription('run for 5 minutes');
+    expect(screen.getByText(/5m/)).toBeInTheDocument();
+  });
+
+  it('extracts duration in seconds', () => {
+    render(<Home />);
+    blurDescription('run for 30 seconds');
+    expect(screen.getByText(/30s/)).toBeInTheDocument();
+  });
+
+  it('detects spike profile keyword', () => {
+    render(<Home />);
+    blurDescription('spike test with 10 users');
+    // Advanced settings opens; spike profile button should appear active (aria-pressed or similar)
+    expect(screen.getAllByRole('button', { name: /spike/i }).length).toBeGreaterThan(0);
+  });
+
+  it('detects soak profile keyword', () => {
+    render(<Home />);
+    blurDescription('soak test for 1 hour');
+    expect(screen.getAllByRole('button', { name: /soak/i }).length).toBeGreaterThan(0);
+  });
+
+  it('detects capacity profile keyword', () => {
+    render(<Home />);
+    blurDescription('capacity test to find breaking point');
+    expect(screen.getAllByRole('button', { name: /capacity/i }).length).toBeGreaterThan(0);
+  });
+
+  it('does not change anything for an empty description', () => {
+    render(<Home />);
+    blurDescription('');
+    // Default type "Backend" button should still be present
+    expect(screen.getByRole('button', { name: /backend/i })).toBeInTheDocument();
+  });
+
+  it('does not extract VUs when no match', () => {
+    render(<Home />);
+    blurDescription('test my API please');
+    // Summary should show default 5 VUs, not crash
+    expect(screen.queryByText(/VUs/)).not.toBeInTheDocument(); // advanced not yet open
+  });
+
+  it('caps VU count at 100', () => {
+    render(<Home />);
+    blurDescription('load test with 500 VUs');
+    expect(screen.getByText(/100\s*VUs/)).toBeInTheDocument();
+  });
+
+  it('extracts ramp-up duration', () => {
+    render(<Home />);
+    blurDescription('load test 10 VUs ramp up: 30s for 2 minutes');
+    // ramp 30s should appear in summary
+    expect(screen.getByText(/ramp\s+30s/i)).toBeInTheDocument();
+  });
+});
+
+describe('Home page — browser SLO threshold inputs', () => {
+  it('shows INP and TBT threshold inputs when browser type is selected and SLO section is open', async () => {
+    render(<Home />);
+    fireEvent.click(screen.getByRole('button', { name: /browser/i }));
+    const sloBtn = screen.getByRole('button', { name: /SLO thresholds/i });
+    fireEvent.click(sloBtn);
+    expect(screen.getByText('INP ms max')).toBeInTheDocument();
+    expect(screen.getByText('TBT ms max')).toBeInTheDocument();
+  });
+
+  it('does not show INP or TBT threshold inputs for backend type', () => {
+    render(<Home />);
+    const sloBtn = screen.getByRole('button', { name: /SLO thresholds/i });
+    fireEvent.click(sloBtn);
+    expect(screen.queryByText('INP ms max')).not.toBeInTheDocument();
+    expect(screen.queryByText('TBT ms max')).not.toBeInTheDocument();
+  });
+
+  it('includes inp and tbt in createTest payload when browser thresholds are enabled with defaults', async () => {
+    render(<Home />);
+    fireEvent.click(screen.getByRole('button', { name: /browser/i }));
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://browser.test.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /run test/i }));
+    await waitFor(() => expect(mockCreateTest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'client-side',
+        thresholds: expect.objectContaining({ inp: 200, tbt: 200 }),
+      })
+    ));
   });
 });
 

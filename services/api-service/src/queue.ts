@@ -13,8 +13,40 @@ export const QUEUES = {
 const CANCEL_EXCHANGE = 'cancel-fanout';
 
 let channel: amqplib.Channel | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const isQueueConnected = (): boolean => channel !== null;
+
+const setupConnection = async (url: string): Promise<void> => {
+  const connection = await amqplib.connect(url);
+
+  connection.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+  });
+  connection.on('close', () => {
+    log.warn('RabbitMQ connection closed — scheduling reconnect');
+    channel = null;
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null;
+        try { await connectQueue(); } catch (err) {
+          log.error({ err: (err as Error).message }, 'RabbitMQ reconnect failed');
+        }
+      }, 5000);
+    }
+  });
+
+  channel = await connection.createChannel();
+  channel.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    channel = null;
+  });
+
+  await channel.assertQueue(QUEUES.AI_REQUESTS,  { durable: true });
+  await channel.assertQueue(QUEUES.BACKEND,      { durable: true });
+  await channel.assertQueue(QUEUES.CLIENT,       { durable: true });
+  await channel.assertExchange(CANCEL_EXCHANGE,  'fanout', { durable: true });
+};
 
 export const connectQueue = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL;
@@ -25,14 +57,7 @@ export const connectQueue = async (): Promise<void> => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       log.info({ attempt, maxRetries }, 'Connecting to RabbitMQ');
-      const connection = await amqplib.connect(url);
-      channel = await connection.createChannel();
-
-      await channel.assertQueue(QUEUES.AI_REQUESTS,  { durable: true });
-      await channel.assertQueue(QUEUES.BACKEND,      { durable: true });
-      await channel.assertQueue(QUEUES.CLIENT,       { durable: true });
-      await channel.assertExchange(CANCEL_EXCHANGE,  'fanout', { durable: true });
-
+      await setupConnection(url);
       log.info('Connected to RabbitMQ');
       return;
     } catch (err) {

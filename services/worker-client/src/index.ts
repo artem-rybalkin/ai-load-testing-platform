@@ -9,19 +9,21 @@ declare global {
   }
 }
 
+import './tracing';
 import amqplib from 'amqplib';
 import puppeteer from 'puppeteer';
 import lighthouse from 'lighthouse';
 import Fastify from 'fastify';
 import * as os from 'os';
 
-import { TestRequest, TestResult, ClientMetrics, LighthouseScore } from '@alt/shared';
+import { TestRequest, TestResult, ClientMetrics, LighthouseScore, ResourceBreakdown } from '@alt/shared';
 import { log } from './logger';
-import { handleRetry } from './retry';
+import { handleRetry, MAX_RETRIES } from './retry';
 
 const QUEUE              = 'client-tests';
 const CANCEL_EXCHANGE    = 'cancel-fanout';
 let queueConnected = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Rolling CPU usage sampled every 5 seconds
 let cpuPercent = 0;
@@ -37,6 +39,7 @@ setInterval(() => {
 const RESULTS_QUEUE      = 'test-results';
 const DLQ                = `${QUEUE}.dlq`;
 const MAX_TEST_DURATION_MS = parseInt(process.env.PUPPETEER_MAX_DURATION_MS ?? '300000'); // 5 min
+const NAV_TIMEOUT_MS = parseInt(process.env.PUPPETEER_NAV_TIMEOUT_MS ?? '60000'); // 1 min
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '2');
 
 import { Browser } from 'puppeteer';
@@ -69,114 +72,193 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
     await browser.close().catch(() => {});
   }, MAX_TEST_DURATION_MS);
 
-  const snapshots: WebVitalsSnapshot[] = [];
-  const options = test.options as { sessions: number; duration: string };
-  const sessions = options.sessions || 1;
-
-  // ── Puppeteer sessions: collect Web Vitals ───────────────────────────────
-  for (let i = 0; i < sessions; i++) {
-    testLog.info({ session: i + 1, sessions }, 'Running session');
-    const page = await browser.newPage();
-
-    const cdp = await page.createCDPSession();
-    await cdp.send('Performance.enable');
-
-    const startTime = Date.now();
-    await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    const ttfb = Date.now() - startTime;
-
-    const webVitals = await page.evaluate(() => {
-      return new Promise<{ lcp: number; fid: number; cls: number; fcp: number }>((resolve) => {
-        let lcp = 0;
-        let fid = 0;
-        let cls = 0;
-        let fcp = 0;
-
-        new PerformanceObserver((list) => {
-          const entries = list.getEntries();
-          lcp = entries[entries.length - 1].startTime;
-        }).observe({ type: 'largest-contentful-paint', buffered: true });
-
-        new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            const e = entry as ExtendedPerformanceEventTiming;
-            fid = e.processingStart - e.startTime;
-          }
-        }).observe({ type: 'first-input', buffered: true });
-
-        new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            const e = entry as LayoutShift;
-            if (!e.hadRecentInput) cls += e.value;
-          }
-        }).observe({ type: 'layout-shift', buffered: true });
-
-        new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            if (entry.name === 'first-contentful-paint') fcp = entry.startTime;
-          }
-        }).observe({ type: 'paint', buffered: true });
-
-        setTimeout(() => resolve({ lcp, fid, cls, fcp }), 3000);
-      });
-    });
-
-    snapshots.push({ lcp: webVitals.lcp, fid: webVitals.fid, cls: webVitals.cls, ttfb, fcp: webVitals.fcp });
-    await page.close();
-    testLog.info({ session: i + 1, metrics: snapshots[i] }, 'Session complete');
-  }
-
-  // ── Lighthouse audit — reuses the same Chrome instance via CDP port ──────
-  let lighthouseScore: LighthouseScore | undefined;
   try {
-    // Close all remaining pages so Lighthouse gets a clean state
-    const openPages = await browser.pages();
-    await Promise.all(openPages.map((p) => p.close()));
-
-    const wsEndpoint = browser.wsEndpoint();
-    const port = parseInt(new URL(wsEndpoint).port, 10);
-
-    testLog.info({ port }, 'Running Lighthouse');
-    const lhResult = await lighthouse(test.targetUrl, {
-      port,
-      output: 'json' as const,
-      logLevel: 'silent' as const,
-      onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
-    });
-
-    if (lhResult?.lhr?.categories) {
-      const cats = lhResult.lhr.categories;
-      lighthouseScore = {
-        performance:   Math.round((cats['performance']?.score   ?? 0) * 100),
-        accessibility: Math.round((cats['accessibility']?.score ?? 0) * 100),
-        bestPractices: Math.round((cats['best-practices']?.score ?? 0) * 100),
-        seo:           Math.round((cats['seo']?.score           ?? 0) * 100),
-      };
-      testLog.info({ lighthouseScore }, 'Lighthouse complete');
+    const snapshots: WebVitalsSnapshot[] = [];
+    const options = test.options as { sessions: number; duration: string };
+    const sessions = options.sessions || 1;
+  
+    let totalJsErrors = 0;
+  
+    // ── Puppeteer sessions: collect Web Vitals ───────────────────────────────
+    for (let i = 0; i < sessions; i++) {
+      testLog.info({ session: i + 1, sessions }, 'Running session');
+      const page = await browser.newPage();
+  
+      let sessionJsErrors = 0;
+      page.on('pageerror', () => { sessionJsErrors++; });
+  
+      const cdp = await page.createCDPSession();
+      await cdp.send('Performance.enable');
+  
+      await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT_MS });
+      // True TTFB = responseStart - requestStart from Navigation Timing API.
+      // The old wall-clock approach included DNS + TCP + TLS + networkidle2 settle time.
+      const ttfb = await page.evaluate(() => {
+        const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
+        return nav ? Math.round(nav.responseStart - nav.requestStart) : 0;
+      });
+  
+      const webVitals = await page.evaluate(() => {
+        return new Promise<{ lcp: number; fid: number; cls: number; fcp: number; inp: number; longTaskCount: number }>((resolve) => {
+          let lcp = 0;
+          let fid = 0;
+          let cls = 0;
+          let fcp = 0;
+          let inp = 0;
+          let longTaskCount = 0;
+  
+          new PerformanceObserver((list) => {
+            const entries = list.getEntries();
+            lcp = entries[entries.length - 1].startTime;
+          }).observe({ type: 'largest-contentful-paint', buffered: true });
+  
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              const e = entry as ExtendedPerformanceEventTiming;
+              fid = e.processingStart - e.startTime;
+            }
+          }).observe({ type: 'first-input', buffered: true });
+  
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              const e = entry as LayoutShift;
+              if (!e.hadRecentInput) cls += e.value;
+            }
+          }).observe({ type: 'layout-shift', buffered: true });
+  
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              if (entry.name === 'first-contentful-paint') fcp = entry.startTime;
+            }
+          }).observe({ type: 'paint', buffered: true });
+  
+          try {
+            new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                const e = entry as ExtendedPerformanceEventTiming;
+                const duration = e.processingStart - e.startTime;
+                if (duration > inp) inp = duration;
+              }
+            }).observe({ type: 'event', buffered: true, durationThreshold: 16 } as PerformanceObserverInit);
+          } catch { /* event type unsupported */ }
+  
+          try {
+            new PerformanceObserver((list) => {
+              longTaskCount += list.getEntries().length;
+            }).observe({ type: 'longtask', buffered: true });
+          } catch { /* longtask type unsupported */ }
+  
+          setTimeout(() => resolve({ lcp, fid, cls, fcp, inp, longTaskCount }), 3000);
+        });
+      });
+  
+      const resourceBreakdown = await page.evaluate((): ResourceBreakdown => {
+        const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+        const bd = { jsSize: 0, cssSize: 0, imageSize: 0, fontSize: 0, xhrSize: 0, totalSize: 0, requestCount: entries.length };
+        for (const e of entries) {
+          const kb = (e.transferSize || 0) / 1024;
+          bd.totalSize += kb;
+          if (e.initiatorType === 'script') bd.jsSize += kb;
+          else if (e.initiatorType === 'link' || e.initiatorType === 'css') bd.cssSize += kb;
+          else if (e.initiatorType === 'img') bd.imageSize += kb;
+          else if (e.initiatorType === 'font' || /\.(woff2?|ttf|otf|eot)/i.test(e.name)) bd.fontSize += kb;
+          else if (e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch') bd.xhrSize += kb;
+        }
+        const round = (n: number) => Math.round(n * 10) / 10;
+        return { jsSize: round(bd.jsSize), cssSize: round(bd.cssSize), imageSize: round(bd.imageSize), fontSize: round(bd.fontSize), xhrSize: round(bd.xhrSize), totalSize: round(bd.totalSize), requestCount: bd.requestCount };
+      });
+  
+      totalJsErrors += sessionJsErrors;
+      snapshots.push({ lcp: webVitals.lcp, fid: webVitals.fid, cls: webVitals.cls, ttfb, fcp: webVitals.fcp, inp: webVitals.inp, longTaskCount: webVitals.longTaskCount, resourceBreakdown });
+      await page.close();
+      testLog.info({ session: i + 1, metrics: snapshots[i] }, 'Session complete');
     }
-  } catch (err) {
-    testLog.error({ err: (err as Error).message }, 'Lighthouse audit failed (non-fatal)');
+  
+    // ── Lighthouse audit — reuses the same Chrome instance via CDP port ──────
+    let lighthouseScore: LighthouseScore | undefined;
+    let lhTbt: number | undefined;
+    let lhTti: number | undefined;
+    let lhInp: number | undefined;
+    let lhDomNodes: number | undefined;
+    try {
+      // Close all remaining pages so Lighthouse gets a clean state
+      const openPages = await browser.pages();
+      await Promise.all(openPages.map((p) => p.close()));
+  
+      const wsEndpoint = browser.wsEndpoint();
+      const port = parseInt(new URL(wsEndpoint).port, 10);
+  
+      testLog.info({ port }, 'Running Lighthouse');
+      const lhResult = await lighthouse(test.targetUrl, {
+        port,
+        output: 'json' as const,
+        logLevel: 'silent' as const,
+        onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
+      });
+  
+      if (lhResult?.lhr?.categories) {
+        const cats = lhResult.lhr.categories;
+        lighthouseScore = {
+          performance:   Math.round((cats['performance']?.score   ?? 0) * 100),
+          accessibility: Math.round((cats['accessibility']?.score ?? 0) * 100),
+          bestPractices: Math.round((cats['best-practices']?.score ?? 0) * 100),
+          seo:           Math.round((cats['seo']?.score           ?? 0) * 100),
+        };
+      }
+      if (lhResult?.lhr?.audits) {
+        const a = lhResult.lhr.audits as Record<string, { numericValue?: number }>;
+        lhTbt      = a['total-blocking-time']?.numericValue != null ? Math.round(a['total-blocking-time'].numericValue) : undefined;
+        lhTti      = a['interactive']?.numericValue        != null ? Math.round(a['interactive'].numericValue)         : undefined;
+        lhInp      = a['interaction-to-next-paint']?.numericValue != null ? Math.round(a['interaction-to-next-paint'].numericValue) : undefined;
+        lhDomNodes = a['dom-size']?.numericValue           != null ? Math.round(a['dom-size'].numericValue)            : undefined;
+      }
+      testLog.info({ lighthouseScore, lhTbt, lhTti, lhInp, lhDomNodes }, 'Lighthouse complete');
+    } catch (err) {
+      testLog.error({ err: (err as Error).message }, 'Lighthouse audit failed (non-fatal)');
+    }
+  
+    // ── Average Web Vitals across sessions ───────────────────────────────────
+    const avgNum = (key: 'lcp' | 'fid' | 'cls' | 'ttfb' | 'fcp' | 'inp' | 'longTaskCount'): number => {
+      const sum = snapshots.reduce((s, m) => s + (m[key] ?? 0), 0);
+      return Math.round((sum / snapshots.length) * 100) / 100;
+    };
+  
+    const avgResourceBreakdown = (): ResourceBreakdown | undefined => {
+      const valid = snapshots.filter(s => s.resourceBreakdown);
+      if (!valid.length) return undefined;
+      const keys: Array<keyof ResourceBreakdown> = ['jsSize', 'cssSize', 'imageSize', 'fontSize', 'xhrSize', 'totalSize', 'requestCount'];
+      const result = {} as ResourceBreakdown;
+      for (const k of keys) {
+        const sum = valid.reduce((s, m) => s + (m.resourceBreakdown?.[k] ?? 0), 0);
+        result[k] = Math.round((sum / valid.length) * 10) / 10;
+      }
+      return result;
+    };
+  
+    // INP: prefer Lighthouse audit value (more accurate); fall back to PerformanceObserver average
+    const inpValue = lhInp ?? (avgNum('inp') > 0 ? avgNum('inp') : undefined);
+  
+    return {
+      type: 'client',
+      lcp:              avgNum('lcp'),
+      fid:              avgNum('fid'),
+      cls:              avgNum('cls'),
+      ttfb:             avgNum('ttfb'),
+      fcp:              avgNum('fcp'),
+      inp:              inpValue,
+      tbt:              lhTbt,
+      tti:              lhTti,
+      jsErrors:         totalJsErrors > 0 ? totalJsErrors : undefined,
+      longTaskCount:    avgNum('longTaskCount') > 0 ? Math.round(avgNum('longTaskCount')) : undefined,
+      domNodeCount:     lhDomNodes,
+      resourceBreakdown: avgResourceBreakdown(),
+      lighthouseScore,
+    };
+  } finally {
+    clearTimeout(killTimer);
+    runningBrowsers.delete(test.id);
+    await browser.close().catch(() => {});
   }
-
-  clearTimeout(killTimer);
-  runningBrowsers.delete(test.id);
-  await browser.close();
-
-  // ── Average Web Vitals across sessions ───────────────────────────────────
-  const avg = (key: keyof WebVitalsSnapshot): number => {
-    const sum = snapshots.reduce((s, m) => s + m[key], 0);
-    return Math.round((sum / snapshots.length) * 100) / 100;
-  };
-
-  return {
-    type: 'client',
-    lcp:  avg('lcp'),
-    fid:  avg('fid'),
-    cls:  avg('cls'),
-    ttfb: avg('ttfb'),
-    fcp:  avg('fcp'),
-    lighthouseScore,
-  };
 };
 
 const start = async (): Promise<void> => {
@@ -198,7 +280,27 @@ const start = async (): Promise<void> => {
     }
   }
 
+  connection!.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+  });
+  connection!.on('close', () => {
+    log.warn('RabbitMQ connection closed — scheduling reconnect');
+    queueConnected = false;
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null;
+        try { await start(); } catch (err) {
+          log.error({ err: (err as Error).message }, 'RabbitMQ reconnect failed');
+        }
+      }, 5000);
+    }
+  });
+
   const channel = await connection!.createChannel();
+  channel.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    queueConnected = false;
+  });
   await channel.assertQueue(QUEUE,         { durable: true });
   await channel.assertQueue(DLQ,           { durable: true });
   await channel.assertQueue(RESULTS_QUEUE, { durable: true });
@@ -259,6 +361,11 @@ const start = async (): Promise<void> => {
       channel.ack(msg);
     } catch (err) {
       log.error({ testId: test.id, err: (err as Error).message }, 'Client test failed');
+      const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
+      if (retryCount >= MAX_RETRIES) {
+        const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST' }).catch(() => {});
+      }
       handleRetry(channel, msg, QUEUE, DLQ, test.id);
     }
   });

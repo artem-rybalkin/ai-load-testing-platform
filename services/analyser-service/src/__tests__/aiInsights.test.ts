@@ -64,24 +64,25 @@ describe('generateAiInsights — happy path', () => {
   it('returns AiInsights when Gemini returns valid JSON', async () => {
     mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
-    expect(result).not.toBeNull();
-    expect(result!.narrative).toBe(validInsightsPayload.narrative);
-    expect(result!.anomalies).toEqual(validInsightsPayload.anomalies);
-    expect(result!.rootCauses).toEqual(validInsightsPayload.rootCauses);
-    expect(result!.recommendations).toEqual(validInsightsPayload.recommendations);
-    expect(result!.severity).toBe('warning');
+    expect(insights).not.toBeNull();
+    expect(rateLimited).toBe(false);
+    expect(insights!.narrative).toBe(validInsightsPayload.narrative);
+    expect(insights!.anomalies).toEqual(validInsightsPayload.anomalies);
+    expect(insights!.rootCauses).toEqual(validInsightsPayload.rootCauses);
+    expect(insights!.recommendations).toEqual(validInsightsPayload.recommendations);
+    expect(insights!.severity).toBe('warning');
   });
 
   it('strips markdown fences from the response before parsing', async () => {
     const wrapped = `\`\`\`json\n${JSON.stringify(validInsightsPayload)}\n\`\`\``;
     mockGenerateContent.mockResolvedValue(mockResponse(wrapped));
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights } = await generateAiInsights(makeCtx());
 
-    expect(result).not.toBeNull();
-    expect(result!.severity).toBe('warning');
+    expect(insights).not.toBeNull();
+    expect(insights!.severity).toBe('warning');
   });
 
   it('accepts severity "critical"', async () => {
@@ -89,9 +90,9 @@ describe('generateAiInsights — happy path', () => {
       mockResponse(JSON.stringify({ ...validInsightsPayload, severity: 'critical' }))
     );
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights } = await generateAiInsights(makeCtx());
 
-    expect(result!.severity).toBe('critical');
+    expect(insights!.severity).toBe('critical');
   });
 
   it('accepts severity "info"', async () => {
@@ -99,9 +100,9 @@ describe('generateAiInsights — happy path', () => {
       mockResponse(JSON.stringify({ ...validInsightsPayload, severity: 'info' }))
     );
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights } = await generateAiInsights(makeCtx());
 
-    expect(result!.severity).toBe('info');
+    expect(insights!.severity).toBe('info');
   });
 
   it('accepts empty anomalies and rootCauses arrays', async () => {
@@ -109,22 +110,23 @@ describe('generateAiInsights — happy path', () => {
       mockResponse(JSON.stringify({ ...validInsightsPayload, anomalies: [], rootCauses: [] }))
     );
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights } = await generateAiInsights(makeCtx());
 
-    expect(result!.anomalies).toEqual([]);
-    expect(result!.rootCauses).toEqual([]);
+    expect(insights!.anomalies).toEqual([]);
+    expect(insights!.rootCauses).toEqual([]);
   });
 });
 
 // ─── Missing/invalid API key ──────────────────────────────────────────────────
 
 describe('generateAiInsights — missing API key', () => {
-  it('returns null immediately when GEMINI_API_KEY is not set', async () => {
+  it('returns null insights immediately when GEMINI_API_KEY is not set', async () => {
     delete process.env.GEMINI_API_KEY;
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
-    expect(result).toBeNull();
+    expect(insights).toBeNull();
+    expect(rateLimited).toBe(false);
     expect(mockGenerateContent).not.toHaveBeenCalled();
   });
 });
@@ -132,51 +134,54 @@ describe('generateAiInsights — missing API key', () => {
 // ─── Error cases ──────────────────────────────────────────────────────────────
 
 describe('generateAiInsights — error cases', () => {
-  it('returns null when Gemini returns invalid JSON', async () => {
+  it('returns null insights when Gemini returns invalid JSON', async () => {
     mockGenerateContent.mockResolvedValue(mockResponse('not json at all'));
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
-    expect(result).toBeNull();
+    expect(insights).toBeNull();
+    expect(rateLimited).toBe(false);
   });
 
-  it('returns null when response is missing required fields', async () => {
+  it('returns null insights when response is missing required fields', async () => {
     mockGenerateContent.mockResolvedValue(
-      mockResponse(JSON.stringify({ narrative: 'ok' })) // missing anomalies, rootCauses, etc.
+      mockResponse(JSON.stringify({ narrative: 'ok' }))
     );
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights } = await generateAiInsights(makeCtx());
 
-    expect(result).toBeNull();
+    expect(insights).toBeNull();
   });
 
-  it('returns null when severity is not one of the allowed values', async () => {
+  it('returns null insights when severity is not one of the allowed values', async () => {
     mockGenerateContent.mockResolvedValue(
       mockResponse(JSON.stringify({ ...validInsightsPayload, severity: 'unknown' }))
     );
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights } = await generateAiInsights(makeCtx());
 
-    expect(result).toBeNull();
+    expect(insights).toBeNull();
   });
 
-  it('returns null on rate limit error (429)', async () => {
+  it('returns rateLimited=true on rate limit error (429)', async () => {
     const err = Object.assign(new Error('429 quota exceeded'), { status: 429 });
     mockGenerateContent.mockRejectedValue(err);
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
-    expect(result).toBeNull();
+    expect(insights).toBeNull();
+    expect(rateLimited).toBe(true);
     // Should not retry on rate limit
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
   });
 
-  it('returns null after exhausting retries on generic API error', async () => {
+  it('returns null insights after exhausting retries on generic API error', async () => {
     mockGenerateContent.mockRejectedValue(new Error('service unavailable'));
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
-    expect(result).toBeNull();
+    expect(insights).toBeNull();
+    expect(rateLimited).toBe(false);
     // Should try twice (1 attempt + 1 retry)
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
   });
@@ -186,10 +191,11 @@ describe('generateAiInsights — error cases', () => {
       .mockRejectedValueOnce(new Error('transient error'))
       .mockResolvedValueOnce(mockResponse(JSON.stringify(validInsightsPayload)));
 
-    const result = await generateAiInsights(makeCtx());
+    const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
-    expect(result).not.toBeNull();
-    expect(result!.severity).toBe('warning');
+    expect(insights).not.toBeNull();
+    expect(rateLimited).toBe(false);
+    expect(insights!.severity).toBe('warning');
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
   });
 });

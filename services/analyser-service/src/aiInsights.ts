@@ -1,9 +1,15 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { BackendMetrics, ClientMetrics, AiInsights, MetricDiff } from '@alt/shared';
+import { BackendMetrics, ClientMetrics, AiInsights, MetricDiff, StepMetrics } from '@alt/shared';
 import { PerfStatus } from './analyzer';
 import { log } from './logger';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+interface ExternalMetricSource {
+  sourceName: string;
+  platform: string | null;
+  data: string;
+}
 
 interface InsightsContext {
   targetUrl: string;
@@ -14,72 +20,162 @@ interface InsightsContext {
   summary: string;
   thresholdViolations: string[];
   diffs: MetricDiff[];
+  externalMetrics?: ExternalMetricSource[];
 }
 
-const formatBackendMetrics = (m: BackendMetrics): string => {
-  const errorRate = m.requestsTotal > 0
-    ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(2)
-    : '0.00';
-  const lines = [
-    `Total requests: ${m.requestsTotal}`,
-    `Failed requests: ${m.requestsFailed} (${errorRate}%)`,
-    `Throughput: ${m.rps.toFixed(2)} req/s`,
-    `Avg response time: ${Math.round(m.avgResponseTime)}ms`,
-    `p50: ${Math.round(m.p50ResponseTime)}ms`,
-    `p95: ${Math.round(m.p95ResponseTime)}ms`,
-    `p99: ${Math.round(m.p99ResponseTime)}ms`,
-  ];
-  if (m.errorBreakdown) {
-    const eb = m.errorBreakdown;
+/** Normalised, size-capped payload used to build the Gemini prompt.
+ *  Only fields the prompt actually uses are included; stepMetrics capped at
+ *  top-5 by p95 to keep token count bounded; all times in ms, rates as %. */
+interface BackendPromptMetrics {
+  type: 'backend';
+  requestsTotal: number;
+  requestsFailed: number;
+  errorRatePct: number;           // normalised: requestsFailed/requestsTotal × 100
+  rps: number;
+  avgResponseTimeMs: number;
+  p50ResponseTimeMs: number;
+  p95ResponseTimeMs: number;
+  p99ResponseTimeMs: number;
+  serverErrors?: number;
+  clientErrors?: number;
+  timeouts?: number;
+  networkErrors?: number;
+  topStepsByP95?: Pick<StepMetrics, 'name' | 'avgResponseTime' | 'p95ResponseTime'>[];
+}
+
+interface ClientPromptMetrics {
+  type: 'client';
+  lcpMs: number;
+  fcpMs: number;
+  ttfbMs: number;
+  fidMs: number;
+  clsScore: number;
+  lighthousePerformance?: number;
+  lighthouseAccessibility?: number;
+}
+
+interface AnalysisPromptPayload {
+  targetUrl: string;
+  testType: string;
+  perfStatus: PerfStatus;
+  summary: string;
+  thresholdViolations: string[];
+  diffs: Array<Pick<MetricDiff, 'metric' | 'current' | 'previous' | 'diffPercent' | 'status'>>;
+  metrics: BackendPromptMetrics | ClientPromptMetrics;
+}
+
+const buildPayload = (ctx: InsightsContext): AnalysisPromptPayload => {
+  let metrics: BackendPromptMetrics | ClientPromptMetrics;
+  if (ctx.metrics.type === 'backend') {
+    const m = ctx.metrics as BackendMetrics;
     const total = m.requestsTotal || 1;
-    lines.push(`Error breakdown: ${eb.serverError} server errors (5xx), ${eb.clientError} client errors (4xx), ${eb.timeout} timeouts, ${eb.networkError} network errors`);
+    metrics = {
+      type: 'backend',
+      requestsTotal: m.requestsTotal,
+      requestsFailed: m.requestsFailed,
+      errorRatePct: Math.round((m.requestsFailed / total) * 1000) / 10,
+      rps: Math.round(m.rps * 100) / 100,
+      avgResponseTimeMs: Math.round(m.avgResponseTime),
+      p50ResponseTimeMs: Math.round(m.p50ResponseTime),
+      p95ResponseTimeMs: Math.round(m.p95ResponseTime),
+      p99ResponseTimeMs: Math.round(m.p99ResponseTime),
+      ...(m.errorBreakdown ? {
+        serverErrors:  m.errorBreakdown.serverError,
+        clientErrors:  m.errorBreakdown.clientError,
+        timeouts:      m.errorBreakdown.timeout,
+        networkErrors: m.errorBreakdown.networkError,
+      } : {}),
+      ...(m.stepMetrics?.length ? {
+        topStepsByP95: [...m.stepMetrics]
+          .sort((a, b) => b.p95ResponseTime - a.p95ResponseTime)
+          .slice(0, 5)
+          .map(s => ({ name: s.name, avgResponseTime: Math.round(s.avgResponseTime), p95ResponseTime: Math.round(s.p95ResponseTime) })),
+      } : {}),
+    };
+  } else {
+    const m = ctx.metrics as ClientMetrics;
+    metrics = {
+      type: 'client',
+      lcpMs:  Math.round(m.lcp),
+      fcpMs:  Math.round(m.fcp),
+      ttfbMs: Math.round(m.ttfb),
+      fidMs:  Math.round(m.fid),
+      clsScore: Math.round(m.cls * 1000) / 1000,
+      ...(m.lighthouseScore ? {
+        lighthousePerformance:   m.lighthouseScore.performance,
+        lighthouseAccessibility: m.lighthouseScore.accessibility,
+      } : {}),
+    };
   }
-  if (m.stepMetrics?.length) {
-    lines.push(`Flow steps: ${m.stepMetrics.map(s => `${s.name} avg=${Math.round(s.avgResponseTime)}ms p95=${Math.round(s.p95ResponseTime)}ms`).join(', ')}`);
-  }
-  return lines.join('\n');
+
+  return {
+    targetUrl: ctx.targetUrl,
+    testType:  ctx.type,
+    perfStatus: ctx.perfStatus,
+    summary: ctx.summary,
+    thresholdViolations: ctx.thresholdViolations,
+    diffs: ctx.diffs.map(d => ({ metric: d.metric, current: d.current, previous: d.previous, diffPercent: d.diffPercent, status: d.status })),
+    metrics,
+  };
 };
 
-const formatClientMetrics = (m: ClientMetrics): string => {
-  const lines = [
-    `LCP: ${Math.round(m.lcp)}ms`,
-    `FCP: ${Math.round(m.fcp)}ms`,
-    `TTFB: ${Math.round(m.ttfb)}ms`,
-    `FID: ${Math.round(m.fid)}ms`,
-    `CLS: ${m.cls.toFixed(3)}`,
-  ];
-  if (m.lighthouseScore) {
-    const lh = m.lighthouseScore;
-    lines.push(`Lighthouse: performance=${lh.performance}/100, accessibility=${lh.accessibility}/100, best-practices=${lh.bestPractices}/100, seo=${lh.seo}/100`);
+const formatMetrics = (p: AnalysisPromptPayload): string => {
+  if (p.metrics.type === 'backend') {
+    const m = p.metrics;
+    const lines = [
+      `Total requests: ${m.requestsTotal}`,
+      `Failed requests: ${m.requestsFailed} (${m.errorRatePct}%)`,
+      `Throughput: ${m.rps} req/s`,
+      `Avg response time: ${m.avgResponseTimeMs}ms`,
+      `p50: ${m.p50ResponseTimeMs}ms`,
+      `p95: ${m.p95ResponseTimeMs}ms`,
+      `p99: ${m.p99ResponseTimeMs}ms`,
+    ];
+    if (m.serverErrors !== undefined)
+      lines.push(`Error breakdown: ${m.serverErrors} server (5xx), ${m.clientErrors} client (4xx), ${m.timeouts} timeouts, ${m.networkErrors} network`);
+    if (m.topStepsByP95?.length)
+      lines.push(`Top steps by p95: ${m.topStepsByP95.map(s => `${s.name} avg=${s.avgResponseTime}ms p95=${s.p95ResponseTime}ms`).join(', ')}`);
+    return lines.join('\n');
+  } else {
+    const m = p.metrics;
+    const lines = [
+      `LCP: ${m.lcpMs}ms`, `FCP: ${m.fcpMs}ms`, `TTFB: ${m.ttfbMs}ms`,
+      `FID: ${m.fidMs}ms`, `CLS: ${m.clsScore}`,
+    ];
+    if (m.lighthousePerformance !== undefined)
+      lines.push(`Lighthouse performance: ${m.lighthousePerformance}/100, accessibility: ${m.lighthouseAccessibility}/100`);
+    return lines.join('\n');
   }
-  return lines.join('\n');
 };
 
-const buildPrompt = (ctx: InsightsContext): string => {
-  const isBackend = ctx.metrics.type === 'backend';
-  const metricsText = isBackend
-    ? formatBackendMetrics(ctx.metrics as BackendMetrics)
-    : formatClientMetrics(ctx.metrics as ClientMetrics);
+const buildPrompt = (payload: AnalysisPromptPayload, externalMetrics?: ExternalMetricSource[]): string => {
+  const isBackend = payload.metrics.type === 'backend';
 
-  const violationsText = ctx.thresholdViolations.length > 0
-    ? ctx.thresholdViolations.map(v => `  - ${v}`).join('\n')
+  const violationsText = payload.thresholdViolations.length > 0
+    ? payload.thresholdViolations.map(v => `  - ${v}`).join('\n')
     : '  None';
 
-  const diffsText = ctx.diffs.length > 0
-    ? ctx.diffs.map(d => {
+  const diffsText = payload.diffs.length > 0
+    ? payload.diffs.map(d => {
         const sign = d.diffPercent > 0 ? '+' : '';
         return `  - ${d.metric}: ${d.previous} → ${d.current} (${sign}${d.diffPercent}%) [${d.status}]`;
       }).join('\n')
     : '  No previous run available';
 
-  return `You are a senior performance engineer analyzing load test results. Provide expert insights based on the data below.
+  const externalSection = externalMetrics && externalMetrics.length > 0
+    ? `\n\nExternal Observability Data (from configured integrations — use this to enrich root cause analysis):\n${
+        externalMetrics.map(e => `--- ${e.sourceName}${e.platform ? ` (${e.platform})` : ''} ---\n${e.data}`).join('\n\n')
+      }`
+    : '';
+
+  return `You are a senior performance engineer analyzing load test results. Provide expert insights based on the data below.${externalSection ? ' External observability data from your monitoring stack is included — correlate it with the load test metrics.' : ''}
 
 Test Context:
-- URL: ${ctx.targetUrl}
-- Test type: ${ctx.type} (${isBackend ? 'k6 HTTP load test' : 'Puppeteer browser test'})
+- URL: ${payload.targetUrl}
+- Test type: ${payload.testType} (${isBackend ? 'k6 HTTP load test' : 'Puppeteer browser test'})
 
 Current Metrics:
-${metricsText}
+${formatMetrics(payload)}
 
 Threshold Violations:
 ${violationsText}
@@ -87,7 +183,7 @@ ${violationsText}
 Regression vs Previous Run:
 ${diffsText}
 
-Overall Status: ${ctx.perfStatus} — ${ctx.summary}
+Overall Status: ${payload.perfStatus} — ${payload.summary}${externalSection}
 
 Respond ONLY with a valid JSON object (no markdown fences, no explanation outside the JSON):
 {
@@ -107,15 +203,21 @@ Rules:
 - Keep each string under 120 characters`;
 };
 
-export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsights | null> => {
+export interface AiInsightsResult {
+  insights: AiInsights | null;
+  rateLimited: boolean;
+}
+
+export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsightsResult> => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     log.warn('GEMINI_API_KEY not set — skipping AI insights');
-    return null;
+    return { insights: null, rateLimited: false };
   }
 
-  const prompt = buildPrompt(ctx);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const payload = buildPayload(ctx);
+  const prompt = buildPrompt(payload, ctx.externalMetrics);
+  const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -135,23 +237,23 @@ export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsigh
         ['critical', 'warning', 'info'].includes(parsed.severity)
       ) {
         log.info({ attempt }, 'AI insights generated');
-        return parsed;
+        return { insights: parsed, rateLimited: false };
       }
 
       log.warn({ attempt, parsed }, 'AI insights response had unexpected shape');
-      return null;
+      return { insights: null, rateLimited: false };
     } catch (err: unknown) {
       const msg = (err as Error).message ?? '';
       const status = (err as { status?: number }).status;
 
       if (status === 429 || msg.includes('429') || msg.includes('quota')) {
         log.warn({ attempt }, 'Gemini rate limited — skipping AI insights');
-        return null;
+        return { insights: null, rateLimited: true };
       }
 
       if (err instanceof SyntaxError) {
         log.warn({ attempt }, 'AI insights JSON parse error — skipping');
-        return null;
+        return { insights: null, rateLimited: false };
       }
 
       if (attempt < 2) {
@@ -163,5 +265,5 @@ export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsigh
     }
   }
 
-  return null;
+  return { insights: null, rateLimited: false };
 };

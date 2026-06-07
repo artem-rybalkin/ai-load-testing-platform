@@ -1,11 +1,20 @@
 FROM node:20-alpine
 
+WORKDIR /app
+
+COPY package.json ./
+COPY tsconfig.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY services/ui/package.json ./services/ui/
+
+RUN --mount=type=cache,target=/root/.npm npm install
+
+COPY packages/shared ./packages/shared
+COPY services/ui ./services/ui
+
+RUN npm run build --workspace=packages/shared
+
 WORKDIR /app/services/ui
-
-COPY services/ui/package.json ./
-RUN npm install
-
-COPY services/ui ./
 
 # Vite bakes VITE_* vars into the bundle at build time — pass them as build args
 ARG VITE_API_URL=http://localhost:3000
