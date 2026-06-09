@@ -81,7 +81,17 @@ const postLiveMetric = async (testId: string, point: LiveMetricPoint): Promise<v
 const validateScript = (scriptPath: string): Promise<void> =>
   new Promise((resolve, reject) => {
     const k6 = spawn('k6', ['inspect', scriptPath]);
-    k6.on('close', code => code === 0 ? resolve() : reject(new Error(`k6 script validation failed (exit ${code})`)));
+    const stderrChunks: Buffer[] = [];
+    k6.stderr?.on('data', chunk => stderrChunks.push(chunk));
+    k6.on('close', code => {
+      if (code === 0) { resolve(); return; }
+      // k6 inspect loads + statically evaluates the script's init scope (no
+      // network calls), so a non-zero exit here means the AI-generated script
+      // itself is broken (syntax/runtime error) — capture stderr so the cause
+      // is diagnosable instead of just an opaque exit code.
+      const detail = Buffer.concat(stderrChunks).toString('utf8').trim().slice(0, 2000);
+      reject(new Error(`k6 script validation failed (exit ${code})${detail ? `: ${detail}` : ''}`));
+    });
     k6.on('error', reject);
   });
 
@@ -127,7 +137,10 @@ const runK6Test = async (
       scriptPath,
     ]);
     runningTests.set(testId, k6);
-    setStartedAt(testId).catch(() => {}); // mark exact k6 start time for countdown
+    // Mark running + exact k6 start time (for countdown) in one call — fires
+    // only once validation has passed and the process has actually spawned,
+    // so a validation failure never produces a misleading "running" blip.
+    notifyRunning(testId).catch(() => {});
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -207,15 +220,25 @@ const runK6Test = async (
   });
 };
 
-const updateStatus = async (testId: string, status: string): Promise<void> => {
-  await pool.query(`UPDATE test_results SET status = $1 WHERE test_id = $2`, [status, testId]);
+// Status transitions go through results-service's REST endpoints (matching
+// worker-client) rather than writing test_results directly: those endpoints
+// both clear the stale status_message AND broadcast the test:status WebSocket
+// event. A direct pool.query here would silently desync any open result page —
+// it'd never receive the push notification and would be stuck showing the
+// last status it fetched (e.g. "pending") until manually reloaded.
+const notifyRunning = async (testId: string): Promise<void> => {
+  try { await fetch(`${RESULTS_URL}/results/${testId}/running`, { method: 'POST' }); }
+  catch { /* best-effort */ }
 };
 
-const setStartedAt = async (testId: string): Promise<void> => {
-  await pool.query(
-    `UPDATE test_results SET started_at = NOW() WHERE test_id = $1`,
-    [testId]
-  );
+const notifyFailed = async (testId: string): Promise<void> => {
+  try { await fetch(`${RESULTS_URL}/results/${testId}/fail`, { method: 'POST' }); }
+  catch { /* best-effort */ }
+};
+
+const notifyCancelled = async (testId: string): Promise<void> => {
+  try { await fetch(`${RESULTS_URL}/results/${testId}/cancel`, { method: 'POST' }); }
+  catch { /* best-effort */ }
 };
 
 // r1: retry helper — republish with incremented counter or route to DLQ
@@ -332,14 +355,14 @@ const start = async (): Promise<void> => {
     }
 
     try {
-      await updateStatus(test.id, 'running');
-
+      // Status flips to 'running' (+ started_at) inside runK6Test, once
+      // validation passes and the k6 process actually spawns — see notifyRunning.
       const metrics = await runK6Test(test.id, test.generatedScript!, test.envVars, test.testData, test.csvData);
 
       // r2: check if the test was cancelled while running
       if (cancelledTests.has(test.id)) {
         cancelledTests.delete(test.id);
-        await updateStatus(test.id, 'cancelled');
+        await notifyCancelled(test.id);
         testLog.info('Test cancelled during execution');
         channel.ack(msg);
         return;
@@ -368,7 +391,7 @@ const start = async (): Promise<void> => {
       channel.ack(msg);
     } catch (err) {
       testLog.error({ err: (err as Error).message }, 'Test failed');
-      await updateStatus(test.id, 'failed').catch(() => {});
+      await notifyFailed(test.id);
       handleRetry(channel, msg, QUEUE, DLQ, test.id);
     }
   });

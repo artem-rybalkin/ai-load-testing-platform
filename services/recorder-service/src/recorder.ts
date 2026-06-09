@@ -140,7 +140,7 @@ export async function startSession(
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--window-size=1280,800',
+      '--window-size=1280,960',
     ],
   });
 

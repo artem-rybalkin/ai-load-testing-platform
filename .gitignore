@@ -17,6 +17,7 @@ Thumbs.db
 coverage/
 test-results/
 playwright-report/
+e2e/.auth/
 
 # Claude Code — local settings are personal overrides, never shared
 .claude/settings.local.json

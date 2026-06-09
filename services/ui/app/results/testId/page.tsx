@@ -152,6 +152,20 @@ export default function ResultPage() {
   // Keep ref in sync so WS callbacks always see the latest result without stale closure
   useEffect(() => { resultRef.current = result; }, [result]);
 
+  // Fallback re-sync — while a test is in-flight, periodically re-fetch.
+  // WebSocket push is the primary update path, but some status transitions
+  // (e.g. a worker writing 'failed' without going through results-service's
+  // REST layer) never broadcast a test:status event, leaving an open page
+  // stuck on a stale 'pending'/'running' view indefinitely. A low-frequency
+  // poll self-heals within ~20s instead of requiring a manual reload.
+  useEffect(() => {
+    if (result?.status !== 'pending' && result?.status !== 'running') return;
+    const id = setInterval(() => {
+      getResult(testId).then(d => { if (d.result) setResult(d.result); }).catch(() => {});
+    }, 20_000);
+    return () => clearInterval(id);
+  }, [result?.status, testId]);
+
   // Initial data load
   useEffect(() => {
     const load = async () => {
@@ -385,7 +399,7 @@ export default function ResultPage() {
                 </p>
               </div>
             )}
-            {result.status_message && (
+            {!isTerminal && result.status_message && (
               <p className={`text-[11px] font-mono mt-3 ${
                 result.status_message.includes('failed') || result.status_message.includes('unavailable')
                   ? 'text-[#9a6700]'

@@ -14,7 +14,9 @@ export function HealthProvider({ children }: { children: ReactNode }) {
     const poll = async () => {
       try {
         const data = await getSystemHealth();
-        setServices(data.services);
+        // A 401 (e.g. polled before the session cookie exists, right after login)
+        // returns `{ error: ... }` with no `services` array — treat like a network error.
+        if (Array.isArray(data?.services)) setServices(data.services);
       } catch { /* network error — don't surface */ }
     };
     poll();

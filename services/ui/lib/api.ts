@@ -91,6 +91,10 @@ export const createTest = async (data: TestRequest) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
   return res.json();
 };
 
@@ -360,6 +364,15 @@ export const getLogSources = async (): Promise<{ logSources: LogSource[] }> => {
 export const createLogSource = async (data: { name: string; platform?: string; urlTemplate: string; metricsEndpointTemplate?: string; authHeader?: string }): Promise<{ logSource: LogSource }> => {
   const res = await f(`${RESULTS_URL}/log-sources`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+};
+
+export const updateLogSource = async (id: string, data: Partial<{ name: string; platform: string | null; urlTemplate: string; metricsEndpointTemplate: string | null; authHeader: string | null }>): Promise<{ logSource: LogSource }> => {
+  const res = await f(`${RESULTS_URL}/log-sources/${id}`, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });

@@ -67,12 +67,12 @@ describe('FLOW_PROMPT — extraction rules', () => {
     expect(await getLastPrompt()).toContain('csrf ← regex: value="([^"]+)"');
   });
 
-  it('includes exec.test.abort instructions when any step has extractions', async () => {
+  it('includes exec.vu.abort instructions when any step has extractions', async () => {
     const test = baseFlow();
     test.steps![0].extract = { token: { source: 'jsonpath', expression: '$.token' } };
     await generateScript(test);
     const prompt = await getLastPrompt();
-    expect(prompt).toContain('exec.test.abort');
+    expect(prompt).toContain('exec.vu.abort');
     expect(prompt).toContain("import exec from 'k6/execution'");
   });
 

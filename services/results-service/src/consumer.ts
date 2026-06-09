@@ -234,6 +234,7 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (test_id) DO UPDATE SET
          status        = EXCLUDED.status,
+         status_message = NULL,
          metrics       = EXCLUDED.metrics,
          target_url    = COALESCE(EXCLUDED.target_url, test_results.target_url),
          completed_at  = EXCLUDED.completed_at,

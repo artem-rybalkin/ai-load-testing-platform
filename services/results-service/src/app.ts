@@ -39,7 +39,7 @@ export const buildApp = async (
 
   // Internal endpoints called by backend services (no cookie) — always exempt
   const internalPaths = new Set(['/health', '/system/ai-status', '/results/pending', '/ws']);
-  const internalSuffixes = ['/running', '/fail', '/message', '/live'];
+  const internalSuffixes = ['/running', '/fail', '/message', '/live', '/cancel'];
   const isInternal = (url: string) =>
     internalPaths.has(url.split('?')[0]) ||
     internalSuffixes.some(s => url.split('?')[0].endsWith(s));
@@ -191,8 +191,14 @@ export const buildApp = async (
     async (request, reply) => {
       try {
         const { testId } = request.params;
+        // Guard against a race where a delayed ai-service progress message
+        // (e.g. "Script ready — starting test…") lands after the test has
+        // already reached a terminal state — which would clobber the
+        // status_message that /fail, /running or /cancel just cleared,
+        // leaving a stale message stuck on a finished test (see RES-16).
         await pool.query(
-          `UPDATE test_results SET status_message = $1 WHERE test_id = $2`,
+          `UPDATE test_results SET status_message = $1
+           WHERE test_id = $2 AND status NOT IN ('failed', 'completed', 'cancelled')`,
           [request.body.message, testId]
         );
         return { success: true };
@@ -949,6 +955,29 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         [name, platform ?? null, urlTemplate, metricsEndpointTemplate ?? null, authHeader ?? null, projectId]
       );
       return reply.code(201).send({ logSource: rows[0] });
+    }
+  );
+
+  app.put<{ Params: { id: string }; Body: Partial<{ name: string; platform: string | null; urlTemplate: string; metricsEndpointTemplate: string | null; authHeader: string | null }> }>(
+    '/log-sources/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      const updates = request.body;
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      let i = 1;
+      if (updates.name                    !== undefined) { sets.push(`name = $${i++}`);                      vals.push(updates.name); }
+      if (updates.platform                !== undefined) { sets.push(`platform = $${i++}`);                  vals.push(updates.platform); }
+      if (updates.urlTemplate             !== undefined) { sets.push(`url_template = $${i++}`);              vals.push(updates.urlTemplate); }
+      if (updates.metricsEndpointTemplate !== undefined) { sets.push(`metrics_endpoint_template = $${i++}`); vals.push(updates.metricsEndpointTemplate); }
+      if (updates.authHeader              !== undefined) { sets.push(`auth_header = $${i++}`);               vals.push(updates.authHeader); }
+      if (sets.length === 0) return reply.code(400).send({ error: 'No fields to update' });
+      const projectId = request.projectId ?? null;
+      vals.push(id);
+      vals.push(projectId);
+      const { rows } = await pool.query(`UPDATE log_sources SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING *`, vals);
+      if (rows.length === 0) return reply.code(404).send({ error: 'Log source not found' });
+      return { logSource: rows[0] };
     }
   );
 

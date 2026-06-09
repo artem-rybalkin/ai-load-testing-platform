@@ -201,6 +201,7 @@ Requirements:
 - Use k6 JavaScript API with group() for EACH step
 - Each step MUST be wrapped in: group('Step N: name', function() { ... })
 - Chain variables between steps: extract values from responses and use them in subsequent requests
+- Chained extraction MUST be defensive: never call res.json() or access response fields unconditionally — guard with a status check or try/catch and fall back to a default value (e.g. const origin = (res.status === 200 && res.json().origin) || 'default'; or wrap in try { ... } catch { vars.x = 'default'; }). A parse failure on one step must NEVER throw and abort the rest of the iteration — every later group() must still run and be measured even if an earlier extraction failed
 - Use __ENV.VAR_NAME for credentials (never hardcode passwords/tokens)
 - Add check() assertions for response status (2xx) in each group
 - After all groups, add sleep(1)

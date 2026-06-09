@@ -4,7 +4,7 @@
 # Clean up stale X11 lock files from previous container run
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
 
-Xvfb :99 -screen 0 1280x800x24 -ac &
+Xvfb :99 -screen 0 1280x960x24 -ac &
 
 i=0
 while [ ! -e /tmp/.X11-unix/X99 ] && [ $i -lt 50 ]; do

@@ -485,8 +485,8 @@ function HomeContent() {
       });
 
       if (res.test?.id) navigate(`/results/${res.test.id}`);
-    } catch {
-      setError('Failed to create test');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create test');
     } finally {
       setLoading(false);
     }

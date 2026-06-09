@@ -65,8 +65,17 @@ describe('Home page — form validation', () => {
     expect(mockPush).toHaveBeenCalledWith('/results/new-test-id');
   });
 
-  it('shows error message when createTest fails', async () => {
-    mockCreateTest.mockRejectedValueOnce(new Error('network error'));
+  it('shows the server error message when createTest fails', async () => {
+    mockCreateTest.mockRejectedValueOnce(new Error('Invalid targetUrl — must use http or https'));
+    render(<Home />);
+    const urlInput = screen.getByPlaceholderText('https://example.com');
+    fireEvent.change(urlInput, { target: { value: 'localhost:8081' } });
+    fireEvent.click(screen.getByRole('button', { name: /run test/i }));
+    await waitFor(() => expect(screen.getByText('Invalid targetUrl — must use http or https')).toBeInTheDocument());
+  });
+
+  it('falls back to a generic message when createTest rejects without an Error', async () => {
+    mockCreateTest.mockRejectedValueOnce('not an Error instance');
     render(<Home />);
     const urlInput = screen.getByPlaceholderText('https://example.com');
     fireEvent.change(urlInput, { target: { value: 'https://test.com' } });
@@ -140,23 +149,24 @@ const blurDescription = (text: string) => {
 };
 
 describe('Home page — applyDescriptionParams (description blur)', () => {
-  it('extracts VU count and shows it in the settings summary', () => {
+  it('extracts VU count and populates the Virtual users input', () => {
     render(<Home />);
     blurDescription('load test with 50 VUs for 2 minutes');
-    // Advanced settings auto-opens; summary strip shows "50 VUs"
-    expect(screen.getByText(/50\s*VUs/)).toBeInTheDocument();
+    // Advanced settings auto-opens (hiding the collapsed summary strip) to
+    // reveal the parsed value in the "Virtual users" number input
+    expect(screen.getByDisplayValue('50')).toBeInTheDocument();
   });
 
-  it('extracts duration in minutes and shows it in the settings summary', () => {
+  it('extracts duration in minutes and selects it in the duration dropdown', () => {
     render(<Home />);
     blurDescription('run for 5 minutes');
-    expect(screen.getByText(/5m/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue('5m')).toBeInTheDocument();
   });
 
-  it('extracts duration in seconds', () => {
+  it('extracts duration in seconds and selects it in the duration dropdown', () => {
     render(<Home />);
     blurDescription('run for 30 seconds');
-    expect(screen.getByText(/30s/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue('30s')).toBeInTheDocument();
   });
 
   it('detects spike profile keyword', () => {
@@ -188,21 +198,26 @@ describe('Home page — applyDescriptionParams (description blur)', () => {
   it('does not extract VUs when no match', () => {
     render(<Home />);
     blurDescription('test my API please');
-    // Summary should show default 5 VUs, not crash
-    expect(screen.queryByText(/VUs/)).not.toBeInTheDocument(); // advanced not yet open
+    // No numeric param detected → Advanced settings stays collapsed, and the
+    // summary strip still shows the untouched default "5 VUs" (one of the two
+    // "VUs" matches on the page — the other is the static "AI parses VUs…" hint)
+    const matches = screen.getAllByText(/VUs/);
+    expect(matches.some(el => /\b5\s*VUs\b/.test(el.textContent ?? ''))).toBe(true);
   });
 
   it('caps VU count at 100', () => {
     render(<Home />);
     blurDescription('load test with 500 VUs');
-    expect(screen.getByText(/100\s*VUs/)).toBeInTheDocument();
+    // Advanced settings auto-opens; the capped value shows in the number input
+    expect(screen.getByDisplayValue('100')).toBeInTheDocument();
   });
 
   it('extracts ramp-up duration', () => {
     render(<Home />);
     blurDescription('load test 10 VUs ramp up: 30s for 2 minutes');
-    // ramp 30s should appear in summary
-    expect(screen.getByText(/ramp\s+30s/i)).toBeInTheDocument();
+    // Advanced settings auto-opens; "30s" lands in the Ramp-up text input
+    // (duration "2m" is selected in the dropdown, so this match is unambiguous)
+    expect(screen.getByDisplayValue('30s')).toBeInTheDocument();
   });
 });
 

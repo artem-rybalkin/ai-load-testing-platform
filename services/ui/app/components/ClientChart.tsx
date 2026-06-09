@@ -20,7 +20,7 @@ interface ResourceBreakdown {
 interface ClientMetrics {
   lcp: number; fcp: number; ttfb: number; fid: number; cls: number;
   inp?: number; tbt?: number; tti?: number;
-  jsErrors?: number; longTaskCount?: number; domNodeCount?: number;
+  jsErrors?: number; longTaskCount?: number; domNodeCount?: number; pageLoadCount?: number;
   resourceBreakdown?: ResourceBreakdown;
   lighthouseScore?: LighthouseScore;
 }
@@ -184,7 +184,7 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
       </div>
 
       {/* Additional timing & page health */}
-      {(metrics.tti != null || metrics.jsErrors != null || metrics.longTaskCount != null || metrics.domNodeCount != null) && (
+      {(metrics.tti != null || metrics.jsErrors != null || metrics.longTaskCount != null || metrics.domNodeCount != null || metrics.pageLoadCount != null) && (
         <div>
           <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">Page Health</span>
           <div className="bg-[#f6f8fa] border border-[#d0d7de] rounded-md px-3 py-1">
@@ -192,6 +192,7 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
             {metrics.longTaskCount != null && <InfoRow label="Long Tasks (>50ms)"        value={metrics.longTaskCount} />}
             {metrics.jsErrors   != null && <InfoRow label="JS Errors"                  value={metrics.jsErrors} />}
             {metrics.domNodeCount != null && <InfoRow label="DOM Nodes"                  value={metrics.domNodeCount.toLocaleString()} />}
+            {metrics.pageLoadCount != null && <InfoRow label="Page Opens"                 value={metrics.pageLoadCount} />}
           </div>
         </div>
       )}

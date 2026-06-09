@@ -2,6 +2,13 @@
 
 Improvements, suggestions, and large future work items.
 
+## Manual Testing
+
+- [ ] Manually test log integration
+- [ ] Manually test script recording
+- [ ] Manually test correlation
+- [ ] Manually test client-side testing
+
 ## AI Enhancement Roadmap
 
 ### 🔴 High impact — implement now

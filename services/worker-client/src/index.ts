@@ -55,6 +55,16 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
   const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
   testLog.info('Launching browser');
 
+  const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+  const postMessage = (message: string) =>
+    fetch(`${resultsUrl}/results/${test.id}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    }).catch((err: Error) => testLog.debug({ err: err.message }, 'postMessage delivery failed'));
+
+  let pageLoadCount = 0;
+
   const browser = await puppeteer.launch({
     headless: true,
     args: [
@@ -82,15 +92,17 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
     // ── Puppeteer sessions: collect Web Vitals ───────────────────────────────
     for (let i = 0; i < sessions; i++) {
       testLog.info({ session: i + 1, sessions }, 'Running session');
+      await postMessage(`Running browser session ${i + 1} of ${sessions}…`);
       const page = await browser.newPage();
-  
+
       let sessionJsErrors = 0;
       page.on('pageerror', () => { sessionJsErrors++; });
-  
+
       const cdp = await page.createCDPSession();
       await cdp.send('Performance.enable');
-  
+
       await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT_MS });
+      pageLoadCount++;
       // True TTFB = responseStart - requestStart from Navigation Timing API.
       // The old wall-clock approach included DNS + TCP + TLS + networkidle2 settle time.
       const ttfb = await page.evaluate(() => {
@@ -189,6 +201,8 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
       const port = parseInt(new URL(wsEndpoint).port, 10);
   
       testLog.info({ port }, 'Running Lighthouse');
+      await postMessage('Running Lighthouse audit…');
+      pageLoadCount++;
       const lhResult = await lighthouse(test.targetUrl, {
         port,
         output: 'json' as const,
@@ -251,6 +265,7 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
       jsErrors:         totalJsErrors > 0 ? totalJsErrors : undefined,
       longTaskCount:    avgNum('longTaskCount') > 0 ? Math.round(avgNum('longTaskCount')) : undefined,
       domNodeCount:     lhDomNodes,
+      pageLoadCount,
       resourceBreakdown: avgResourceBreakdown(),
       lighthouseScore,
     };

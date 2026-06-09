@@ -851,6 +851,21 @@ describe('POST /results/:testId/message', () => {
     const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [testId]);
     expect(rows[0].status_message).toContain('Gemini unavailable');
   });
+
+  it('does NOT overwrite status_message once the test has reached a terminal state (RES-16 race guard)', async () => {
+    const testId = await insertResult({ status: 'failed' }); // status_message defaults to NULL
+    const res = await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/message`,
+      payload: { message: 'Script ready — starting test…' },
+    });
+    // Endpoint still reports success (fire-and-forget from ai-service's perspective)
+    // but the UPDATE is a no-op — a delayed progress message must never resurrect
+    // a stale status_message on an already-finished test.
+    expect(res.statusCode).toBe(200);
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [testId]);
+    expect(rows[0].status_message).toBeNull();
+  });
 });
 
 // ─── POST /results/:testId/fail ───────────────────────────────────────────────

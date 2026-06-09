@@ -166,6 +166,17 @@ describe('Session middleware', () => {
     expect(res.statusCode).not.toBe(401);
   });
 
+  it('allows POST /results/:testId/cancel without a session cookie (internal path — called server-to-server by api-service)', async () => {
+    const testId = crypto.randomUUID();
+    await app.inject({
+      method: 'POST', url: '/results/pending',
+      payload: { testId, type: 'backend', targetUrl: 'http://x.com' },
+    });
+    const res = await app.inject({ method: 'POST', url: `/results/${testId}/cancel` });
+    expect(res.statusCode).not.toBe(401);
+    expect(res.statusCode).toBe(200);
+  });
+
   it('allows GET /results with a valid session cookie', async () => {
     const loginRes = await app.inject({
       method: 'POST', url: '/auth/login',

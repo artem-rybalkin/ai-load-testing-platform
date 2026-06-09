@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, cleanup, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { RecordingSession } from '@/lib/api';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -10,6 +11,7 @@ const mockStartRecording = vi.hoisted(() => vi.fn());
 const mockStopRecording  = vi.hoisted(() => vi.fn());
 const mockGetRecording   = vi.hoisted(() => vi.fn());
 const mockWindowOpen     = vi.hoisted(() => vi.fn());
+const mockAlert          = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   startRecording: mockStartRecording,
@@ -63,9 +65,31 @@ const makeFlowStep = (name: string) => ({
   method: 'GET' as const,
 });
 
+const makeHarEntry = (overrides: {
+  url?: string;
+  method?: string;
+  mimeType?: string;
+  postDataText?: string;
+  headers?: Array<{ name: string; value: string }>;
+} = {}) => ({
+  request: {
+    url: overrides.url ?? 'https://api.example.com/users',
+    method: overrides.method ?? 'GET',
+    ...(overrides.postDataText !== undefined ? { postData: { text: overrides.postDataText } } : {}),
+    headers: overrides.headers ?? [{ name: 'Accept', value: 'application/json' }],
+  },
+  response: { content: { mimeType: overrides.mimeType ?? 'application/json' } },
+});
+
+const makeHar = (entries: unknown[]) => JSON.stringify({ log: { entries } });
+
+const getHarInput = (container: HTMLElement) =>
+  container.querySelector('input[type="file"][accept*="har"]') as HTMLInputElement;
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal('open', mockWindowOpen);
+  vi.stubGlobal('alert', mockAlert);
   mockGetRecording.mockResolvedValue(makeSession());
 });
 
@@ -440,5 +464,161 @@ describe('FlowBuilder — visibilitychange tab-switch detection', () => {
 
     await new Promise(r => setTimeout(r, 100));
     expect(mockGetRecording).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Import from HAR ─────────────────────────────────────────────────────────
+
+describe('FlowBuilder — Import from HAR', () => {
+  it('clicking "Import from HAR" triggers the hidden file input', () => {
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+    const input = getHarInput(container);
+    const clickSpy = vi.spyOn(input, 'click');
+
+    fireEvent.click(screen.getByRole('button', { name: /import from har/i }));
+
+    expect(clickSpy).toHaveBeenCalled();
+  });
+
+  it('imports filtered API requests and maps them to FlowSteps', async () => {
+    const har = makeHar([
+      makeHarEntry({ url: 'https://api.example.com/users', method: 'GET' }),
+      makeHarEntry({ url: 'https://api.example.com/orders', method: 'POST', postDataText: '{"id":1}' }),
+      makeHarEntry({ url: 'https://example.com/app.js', method: 'GET', mimeType: 'application/javascript' }),
+    ]);
+    const file = new File([har], 'recording.har', { type: 'application/json' });
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => { await userEvent.upload(getHarInput(container), file); });
+
+    await waitFor(() => expect(defaultProps.onChange).toHaveBeenCalled());
+    const imported = defaultProps.onChange.mock.calls[0][0];
+    expect(imported).toHaveLength(2);
+    expect(imported[0]).toMatchObject({
+      name: 'Step 1: GET /users',
+      url: 'https://api.example.com/users',
+      method: 'GET',
+      body: '',
+    });
+    expect(imported[1]).toMatchObject({
+      name: 'Step 2: POST /orders',
+      url: 'https://api.example.com/orders',
+      method: 'POST',
+      body: '{"id":1}',
+    });
+  });
+
+  it('strips sensitive headers (cookie, authorization, host, content-length, connection)', async () => {
+    const har = makeHar([
+      makeHarEntry({
+        url: 'https://api.example.com/me',
+        method: 'GET',
+        headers: [
+          { name: 'Cookie', value: 'session=abc' },
+          { name: 'Authorization', value: 'Bearer xyz' },
+          { name: 'Host', value: 'api.example.com' },
+          { name: 'Content-Length', value: '0' },
+          { name: 'Connection', value: 'keep-alive' },
+          { name: 'Accept', value: 'application/json' },
+        ],
+      }),
+    ]);
+    const file = new File([har], 'recording.har', { type: 'application/json' });
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => { await userEvent.upload(getHarInput(container), file); });
+
+    await waitFor(() => expect(defaultProps.onChange).toHaveBeenCalled());
+    const [step] = defaultProps.onChange.mock.calls[0][0];
+    expect(step.headers).toEqual({ Accept: 'application/json' });
+  });
+
+  it('shows a filtered-entries note when static assets were excluded', async () => {
+    const har = makeHar([
+      makeHarEntry({ url: 'https://api.example.com/users', method: 'GET' }),
+      makeHarEntry({ url: 'https://example.com/app.js', method: 'GET', mimeType: 'application/javascript' }),
+      makeHarEntry({ url: 'https://example.com/style.css', method: 'GET', mimeType: 'text/css' }),
+    ]);
+    const file = new File([har], 'recording.har', { type: 'application/json' });
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => { await userEvent.upload(getHarInput(container), file); });
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 of 3 HAR entries imported/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/static assets.*were filtered out/i)).toBeInTheDocument();
+  });
+
+  it('does not show a filtered-entries note when nothing was filtered', async () => {
+    const har = makeHar([
+      makeHarEntry({ url: 'https://api.example.com/users', method: 'GET' }),
+      makeHarEntry({ url: 'https://api.example.com/orders', method: 'POST' }),
+    ]);
+    const file = new File([har], 'recording.har', { type: 'application/json' });
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => { await userEvent.upload(getHarInput(container), file); });
+
+    await waitFor(() => expect(defaultProps.onChange).toHaveBeenCalled());
+    expect(screen.queryByText(/HAR entries imported/i)).not.toBeInTheDocument();
+  });
+
+  it('alerts and skips onChange when no XHR/API requests are found', async () => {
+    const har = makeHar([
+      makeHarEntry({ url: 'https://example.com/app.js', method: 'GET', mimeType: 'application/javascript' }),
+      makeHarEntry({ url: 'ws://example.com/socket', method: 'GET' }),
+    ]);
+    const file = new File([har], 'recording.har', { type: 'application/json' });
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => { await userEvent.upload(getHarInput(container), file); });
+
+    await waitFor(() => {
+      expect(mockAlert).toHaveBeenCalledWith(expect.stringMatching(/No XHR\/API requests found in HAR file/i));
+    });
+    expect(defaultProps.onChange).not.toHaveBeenCalled();
+  });
+
+  it('alerts gracefully when the uploaded file is not valid HAR/JSON', async () => {
+    const file = new File(['not valid json{{{'], 'broken.har', { type: 'application/json' });
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => { await userEvent.upload(getHarInput(container), file); });
+
+    await waitFor(() => {
+      expect(mockAlert).toHaveBeenCalledWith(expect.stringMatching(/No XHR\/API requests found in HAR file/i));
+    });
+    expect(defaultProps.onChange).not.toHaveBeenCalled();
+  });
+
+  it('caps imports at the first 50 matching entries', async () => {
+    const entries = Array.from({ length: 60 }, (_, i) =>
+      makeHarEntry({ url: `https://api.example.com/item/${i}`, method: 'GET' })
+    );
+    const file = new File([makeHar(entries)], 'recording.har', { type: 'application/json' });
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => { await userEvent.upload(getHarInput(container), file); });
+
+    await waitFor(() => expect(defaultProps.onChange).toHaveBeenCalled());
+    const imported = defaultProps.onChange.mock.calls[0][0];
+    expect(imported).toHaveLength(50);
+    expect(screen.getByText(/50 of 60 HAR entries imported/i)).toBeInTheDocument();
+  });
+
+  it('resets the file input value after processing so the same file can be re-imported', async () => {
+    const file = new File(
+      [makeHar([makeHarEntry({ url: 'https://api.example.com/users', method: 'GET' })])],
+      'recording.har',
+      { type: 'application/json' },
+    );
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+    const input = getHarInput(container);
+
+    await act(async () => { await userEvent.upload(input, file); });
+
+    await waitFor(() => expect(defaultProps.onChange).toHaveBeenCalled());
+    expect(input.value).toBe('');
   });
 });

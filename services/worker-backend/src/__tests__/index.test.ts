@@ -8,7 +8,8 @@
  *
  * pg.Pool and amqplib.Channel are mocked so no real DB or broker is needed.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 
 // ── pg mock ────────────────────────────────────────────────────────────────
 const mockQuery = vi.fn();
@@ -20,7 +21,8 @@ vi.mock('pg', () => ({
 vi.mock('amqplib', () => ({ default: { connect: vi.fn() } }));
 
 // ── child_process mock (prevents k6 spawn) ────────────────────────────────
-vi.mock('child_process', () => ({ spawn: vi.fn() }));
+const mockSpawn = vi.fn();
+vi.mock('child_process', () => ({ spawn: mockSpawn }));
 
 // ── fastify mock (prevents health server from binding) ────────────────────
 vi.mock('fastify', () => ({
@@ -97,6 +99,55 @@ const handleRetryFn = (
     channel.sendToQueue(dlq, msg.content, { persistent: true });
   }
   channel.ack(msg as never);
+};
+
+// ── validateScript (re-implemented inline matching worker-backend/src/index.ts) ─
+//
+// Spawns `k6 inspect <path>`, capturing stderr so a non-zero exit (script
+// load/syntax error — k6 inspect makes no network calls) is diagnosable.
+
+const validateScriptFn = (scriptPath: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const k6 = mockSpawn('k6', ['inspect', scriptPath]);
+    const stderrChunks: Buffer[] = [];
+    k6.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+    k6.on('close', (code: number) => {
+      if (code === 0) { resolve(); return; }
+      const detail = Buffer.concat(stderrChunks).toString('utf8').trim().slice(0, 2000);
+      reject(new Error(`k6 script validation failed (exit ${code})${detail ? `: ${detail}` : ''}`));
+    });
+    k6.on('error', reject);
+  });
+
+const makeFakeK6Process = () => {
+  const proc = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+  proc.stderr = new EventEmitter();
+  return proc;
+};
+
+// ── notify* REST helpers (re-implemented inline matching src/index.ts) ────
+//
+// worker-backend now reports status transitions via results-service's REST
+// endpoints (instead of direct pool.query writes) so that broadcast() fires
+// and connected UI clients receive WebSocket pushes. Errors are swallowed —
+// these are best-effort notifications, not the source of truth (DB write
+// happens inside results-service).
+
+const RESULTS_URL = 'http://results-service:3004';
+
+const notifyRunningFn = async (testId: string): Promise<void> => {
+  try { await fetch(`${RESULTS_URL}/results/${testId}/running`, { method: 'POST' }); }
+  catch { /* best-effort */ }
+};
+
+const notifyFailedFn = async (testId: string): Promise<void> => {
+  try { await fetch(`${RESULTS_URL}/results/${testId}/fail`, { method: 'POST' }); }
+  catch { /* best-effort */ }
+};
+
+const notifyCancelledFn = async (testId: string): Promise<void> => {
+  try { await fetch(`${RESULTS_URL}/results/${testId}/cancel`, { method: 'POST' }); }
+  catch { /* best-effort */ }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -210,5 +261,124 @@ describe('handleRetry — DLQ path (MAX_RETRIES exhausted)', () => {
     handleRetryFn(ch, msg, 'backend-tests', 'backend-tests.dlq', 'tid');
 
     expect(ch.sendToQueue).toHaveBeenCalledOnce();
+  });
+});
+
+// ── validateScript ────────────────────────────────────────────────────────
+
+describe('validateScript — k6 inspect stderr capture', () => {
+  it('resolves when k6 inspect exits 0', async () => {
+    const proc = makeFakeK6Process();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = validateScriptFn('/run/dir/script.js');
+    proc.emit('close', 0);
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledWith('k6', ['inspect', '/run/dir/script.js']);
+  });
+
+  it('rejects with the captured stderr text when k6 inspect exits non-zero', async () => {
+    const proc = makeFakeK6Process();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = validateScriptFn('/run/dir/script.js');
+    proc.stderr.emit('data', Buffer.from('SyntaxError: '));
+    proc.stderr.emit('data', Buffer.from('Unexpected token at line 12'));
+    proc.emit('close', 255);
+
+    await expect(promise).rejects.toThrow(
+      'k6 script validation failed (exit 255): SyntaxError: Unexpected token at line 12',
+    );
+  });
+
+  it('omits the trailing colon-detail when stderr produced no output', async () => {
+    const proc = makeFakeK6Process();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = validateScriptFn('/run/dir/script.js');
+    proc.emit('close', 1);
+
+    await expect(promise).rejects.toThrow('k6 script validation failed (exit 1)');
+    await expect(promise).rejects.not.toThrow(/:\s*$/);
+  });
+
+  it('truncates stderr detail to 2000 characters', async () => {
+    const proc = makeFakeK6Process();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = validateScriptFn('/run/dir/script.js');
+    proc.stderr.emit('data', Buffer.from('x'.repeat(3000)));
+    proc.emit('close', 255);
+
+    await promise.catch((err: Error) => {
+      const detail = err.message.split(': ')[1];
+      expect(detail.length).toBe(2000);
+    });
+  });
+
+  it('rejects when the spawned process itself errors (e.g. k6 binary missing)', async () => {
+    const proc = makeFakeK6Process();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = validateScriptFn('/run/dir/script.js');
+    const spawnError = new Error('spawn k6 ENOENT');
+    proc.emit('error', spawnError);
+
+    await expect(promise).rejects.toBe(spawnError);
+  });
+});
+
+// ── notifyRunning / notifyFailed / notifyCancelled ────────────────────────
+
+describe('notify* REST helpers — status transitions reported via results-service', () => {
+  const originalFetch = global.fetch;
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockFetch = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = mockFetch as unknown as typeof fetch;
+  });
+
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it('notifyRunning POSTs to /results/:testId/running', async () => {
+    await notifyRunningFn('tid-1');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://results-service:3004/results/tid-1/running',
+      { method: 'POST' },
+    );
+  });
+
+  it('notifyFailed POSTs to /results/:testId/fail', async () => {
+    await notifyFailedFn('tid-2');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://results-service:3004/results/tid-2/fail',
+      { method: 'POST' },
+    );
+  });
+
+  it('notifyCancelled POSTs to /results/:testId/cancel', async () => {
+    await notifyCancelledFn('tid-3');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://results-service:3004/results/tid-3/cancel',
+      { method: 'POST' },
+    );
+  });
+
+  it('swallows fetch errors (best-effort — DB write happens server-side)', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    await expect(notifyRunningFn('tid-4')).resolves.toBeUndefined();
+  });
+
+  it('swallows network errors for notifyFailed and notifyCancelled too', async () => {
+    mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    await expect(notifyFailedFn('tid-5')).resolves.toBeUndefined();
+    await expect(notifyCancelledFn('tid-6')).resolves.toBeUndefined();
   });
 });

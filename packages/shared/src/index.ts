@@ -172,6 +172,7 @@ export interface ClientMetrics {
   jsErrors?: number;         // JS errors thrown during page load
   longTaskCount?: number;    // Tasks >50ms blocking main thread
   domNodeCount?: number;     // DOM node count at load — from Lighthouse
+  pageLoadCount?: number;    // Number of times the page was navigated/opened (sessions + Lighthouse audit)
   resourceBreakdown?: ResourceBreakdown;
   lighthouseScore?: LighthouseScore;
 }

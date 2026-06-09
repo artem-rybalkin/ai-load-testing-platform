@@ -9,7 +9,7 @@
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
 
 # ── 1. Start Xvfb virtual display ────────────────────────────────────────────
-Xvfb :99 -screen 0 1280x800x24 -ac &
+Xvfb :99 -screen 0 1280x960x24 -ac &
 XVFB_PID=$!
 
 # Wait for X11 socket to appear (max 10 seconds)

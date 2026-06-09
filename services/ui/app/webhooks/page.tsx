@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import {
   getWebhooks, createWebhook, deleteWebhook, Webhook,
-  getLogSources, createLogSource, deleteLogSource, LogSource,
+  getLogSources, createLogSource, updateLogSource, deleteLogSource, LogSource,
   predictWebhookNoise,
 } from '@/lib/api';
 
@@ -193,6 +193,7 @@ function WebhooksSection() {
 
 function LogSourcesSection() {
   const [sources, setSources] = useState<LogSource[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [platform, setPlatform] = useState<string>('Grafana');
   const [urlTemplate, setUrlTemplate] = useState('');
@@ -213,23 +214,48 @@ function LogSourcesSection() {
 
   useEffect(() => { load(); }, []);
 
-  const handleAdd = async () => {
+  const resetForm = () => {
+    setEditingId(null);
+    setName('');
+    setPlatform('Grafana');
+    setUrlTemplate('');
+    setMetricsEndpointTemplate('');
+    setAuthHeader('');
+    setError('');
+  };
+
+  const startEdit = (source: LogSource) => {
+    setEditingId(source.id);
+    setName(source.name);
+    setPlatform(source.platform ?? 'Custom');
+    setUrlTemplate(source.url_template);
+    setMetricsEndpointTemplate(source.metrics_endpoint_template ?? '');
+    setAuthHeader(source.auth_header ?? '');
+    setError('');
+  };
+
+  const handleSubmit = async () => {
     if (!name.trim() || !urlTemplate.trim()) { setError('Name and URL template are required'); return; }
     setSaving(true);
     setError('');
     try {
-      await createLogSource({
-        name: name.trim(), platform, urlTemplate: urlTemplate.trim(),
-        ...(metricsEndpointTemplate.trim() ? { metricsEndpointTemplate: metricsEndpointTemplate.trim() } : {}),
-        ...(authHeader.trim() ? { authHeader: authHeader.trim() } : {}),
-      });
-      setName('');
-      setUrlTemplate('');
-      setMetricsEndpointTemplate('');
-      setAuthHeader('');
+      if (editingId) {
+        await updateLogSource(editingId, {
+          name: name.trim(), platform, urlTemplate: urlTemplate.trim(),
+          metricsEndpointTemplate: metricsEndpointTemplate.trim() || null,
+          authHeader: authHeader.trim() || null,
+        });
+      } else {
+        await createLogSource({
+          name: name.trim(), platform, urlTemplate: urlTemplate.trim(),
+          ...(metricsEndpointTemplate.trim() ? { metricsEndpointTemplate: metricsEndpointTemplate.trim() } : {}),
+          ...(authHeader.trim() ? { authHeader: authHeader.trim() } : {}),
+        });
+      }
+      resetForm();
       await load();
     } catch {
-      setError('Failed to save log source');
+      setError(editingId ? 'Failed to update log source' : 'Failed to save log source');
     } finally {
       setSaving(false);
     }
@@ -245,7 +271,9 @@ function LogSourcesSection() {
 
       <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden mb-4">
         <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Add Log Source</span>
+          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+            {editingId ? 'Edit Log Source' : 'Add Log Source'}
+          </span>
         </div>
         <div className="p-4 space-y-3">
           <div className="flex gap-2">
@@ -325,14 +353,23 @@ function LogSourcesSection() {
 
           {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
         </div>
-        <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de]">
+        <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] flex items-center gap-2">
           <button
-            onClick={handleAdd}
+            onClick={handleSubmit}
             disabled={saving}
             className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
           >
-            {saving ? 'Saving…' : 'Add log source'}
+            {saving ? 'Saving…' : editingId ? 'Save changes' : 'Add log source'}
           </button>
+          {editingId && (
+            <button
+              onClick={resetForm}
+              disabled={saving}
+              className="px-4 py-1.5 border border-[#d0d7de] hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
         </div>
       </div>
 
@@ -353,12 +390,20 @@ function LogSourcesSection() {
                 </div>
                 <p className="text-[11px] font-mono text-[#8c959f] mt-0.5 truncate max-w-sm">{s.url_template}</p>
               </div>
-              <button
-                onClick={() => deleteLogSource(s.id).then(load)}
-                className="text-[11px] text-[#cf222e] hover:underline ml-4 flex-shrink-0"
-              >
-                Remove
-              </button>
+              <div className="flex items-center gap-3 ml-4 flex-shrink-0">
+                <button
+                  onClick={() => startEdit(s)}
+                  className="text-[11px] text-[#0969da] hover:underline"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => deleteLogSource(s.id).then(load)}
+                  className="text-[11px] text-[#cf222e] hover:underline"
+                >
+                  Remove
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -371,7 +416,7 @@ function LogSourcesSection() {
 
 export default function WebhooksPage() {
   return (
-    <div className="p-4 lg:p-6 max-w-2xl space-y-8">
+    <div className="p-4 lg:p-6 space-y-8">
       <h1 className="text-[15px] font-semibold text-[#24292f]">Integrations</h1>
       <WebhooksSection />
       <LogSourcesSection />
