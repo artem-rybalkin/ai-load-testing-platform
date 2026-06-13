@@ -2,6 +2,61 @@ export type TestType = 'backend' | 'client-side' | 'flow';
 
 export type TestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
+// ── Auth / Teams / RBAC ───────────────────────────────────────────────────────
+
+export type TeamRole = 'admin' | 'member' | 'viewer';
+
+export interface TeamMembership {
+  id: string;
+  name: string;
+  role: TeamRole;
+}
+
+// ── Organizations ────────────────────────────────────────────────────────────
+
+export type OrgRole = 'owner' | 'admin' | 'member';
+
+export interface OrgMembership {
+  id: string;
+  name: string;
+  role: OrgRole;
+}
+
+/** Returned by /auth/register, /auth/login, /auth/me, /auth/switch-team */
+export interface SessionUser {
+  id: string;
+  email: string;
+  name?: string | null;
+  teams: TeamMembership[];
+  currentTeamId: string | null;
+  role: TeamRole | null;
+  orgs: OrgMembership[];
+}
+
+// ── Team Quotas ────────────────────────────────────────────────────────────────
+
+export interface TeamQuota {
+  maxConcurrentTests: number;
+  maxVusPerTest: number;
+  maxTestDurationSeconds: number;
+  maxScheduledTests: number;
+  maxGeminiCallsPerDay: number;
+}
+
+export const DEFAULT_TEAM_QUOTA: TeamQuota = {
+  maxConcurrentTests: 5,
+  maxVusPerTest: 1000,
+  maxTestDurationSeconds: 3600,
+  maxScheduledTests: 10,
+  maxGeminiCallsPerDay: 100,
+};
+
+export interface TeamUsage {
+  concurrentTests: number;
+  scheduledTests: number;
+  geminiCallsToday: number;
+}
+
 export interface SLOThresholds {
   p95?: number;            // ms — default 1000
   avg?: number;            // ms — default 500
@@ -81,12 +136,14 @@ export interface BackendTestOptions {
   profile?: LoadProfile;
   peakVus?: number;
   httpOptions?: HttpOptions;
+  headers?: Record<string, string>; // custom request headers sent with every HTTP request
 }
 
 export interface ClientTestOptions {
   sessions: number;
   duration: string;
   collectWebVitals: boolean;
+  headers?: Record<string, string>; // custom headers set via page.setExtraHTTPHeaders
 }
 
 export interface AiInsights {

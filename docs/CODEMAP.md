@@ -157,7 +157,7 @@ services/ui/
     ├── AnalysisPanel.tsx    # Perf badge + threshold violations + AI insights
     ├── RealtimeChart.tsx    # 3-panel live metrics (response time, error rate, throughput)
     ├── TrendChart.tsx       # p95/LCP trend line across runs for same URL
-    └── FlowBuilder.tsx      # Multi-step flow editor + HAR import + Record button
+    └── FlowBuilder.tsx      # Multi-step flow editor + HAR import + Record button + per-step "Request headers" editor
 └── __tests__/
     ├── setup.ts                       # jest-dom matchers
     ├── ActiveTests.test.tsx           # (6 tests)

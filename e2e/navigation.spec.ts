@@ -11,6 +11,7 @@ test.describe('Page navigation', () => {
     { path: '/schedules', name: 'Schedules' },
     { path: '/presets',   name: 'Templates' },
     { path: '/webhooks',  name: 'Webhooks' },
+    { path: '/team',      name: 'Team' },
   ];
 
   for (const { path, name } of pages) {

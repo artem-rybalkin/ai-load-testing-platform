@@ -12,13 +12,14 @@ const ANALYSER_URL = process.env.ANALYSER_URL || 'http://analyser-service:3008';
 
 /** Fetch external observability data from configured log sources for this test's time window. */
 const fetchExternalMetricsForTest = async (
+  p: Pool,
   targetUrl: string,
   startedAt: string | null,
   completedAt: string | null,
   projectId?: string | null,
 ): Promise<Array<{ sourceName: string; platform: string | null; data: string }>> => {
   try {
-    const { rows } = await pool.query(
+    const { rows } = await p.query(
       `SELECT name, platform, metrics_endpoint_template, auth_header
        FROM log_sources WHERE metrics_endpoint_template IS NOT NULL
          AND ($1::uuid IS NULL OR project_id = $1::uuid)`,
@@ -58,6 +59,7 @@ const fetchExternalMetricsForTest = async (
 
 /** Call analyser-service; returns null on any error so caller falls back to local analysis. */
 const callAnalyserService = async (
+  p: Pool,
   testId: string,
   targetUrl: string,
   type: string,
@@ -68,7 +70,7 @@ const callAnalyserService = async (
   completedAt: string | null = null,
   projectId: string | null = null,
 ): Promise<AnalysisResult | null> => {
-  const externalMetrics = await fetchExternalMetricsForTest(targetUrl, startedAt, completedAt, projectId);
+  const externalMetrics = await fetchExternalMetricsForTest(p, targetUrl, startedAt, completedAt, projectId);
   try {
     const res = await fetch(`${ANALYSER_URL}/analyse`, {
       method: 'POST',
@@ -210,6 +212,7 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
 
   // 2. Call analyser-service (up to 12 s) without holding a pg client
   const analysis: AnalysisResult = await callAnalyserService(
+    p,
     result.testId,
     result.targetUrl,
     result.metrics.type,

@@ -52,6 +52,7 @@
 | BE-19 | Environment variables passed to k6 | — | 1. Provide `envVars` (if exposed in UI) with valid `KEY=VALUE` pairs | Variables passed to k6 as `--env`; not persisted to DB | P3 |
 | BE-20 | Inline test data table / CSV upload | — | 1. Add rows to the inline data table OR upload a CSV | Data passed to the worker as `testData`/`csvData`, used for parameterization, not stored in DB | P3 |
 | BE-21 | HTTP options — HTTP/2 and discard response bodies | — | 1. Open Advanced settings 2. Enable "HTTP/2" and/or "Discard response bodies" 3. Run | `httpOptions: { http2: true, discardResponseBodies: true }` included in the k6 options block of the generated/cached script (`buildK6Options`) | P3 |
+| BE-22 | Custom headers — backend test | — | 1. Open Advanced settings 2. Under "Custom Headers" click "+ add", set `X-Api-Key` / `secret123` 3. Run | `options.headers: { "X-Api-Key": "secret123" }` sent in `POST /tests`; generated k6 script merges the header into `params.headers` for every `http.*` call (verify in saved script) | P3 |
 
 ---
 
@@ -70,6 +71,7 @@
 | BR-09 | Page Health metrics | Completed browser test | 1. Open result detail | JS errors, long task count, DOM node count displayed | P3 |
 | BR-10 | Performance score below 50 fails the test | Site with poor Lighthouse performance score | 1. Run a browser test against a slow/heavy page | `perf_status = 'failed'`; threshold violation listed in Analysis panel | P2 |
 | BR-11 | Worker-not-running warning | `worker-client` scaled to 0 | 1. Submit a browser test | Status message: "No browser (Puppeteer) worker is running — test will start when a worker comes online" | P3 |
+| BR-12 | Custom headers — browser test | — | 1. Select "🌐 Browser" 2. Open Advanced settings 3. Under "Custom Headers" click "+ add", set `X-Api-Key` / `secret123` 3. Run | `options.headers: { "X-Api-Key": "secret123" }` sent in `POST /tests`; generated Puppeteer script calls `page.setExtraHTTPHeaders({...})` before navigation (verify in saved script) | P3 |
 
 ---
 
@@ -86,6 +88,8 @@
 | FL-07 | Flow recorder — start/stop recording | recorder-service running | 1. Click "🔴 Record" 2. Interact with the target site in the recorder window 3. Stop | Captured network requests converted to `FlowStep[]` via `toFlowSteps()`; steps populate the builder | P2 |
 | FL-08 | Recorder ignore list | Recording in progress | 1. Add a URL pattern to the ignore list | Matching requests excluded from the captured flow | P3 |
 | FL-09 | AI correlation suggests extract rules | Recorded flow with chained requests (e.g. login → use token) | 1. Stop recording | `correlator.ts` proposes `ExtractRule`s per step via Gemini; user can accept/edit them | P3 |
+| FL-09a | Correlation restores stripped Authorization header | Recorded flow where a later request sends `Authorization: Bearer <token>` from an earlier response | 1. Stop recording | `toFlowSteps()` strips `Authorization` from `step.headers`, but `substituteValue()` re-adds it to the consuming step as `Authorization: Bearer {{access_token}}` (visible in FlowBuilder's "Request headers" section) | P3 |
+| FL-14 | Per-step request headers editor | Flow with 1+ steps | 1. On a step, click "+ add" under "Request headers" 2. Set a header name/value (e.g. `X-Auth-Token` / `{{token}}`) | Header saved to `step.headers`; editable/removable; supports `{{varName}}` placeholders for chained values | P3 |
 | FL-10 | HAR file import | — | 1. Use "Import HAR" 2. Upload a valid `.har` file | Steps populated from the HAR entries | P3 |
 | FL-11 | "Clear all" steps | Flow with multiple steps | 1. Click "Clear all" | All steps removed; confirmation if implemented | P3 |
 | FL-12 | Re-run a flow test restores steps | Completed flow result | 1. Click "Re-run" | Steps restored from `steps` JSONB column into the builder | P2 |

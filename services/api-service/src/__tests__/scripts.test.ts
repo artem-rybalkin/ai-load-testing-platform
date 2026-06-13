@@ -16,6 +16,7 @@ const createSchema = async (p: Pool): Promise<void> => {
       script      TEXT NOT NULL,
       description TEXT,
       used_count  INTEGER DEFAULT 1,
+      project_id  UUID,
       created_at  TIMESTAMPTZ DEFAULT NOW(),
       updated_at  TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(target_url, test_type)
@@ -147,6 +148,78 @@ describe('findExistingScript', () => {
 
     expect(result).not.toBeNull();
     expect(result!.script).toBe(clientScript);
+  });
+
+  // ── flow type — lookup by stepsToKey hash key ────────────────────────────────
+
+  describe('flow type — hash-key lookup', () => {
+    const stepsA: FlowStep[] = [
+      { name: 'home', url: 'https://example.com/', method: 'GET', headers: {}, extract: {} },
+      { name: 'login', url: 'https://example.com/login', method: 'POST', headers: {}, extract: {} },
+    ];
+    const stepsB: FlowStep[] = [
+      { name: 'home', url: 'https://example.com/', method: 'GET', headers: {}, extract: {} },
+      { name: 'checkout', url: 'https://example.com/checkout', method: 'POST', headers: {}, extract: {} },
+    ];
+
+    it('returns null on the first lookup (cache miss) for a flow steps hash key', async () => {
+      const cacheKey = stepsToKey(stepsA);
+
+      const result = await findExistingScript(
+        'https://example.com/',
+        'flow',
+        undefined,
+        pool,
+        cacheKey
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('hits the cache on a second lookup with the same steps (same hash key)', async () => {
+      const cacheKey = stepsToKey(stepsA);
+      const flowScript = "export default function() { /* flow */ }";
+
+      // Flow scripts are stored under test_type = 'backend' keyed by the hash
+      await insertScript(pool, cacheKey, 'backend', flowScript);
+
+      const result = await findExistingScript(
+        'https://example.com/',
+        'flow',
+        undefined,
+        pool,
+        cacheKey
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.script).toBe(flowScript);
+      expect(result!.targetUrl).toBe(cacheKey);
+    });
+
+    it('produces a different hash key for different steps, resulting in a cache miss', async () => {
+      const cacheKeyA = stepsToKey(stepsA);
+      const cacheKeyB = stepsToKey(stepsB);
+      expect(cacheKeyA).not.toBe(cacheKeyB);
+
+      const flowScript = "export default function() { /* flow A */ }";
+      await insertScript(pool, cacheKeyA, 'backend', flowScript);
+
+      // Looking up with a different steps array (different hash key) misses
+      const result = await findExistingScript(
+        'https://example.com/',
+        'flow',
+        undefined,
+        pool,
+        cacheKeyB
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('same steps array produces a stable cache key across repeated calls', () => {
+      expect(stepsToKey(stepsA)).toBe(stepsToKey(stepsA));
+      expect(stepsToKey([...stepsA])).toBe(stepsToKey(stepsA));
+    });
   });
 });
 

@@ -15,6 +15,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const resilientWatcher: Plugin = {
   name: 'resilient-watcher',
   configureServer(server) {
+    // Node's default keepAliveTimeout (5s) is shorter than the idle window
+    // Docker Desktop's port-forwarding (WSL2/vpnkit) can introduce, so the
+    // browser sometimes reuses a connection the server already closed —
+    // surfaces as net::ERR_CONNECTION_RESET on module/asset requests.
+    // headersTimeout must exceed keepAliveTimeout (Node requirement).
+    server.httpServer?.once('listening', () => {
+      const httpServer = server.httpServer as unknown as { keepAliveTimeout: number; headersTimeout: number };
+      httpServer.keepAliveTimeout = 65_000;
+      httpServer.headersTimeout = 66_000;
+    });
     server.watcher.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EIO' || err.code === 'ENOENT') {
         console.warn(`[vite] watcher ${err.code} on ${err.path ?? '?'} — ignored`);

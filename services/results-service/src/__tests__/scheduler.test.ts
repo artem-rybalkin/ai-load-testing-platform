@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
 import cron from 'node-cron';
@@ -172,5 +172,39 @@ describe('triggerSchedule — via captured cron callback', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.description).toContain('Scheduled');
     expect(typeof body.description).toBe('string');
+  });
+});
+
+// ─── API_KEY header behaviour ──────────────────────────────────────────────────
+
+describe('triggerSchedule — API_KEY header', () => {
+  const originalApiKey = process.env.API_KEY;
+
+  afterEach(() => {
+    if (originalApiKey === undefined) delete process.env.API_KEY;
+    else process.env.API_KEY = originalApiKey;
+  });
+
+  it('does not send an X-API-Key header when API_KEY is unset', async () => {
+    delete process.env.API_KEY;
+    await insertSchedule();
+    await startScheduler(pool);
+    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    await callback();
+
+    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    expect(headers).not.toHaveProperty('X-API-Key');
+    expect(headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+
+  it('sends the X-API-Key header when API_KEY is set', async () => {
+    process.env.API_KEY = 'test-api-key';
+    await insertSchedule();
+    await startScheduler(pool);
+    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    await callback();
+
+    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    expect(headers['X-API-Key']).toBe('test-api-key');
   });
 });

@@ -375,3 +375,33 @@ describe('detectDuplicateSteps', () => {
     expect(() => detectDuplicateSteps(steps)).not.toThrow();
   });
 });
+
+// ─── performance ───────────────────────────────────────────────────────────────
+
+describe('performance', () => {
+  it('toFlowSteps converts 200 captured requests within budget', () => {
+    const requests = Array.from({ length: 200 }, (_, i) =>
+      makeRequest({
+        url: `https://api.example.com/resource/${i}?page=${i}`,
+        requestId: `req-${i}`,
+        method: i % 2 === 0 ? 'GET' : 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-request-id': `id-${i}`,
+          cookie: 'session=abc',
+          authorization: 'Bearer token',
+        },
+        body: i % 2 === 0 ? undefined : JSON.stringify({ index: i }),
+        responseStatus: 200,
+      })
+    );
+
+    const start = performance.now();
+    const steps = toFlowSteps(requests);
+    const elapsed = performance.now() - start;
+
+    // FLOW_STEPS_CAP = 50 — confirms cap applies even with 200 inputs
+    expect(steps).toHaveLength(50);
+    expect(elapsed).toBeLessThan(100);
+  });
+});

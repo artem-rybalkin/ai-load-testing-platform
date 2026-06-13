@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../index';
-import { publishTest, publishCancel, isQueueConnected } from '../queue';
+import { publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from '../queue';
 import { findExistingScript, checkDbHealth, incrementUsedCount } from '../scripts';
+import { getApiSession } from '../session';
+import { checkTestQuota } from '../quotas';
 
 vi.mock('../queue', () => ({
   publishTest: vi.fn(),
@@ -17,14 +19,26 @@ vi.mock('../scripts', () => ({
   checkDbHealth: vi.fn().mockResolvedValue(undefined),
   incrementUsedCount: vi.fn().mockResolvedValue(undefined),
   stepsToKey: vi.fn().mockReturnValue('flow:abc123'),
+  pool: {},
+}));
+
+vi.mock('../session', () => ({
+  getApiSession: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../quotas', () => ({
+  checkTestQuota: vi.fn().mockResolvedValue(null),
 }));
 
 const mockPublishTest        = vi.mocked(publishTest);
 const mockPublishCancel      = vi.mocked(publishCancel);
 const mockIsQueueConnected   = vi.mocked(isQueueConnected);
+const mockGetWorkerConsumerCount = vi.mocked(getWorkerConsumerCount);
 const mockFindExistingScript = vi.mocked(findExistingScript);
 const mockCheckDbHealth      = vi.mocked(checkDbHealth);
 const mockIncrementUsedCount = vi.mocked(incrementUsedCount);
+const mockGetApiSession      = vi.mocked(getApiSession);
+const mockCheckTestQuota     = vi.mocked(checkTestQuota);
 
 let app: FastifyInstance;
 let mockFetch: ReturnType<typeof vi.fn>;
@@ -54,6 +68,7 @@ beforeEach(() => {
   mockCheckDbHealth.mockResolvedValue(undefined);
   mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
   mockIncrementUsedCount.mockResolvedValue(undefined);
+  mockGetWorkerConsumerCount.mockResolvedValue(1);
 });
 
 // ─── POST /tests ──────────────────────────────────────────────────────────────
@@ -171,6 +186,68 @@ describe('POST /tests', () => {
       expect.objectContaining({ thresholds: { p95: 500, errorRate: 0.5 } }),
       false
     );
+  });
+});
+
+// ─── POST /tests — customScript bypass path ───────────────────────────────────
+
+describe('POST /tests — customScript bypass', () => {
+  const customScriptBody = {
+    type: 'backend',
+    targetUrl: 'http://example.com',
+    description: '',
+    options: { vus: 5, duration: '30s' },
+    customScript: "import http from 'k6/http';\nexport default function() { http.get('http://example.com'); }",
+  };
+
+  it('routes directly to the worker queue without going through AI', async () => {
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: customScriptBody });
+    expect(res.statusCode).toBe(200);
+    const json = res.json();
+    expect(json.success).toBe(true);
+    expect(json.scriptReused).toBe(false);
+    // skipAI = true → direct to worker queue (backend-tests), not ai-requests
+    expect(mockPublishTest).toHaveBeenCalledWith(
+      expect.objectContaining({ generatedScript: customScriptBody.customScript }),
+      true
+    );
+  });
+
+  it('does not look up or use the script cache', async () => {
+    await app.inject({ method: 'POST', url: '/tests', payload: customScriptBody });
+    expect(mockFindExistingScript).not.toHaveBeenCalled();
+    expect(mockIncrementUsedCount).not.toHaveBeenCalled();
+  });
+
+  it('does not persist the custom script to the response or DB-bound fields', async () => {
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: customScriptBody });
+    expect(res.statusCode).toBe(200);
+    // customScript / generatedScript must never leak back in the HTTP response
+    expect(res.json().test.customScript).toBeUndefined();
+    expect(res.json().test.generatedScript).toBeUndefined();
+  });
+
+  it('returns 400 when customScript exceeds 512 KB', async () => {
+    const oversized = 'a'.repeat(512 * 1024 + 1);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...customScriptBody, customScript: oversized },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('512 KB');
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+
+  it('accepts a customScript exactly at the 512 KB boundary', async () => {
+    const atLimit = 'a'.repeat(512 * 1024);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...customScriptBody, customScript: atLimit },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mockPublishTest).toHaveBeenCalled();
   });
 });
 
@@ -340,5 +417,112 @@ describe('POST /tests — response does not leak sensitive fields', () => {
     expect(test.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(test.targetUrl).toBe('http://example.com');
     expect(test.type).toBe('backend');
+  });
+});
+
+// ─── POST /tests — session-aware projectId + quota enforcement ────────────────
+
+describe('POST /tests — session and quota enforcement', () => {
+  let sessionApp: FastifyInstance;
+
+  beforeAll(async () => {
+    process.env.SESSION_SECRET = 'test-secret';
+    sessionApp = await buildApp();
+  });
+
+  afterAll(async () => {
+    delete process.env.SESSION_SECRET;
+    await sessionApp.close();
+  });
+
+  beforeEach(() => {
+    mockGetApiSession.mockReset();
+    mockCheckTestQuota.mockReset().mockResolvedValue(null);
+  });
+
+  it('returns 401 when no valid session is present', async () => {
+    mockGetApiSession.mockResolvedValueOnce(null);
+    const res = await sessionApp.inject({ method: 'POST', url: '/tests', payload: validBody });
+    expect(res.statusCode).toBe(401);
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+
+  it('sets projectId from the session and forwards it to checkTestQuota', async () => {
+    mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'admin' });
+    const res = await sessionApp.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: validBody,
+      cookies: { alt_session: 'sometoken' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().test.projectId).toBe('team-123');
+    expect(mockCheckTestQuota).toHaveBeenCalledWith(
+      expect.anything(),
+      'team-123',
+      expect.objectContaining({ type: 'backend', durationSeconds: 30 })
+    );
+  });
+
+  it('returns 429 and does not publish when checkTestQuota rejects (over VUs/duration/concurrent)', async () => {
+    mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'admin' });
+    mockCheckTestQuota.mockResolvedValueOnce('Team has reached its concurrent test limit (max 1)');
+    const res = await sessionApp.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: validBody,
+      cookies: { alt_session: 'sometoken' },
+    });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toContain('concurrent test limit');
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+});
+
+// ─── POST /tests — worker-consumer-count warning message ──────────────────────
+
+describe('POST /tests — no-worker warning message', () => {
+  it('posts a backend (k6) worker warning when backend-tests has 0 consumers', async () => {
+    mockGetWorkerConsumerCount.mockResolvedValueOnce(0);
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: validBody });
+    expect(res.statusCode).toBe(200);
+    expect(mockGetWorkerConsumerCount).toHaveBeenCalledWith('backend');
+
+    const messageCall = mockFetch.mock.calls.find(([url]) =>
+      typeof url === 'string' && url.includes('/message')
+    );
+    expect(messageCall).toBeDefined();
+    const body = JSON.parse(messageCall![1].body);
+    expect(body.message).toContain('No backend (k6) worker is running');
+  });
+
+  it('posts a browser (Puppeteer) worker warning when client-tests has 0 consumers', async () => {
+    mockGetWorkerConsumerCount.mockResolvedValueOnce(0);
+    const clientBody = {
+      type: 'client-side',
+      targetUrl: 'http://example.com',
+      description: 'browser test',
+      options: { sessions: 1, duration: '30s', collectWebVitals: true },
+    };
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: clientBody });
+    expect(res.statusCode).toBe(200);
+    expect(mockGetWorkerConsumerCount).toHaveBeenCalledWith('client-side');
+
+    const messageCall = mockFetch.mock.calls.find(([url]) =>
+      typeof url === 'string' && url.includes('/message')
+    );
+    expect(messageCall).toBeDefined();
+    const body = JSON.parse(messageCall![1].body);
+    expect(body.message).toContain('No browser (Puppeteer) worker is running');
+  });
+
+  it('does not post a warning message when consumers are present', async () => {
+    mockGetWorkerConsumerCount.mockResolvedValueOnce(2);
+    await app.inject({ method: 'POST', url: '/tests', payload: validBody });
+
+    const messageCall = mockFetch.mock.calls.find(([url]) =>
+      typeof url === 'string' && url.includes('/message')
+    );
+    expect(messageCall).toBeUndefined();
   });
 });

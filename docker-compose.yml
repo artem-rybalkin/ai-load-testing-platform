@@ -208,7 +208,7 @@ services:
       <<: *otel
       OTEL_SERVICE_NAME: recorder-service
       PORT: 3007
-      LOG_LEVEL: info
+      LOG_LEVEL: debug
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
       CHROMIUM_PATH: /usr/bin/chromium-browser

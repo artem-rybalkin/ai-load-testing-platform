@@ -49,7 +49,7 @@ Focus on memory leaks and degradation over time. Set a strict p(95) < 500ms thre
 };
 
 const BACKEND_PROMPT = (test: TestRequest): string => {
-  const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; http2?: boolean; discardResponseBodies?: boolean } };
+  const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; http2?: boolean; discardResponseBodies?: boolean }; headers?: Record<string, string> };
   const fallback = profileInstructions(opts);
   const http = opts.httpOptions;
   const httpSection = http ? `
@@ -59,6 +59,11 @@ ${http.discardResponseBodies ? '- Set options.discardResponseBodies = true (skip
 ${http.timeout ? `- Use const params = { timeout: '${http.timeout}' }; pass params to every http.request() call` : ''}
 ${http.keepAlive === false ? '- Add header Connection: close to params.headers to disable keep-alive' : ''}
 `.trim() : '';
+
+  const headers = opts.headers;
+  const headersSection = headers && Object.keys(headers).length > 0
+    ? `Custom headers to apply:\n- Define const customHeaders = ${JSON.stringify(headers)}; merge it into params.headers and pass params to every http.request()/http.get()/http.post() call`
+    : '';
 
   return `
 You are a performance testing expert. Generate a k6 load test script.
@@ -73,6 +78,7 @@ use EXACTLY what the user described — ignore the fallback parameters below.
 Fallback parameters (use only when the user request gives no load shape info):
 ${fallback}
 ${httpSection ? `\n${httpSection}` : ''}
+${headersSection ? `\n${headersSection}\n` : ''}
 Requirements:
 - Use k6 JavaScript API
 - Include realistic think time between requests (sleep 1-3s)
@@ -88,19 +94,27 @@ export default function() { ... }
 `;
 };
 
-const CLIENT_PROMPT = (test: TestRequest): string => `
+const CLIENT_PROMPT = (test: TestRequest): string => {
+  const opts = test.options as { sessions: number; headers?: Record<string, string> };
+  const headers = opts.headers;
+  const headersSection = headers && Object.keys(headers).length > 0
+    ? `\nCustom headers: call await page.setExtraHTTPHeaders(${JSON.stringify(headers)}) on each page before navigation\n`
+    : '';
+
+  return `
 You are a performance testing expert. Generate a Puppeteer script for browser performance testing:
 
 URL: ${test.targetUrl}
 Description: ${test.description}
-Sessions: ${(test.options as { sessions: number }).sessions}
-
+Sessions: ${opts.sessions}
+${headersSection}
 Requirements:
 - Use Puppeteer with async/await
 - Collect Web Vitals: LCP, FCP, TTFB, CLS
 - Simulate realistic user interactions
 - Return ONLY the JavaScript code, no markdown, no explanation
 `;
+};
 
 const renderExtractLine = (varName: string, rule: ExtractRule): string => {
   switch (rule.source) {
@@ -174,6 +188,11 @@ Parameterization — CSV file (columns: ${csvColumns.join(', ')}):
 `
     : '';
 
+  const hasPlaceholders = steps.some(s =>
+    (s.body && /\{\{\w+\}\}/.test(s.body)) ||
+    (s.headers && Object.values(s.headers).some(v => /\{\{\w+\}\}/.test(v)))
+  );
+
   const extractionInstructions = hasExtractions ? `
 Extraction rules (for steps with "Extract variables"):
 - jsonpath: access response.json() fields directly (e.g. response.json().data.id). No library needed.
@@ -187,6 +206,14 @@ Error handling — MANDATORY for ALL extractions:
 - Import: import exec from 'k6/execution';
 ` : '';
 
+  const placeholderInstructions = hasPlaceholders ? `
+Variable placeholders:
+- A step's Body or Headers may contain a literal "{{varName}}" placeholder (e.g. "Bearer {{access_token}}", "{\\"sessionId\\":\\"{{session_id}}\\"}").
+- This means: substitute the value extracted into vars.varName by an earlier step's "Extract variables" rule at that exact position (e.g. \`Authorization: \`Bearer \${vars.access_token}\`\`).
+- The earlier step that defines vars.varName always appears before the step using "{{varName}}" — locate it via its "Extract variables" entry for varName.
+- Never leave the literal "{{varName}}" text in the generated script — always replace it with the corresponding \${vars.varName} reference.
+` : '';
+
   return `
 You are a performance testing expert. Generate a k6 multi-step flow test script.
 
@@ -196,7 +223,7 @@ ${fallback}
 ${paramSection}
 Flow steps to test (IN ORDER):
 ${stepDefs}
-${extractionInstructions}
+${extractionInstructions}${placeholderInstructions}
 Requirements:
 - Use k6 JavaScript API with group() for EACH step
 - Each step MUST be wrapped in: group('Step N: name', function() { ... })

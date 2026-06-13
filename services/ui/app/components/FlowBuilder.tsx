@@ -25,6 +25,13 @@ const SOURCE_PLACEHOLDERS: Record<ExtractSource, string> = {
 
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
 
+type StopResult = RecordingSession & {
+  geminiRateLimited?: boolean;
+  suggestedIgnore?: string[];
+  thinkTimes?: number[];
+  duplicates?: Array<{ indices: number[]; suggestion: string }>;
+};
+
 const emptyStep = (): FlowStep => ({
   name: '',
   url: '',
@@ -37,7 +44,7 @@ const emptyStep = (): FlowStep => ({
 const STATIC_ASSET_RE = /\.(js|mjs|cjs|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|webp|avif|mp4|mp3|webm|pdf|map|xml|txt|csv)(\?.*)?$/i;
 const STATIC_MIME_RE  = /^(text\/css|application\/javascript|font\/|image\/|audio\/|video\/|application\/pdf)/i;
 
-const parseHar = (raw: string): FlowStep[] => {
+export const parseHar = (raw: string): FlowStep[] => {
   try {
     const har = JSON.parse(raw);
     const entries: unknown[] = har?.log?.entries ?? [];
@@ -112,6 +119,35 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
   const [showIgnore, setShowIgnore] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Apply a /recordings/:id/stop (or completed /recordings/:id poll) result — shared by
+  // the in-app Stop button, the noVNC viewer tab's "Stop Recording & Import Steps" button,
+  // and the polling fallback that detects external completion.
+  const applyStopResult = (result: StopResult, captured: number) => {
+    if (result.suggestedIgnore && result.suggestedIgnore.length > 0) {
+      setSuggestedIgnore(result.suggestedIgnore);
+    }
+    if (result.thinkTimes && result.thinkTimes.length > 0) {
+      setThinkTimes(result.thinkTimes);
+    }
+    if (result.duplicates && result.duplicates.length > 0) {
+      setDuplicates(result.duplicates);
+    }
+    if (result.steps && result.steps.length > 0) {
+      onChange(result.steps);
+      if (result.geminiRateLimited) {
+        setRecordingNote(
+          'Gemini quota exceeded — correlation detection skipped. Extract variables were not auto-detected. ' +
+          'Add them manually or retry after midnight UTC when the quota resets.'
+        );
+      } else if (captured > result.steps.length) {
+        setRecordingNote(
+          `${result.steps.length} of ${captured} captured requests imported (max 50). ` +
+          `Use the 🚫 Ignore list to filter analytics/background requests before recording.`
+        );
+      }
+    }
+  };
+
   // Poll recorder-service every second while a session is active
   useEffect(() => {
     if (!recording || recording.status !== 'active') {
@@ -122,8 +158,8 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
       try {
         const data = await getRecording(recording.id);
         if (data.status === 'completed' || data.status === 'error') {
-          // Session ended externally (stopped from noVNC toolbar) — import steps and clear state
-          if (data.steps && data.steps.length > 0) onChange(data.steps);
+          // Session ended externally (stopped from noVNC toolbar) — import steps + AI suggestions and clear state
+          applyStopResult(data as StopResult, recordingRef.current?.stepCount ?? 0);
           setRecording(null);
         } else {
           setRecording(prev => prev ? {
@@ -159,7 +195,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
       try {
         const data = await getRecording(rec.id);
         if (data.status === 'completed' || data.status === 'error') {
-          if (data.steps && data.steps.length > 0) onChange(data.steps);
+          applyStopResult(data as StopResult, rec.stepCount ?? 0);
           setRecording(null);
         } else {
           setRecording(prev => prev ? {
@@ -180,9 +216,9 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     try {
       const session = await startRecording(steps[0]?.url, ignorePatterns.length ? ignorePatterns : undefined);
       setRecording(session);
-      // Register a callback so the viewer tab can push steps back directly via window.opener
-      (window as any).__recordingDone = (steps: import('@/lib/api').FlowStep[]) => {
-        if (steps && steps.length > 0) onChange(steps);
+      // Register a callback so the viewer tab can push the full /stop result back via window.opener
+      (window as any).__recordingDone = (result: StopResult) => {
+        applyStopResult(result, recordingRef.current?.stepCount ?? 0);
         setRecording(null);
         delete (window as any).__recordingDone;
       };
@@ -217,30 +253,8 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     setRecording(prev => prev ? { ...prev, status: 'stopping' } : prev);
     try {
       const captured = recording.stepCount ?? 0;
-      const result = await stopRecording(recording.id) as RecordingSession & { geminiRateLimited?: boolean; suggestedIgnore?: string[]; thinkTimes?: number[]; duplicates?: Array<{ indices: number[]; suggestion: string }> };
-      if (result.suggestedIgnore && result.suggestedIgnore.length > 0) {
-        setSuggestedIgnore(result.suggestedIgnore);
-      }
-      if (result.thinkTimes && result.thinkTimes.length > 0) {
-        setThinkTimes(result.thinkTimes);
-      }
-      if (result.duplicates && result.duplicates.length > 0) {
-        setDuplicates(result.duplicates);
-      }
-      if (result.steps && result.steps.length > 0) {
-        onChange(result.steps);
-        if (result.geminiRateLimited) {
-          setRecordingNote(
-            'Gemini quota exceeded — correlation detection skipped. Extract variables were not auto-detected. ' +
-            'Add them manually or retry after midnight UTC when the quota resets.'
-          );
-        } else if (captured > result.steps.length) {
-          setRecordingNote(
-            `${result.steps.length} of ${captured} captured requests imported (max 50). ` +
-            `Use the 🚫 Ignore list to filter analytics/background requests before recording.`
-          );
-        }
-      }
+      const result = await stopRecording(recording.id) as StopResult;
+      applyStopResult(result, captured);
       setRecording(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
@@ -270,6 +284,27 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     const next = [...steps];
     [next[i - 1], next[i]] = [next[i], next[i - 1]];
     onChange(next);
+  };
+
+  const setHeaderKey = (stepIdx: number, oldKey: string, newKey: string) => {
+    const s = steps[stepIdx];
+    const entries = Object.entries(s.headers ?? {});
+    const updated: Record<string, string> = {};
+    for (const [k, v] of entries) updated[k === oldKey ? newKey : k] = v;
+    update(stepIdx, { headers: updated });
+  };
+
+  const setHeaderValue = (stepIdx: number, key: string, value: string) => {
+    update(stepIdx, { headers: { ...steps[stepIdx].headers, [key]: value } });
+  };
+
+  const removeHeader = (stepIdx: number, key: string) => {
+    const { [key]: _, ...rest } = steps[stepIdx].headers ?? {};
+    update(stepIdx, { headers: rest });
+  };
+
+  const addHeader = (stepIdx: number) => {
+    update(stepIdx, { headers: { ...steps[stepIdx].headers, '': '' } });
   };
 
   const setExtractKey = (stepIdx: number, oldKey: string, newKey: string) => {
@@ -604,6 +639,13 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
         </div>
       )}
 
+      {/* Too many steps to execute */}
+      {steps.length > 20 && (
+        <div className="p-2 bg-[#fff8c5] border border-[#d4a72c66] rounded-md text-[12px] text-[#9a6700]">
+          ⚠ {steps.length} steps recorded — flow tests support a maximum of 20 steps. Remove {steps.length - 20} step{steps.length - 20 === 1 ? '' : 's'} before running.
+        </div>
+      )}
+
       {/* Steps */}
       <div className="space-y-3">
         {steps.map((step, i) => (
@@ -652,6 +694,37 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               />
             )}
+
+            {/* Request headers */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-gray-500 font-medium">Request headers</span>
+                <button type="button" onClick={() => addHeader(i)} className="text-xs text-blue-600 hover:underline">+ add</button>
+              </div>
+              {Object.entries(step.headers ?? {}).map(([key, value], hi) => (
+                <div key={hi} className="flex gap-1 mb-1 items-center">
+                  <input
+                    type="text"
+                    placeholder="Header-Name"
+                    value={key}
+                    onChange={e => setHeaderKey(i, key, e.target.value)}
+                    className="w-40 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
+                  />
+                  <span className="text-gray-400 text-xs">:</span>
+                  <input
+                    type="text"
+                    placeholder="value (supports {{varName}})"
+                    value={value}
+                    onChange={e => setHeaderValue(i, key, e.target.value)}
+                    className="flex-1 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
+                  />
+                  <button type="button" onClick={() => removeHeader(i, key)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
+                </div>
+              ))}
+              {Object.keys(step.headers ?? {}).length === 0 && (
+                <p className="text-xs text-gray-400">No custom headers.</p>
+              )}
+            </div>
 
             {/* Extract variables */}
             <div>

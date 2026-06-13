@@ -77,9 +77,100 @@ function buildSummary(requests: RecordedRequest[]): string {
   return JSON.stringify(pairs, null, 2);
 }
 
-/** Apply correlation entries back onto FlowStep[].extract */
-function applyCorrelations(steps: FlowStep[], correlations: CorrelationEntry[]): FlowStep[] {
-  const result = steps.map(s => ({ ...s, extract: { ...(s.extract ?? {}) } }));
+/** Resolve a path like "$.data.user.id" or "data.items[0].id" against a parsed JSON value. */
+function getByPath(data: unknown, path: string): string | undefined {
+  const cleaned = path.replace(/^\$\.?/, '').replace(/\[(\d+)\]/g, '.$1');
+  let cur: unknown = data;
+  if (cleaned) {
+    for (const token of cleaned.split('.').filter(Boolean)) {
+      if (cur == null || typeof cur !== 'object') return undefined;
+      cur = (cur as Record<string, unknown>)[token];
+    }
+  }
+  if (cur == null) return undefined;
+  return typeof cur === 'object' ? undefined : String(cur);
+}
+
+/** Extract the literal value an ExtractRule points to from the recorded request/response. */
+function extractValue(request: RecordedRequest, rule: ExtractRule): string | undefined {
+  switch (rule.source) {
+    case 'header': {
+      const entry = Object.entries(request.responseHeaders)
+        .find(([k]) => k.toLowerCase() === rule.expression.toLowerCase());
+      return entry?.[1];
+    }
+    case 'cookie': {
+      const setCookie = Object.entries(request.responseHeaders)
+        .find(([k]) => k.toLowerCase() === 'set-cookie')?.[1];
+      if (!setCookie) return undefined;
+      for (const part of setCookie.split('\n')) {
+        const pair = part.split(';')[0];
+        const eq = pair.indexOf('=');
+        if (eq === -1) continue;
+        if (pair.slice(0, eq).trim() === rule.expression) return pair.slice(eq + 1).trim();
+      }
+      return undefined;
+    }
+    case 'regex': {
+      if (!request.responseBody) return undefined;
+      try {
+        const m = request.responseBody.match(new RegExp(rule.expression));
+        return m ? (m[1] ?? m[0]) : undefined;
+      } catch { return undefined; }
+    }
+    default: {
+      if (!request.responseBody) return undefined;
+      try { return getByPath(JSON.parse(request.responseBody), rule.expression); } catch { return undefined; }
+    }
+  }
+}
+
+/** Replace literal occurrences of `value` in a step's body/headers with `{{varName}}`.
+ *  `originalHeaders` are the raw headers captured during recording — these still include
+ *  Authorization/Cookie/etc. that `toFlowSteps` strips from `step.headers`. If the value
+ *  was sent via one of those stripped headers, re-add it to `step.headers` with the
+ *  placeholder so the correlation is actually wired up. */
+function substituteValue(
+  step: FlowStep,
+  value: string,
+  varName: string,
+  originalHeaders?: Record<string, string>,
+): FlowStep {
+  const placeholder = `{{${varName}}}`;
+  let changed = false;
+
+  let body = step.body;
+  if (body && body.includes(value)) {
+    body = body.split(value).join(placeholder);
+    changed = true;
+  }
+
+  let headers = step.headers;
+  if (headers) {
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers)) {
+      if (v.includes(value)) { next[k] = v.split(value).join(placeholder); changed = true; }
+      else next[k] = v;
+    }
+    headers = next;
+  }
+
+  if (originalHeaders) {
+    const present = new Set(Object.keys(headers ?? {}).map(k => k.toLowerCase()));
+    for (const [k, v] of Object.entries(originalHeaders)) {
+      if (!present.has(k.toLowerCase()) && v.includes(value)) {
+        headers = { ...(headers ?? {}), [k]: v.split(value).join(placeholder) };
+        changed = true;
+      }
+    }
+  }
+
+  return changed ? { ...step, body, headers } : step;
+}
+
+/** Apply correlation entries back onto FlowStep[].extract, and rewrite consuming steps to reference {{varName}}. */
+function applyCorrelations(requests: RecordedRequest[], steps: FlowStep[], correlations: CorrelationEntry[]): FlowStep[] {
+  let result: FlowStep[] = steps.map(s => ({ ...s, extract: { ...(s.extract ?? {}) } }));
 
   for (const corr of correlations) {
     if (corr.sourceStepIndex < 0 || corr.sourceStepIndex >= result.length) continue;
@@ -93,7 +184,20 @@ function applyCorrelations(steps: FlowStep[], correlations: CorrelationEntry[]):
       [varName]: rule,
     };
 
-    log.debug({ varName, source: corr.source, expression: corr.expression, usedIn: corr.usedInStepIndices }, 'Correlation applied');
+    // Replace the literal value with {{varName}} in the steps that consume it
+    const value = extractValue(requests[corr.sourceStepIndex], rule);
+    let substitutedIn: number[] = [];
+    if (value && value.length >= 3) {
+      substitutedIn = corr.usedInStepIndices.filter(idx => idx >= 0 && idx < result.length && idx !== corr.sourceStepIndex);
+      for (const idx of substitutedIn) {
+        result[idx] = substituteValue(result[idx], value, varName, requests[idx]?.headers);
+      }
+    }
+
+    log.debug(
+      { varName, source: corr.source, expression: corr.expression, usedIn: corr.usedInStepIndices, valueFound: !!value, substitutedIn },
+      'Correlation applied'
+    );
   }
 
   return result;
@@ -137,11 +241,16 @@ If all domains are relevant, return: []`;
     const result = await model.generateContent(prompt);
     const text = result.response.text().trim();
     const match = text.match(/\[[\s\S]*\]/);
-    if (!match) return [];
+    if (!match) {
+      log.debug({ domains, text }, 'Ignore-pattern suggestion: no JSON array in response');
+      return [];
+    }
     const patterns: unknown[] = JSON.parse(match[0]);
-    return patterns.filter((p): p is string => typeof p === 'string' && p.length > 0);
+    const filtered = patterns.filter((p): p is string => typeof p === 'string' && p.length > 0);
+    log.debug({ domains, suggested: filtered }, 'Ignore-pattern suggestion complete');
+    return filtered;
   } catch (err) {
-    log.warn({ err }, 'Ignore-pattern suggestion failed');
+    log.warn({ err, domains }, 'Ignore-pattern suggestion failed');
     return [];
   }
 }
@@ -256,7 +365,7 @@ export async function detectCorrelations(
       return steps;
     }
 
-    const enriched = applyCorrelations(steps, parsed.correlations);
+    const enriched = applyCorrelations(requests, steps, parsed.correlations);
     correlatorRateLimited = false;
     log.info({ correlationCount: parsed.correlations.length }, 'Correlation detection complete');
     return enriched;

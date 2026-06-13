@@ -169,6 +169,12 @@ describe('Home page — applyDescriptionParams (description blur)', () => {
     expect(screen.getByDisplayValue('30s')).toBeInTheDocument();
   });
 
+  it('extracts a trailing duration phrase with no "for"/"duration" anchor', () => {
+    render(<Home />);
+    blurDescription('load test 2 users 3 min');
+    expect(screen.getByDisplayValue('3m')).toBeInTheDocument();
+  });
+
   it('detects spike profile keyword', () => {
     render(<Home />);
     blurDescription('spike test with 10 users');
@@ -250,6 +256,33 @@ describe('Home page — browser SLO threshold inputs', () => {
       expect.objectContaining({
         type: 'client-side',
         thresholds: expect.objectContaining({ inp: 200, tbt: 200 }),
+      })
+    ));
+  });
+});
+
+describe('Home page — custom headers editor', () => {
+  it('shows "No custom headers" message by default in Advanced settings', () => {
+    render(<Home />);
+    const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
+    fireEvent.click(advancedBtn!);
+    expect(screen.getByText(/no custom headers/i)).toBeInTheDocument();
+  });
+
+  it('adds a header row and includes it in the createTest payload', async () => {
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://api.test.com' } });
+    const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
+    fireEvent.click(advancedBtn!);
+
+    fireEvent.click(screen.getByRole('button', { name: /^\+ add$/i }));
+    fireEvent.change(screen.getByPlaceholderText('Header-Name'), { target: { value: 'X-Api-Key' } });
+    fireEvent.change(screen.getByPlaceholderText('value'), { target: { value: 'secret123' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /run test/i }));
+    await waitFor(() => expect(mockCreateTest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ headers: { 'X-Api-Key': 'secret123' } }),
       })
     ));
   });

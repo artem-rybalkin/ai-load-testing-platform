@@ -1,31 +1,40 @@
-import { createHmac } from 'crypto';
+import { createHash } from 'crypto';
+import { Pool } from 'pg';
 
-export interface SessionPayload {
-  projectId: string;
-  username: string;
-  projectName: string;
+import { TeamRole } from '@alt/shared';
+
+export interface ApiSession {
+  projectId: string | null;
+  role: TeamRole | null;
 }
 
-const encode = (p: SessionPayload) => Buffer.from(JSON.stringify(p)).toString('base64url');
-const decode = (s: string): SessionPayload => JSON.parse(Buffer.from(s, 'base64url').toString());
+const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
 
-export const signSession = (payload: SessionPayload, secret: string): string => {
-  const data = encode(payload);
-  const sig  = createHmac('sha256', secret).update(data).digest('hex');
-  return `${data}.${sig}`;
-};
+/** Hashes a raw team API key for lookup against team_api_keys.key_hash. */
+export const hashApiKey = (key: string): string => createHash('sha256').update(key).digest('hex');
 
-export const verifySession = (cookie: string | undefined, secret: string): SessionPayload | null => {
-  if (!cookie) return null;
-  const dot = cookie.lastIndexOf('.');
-  if (dot === -1) return null;
-  const data = cookie.slice(0, dot);
-  const sig  = cookie.slice(dot + 1);
-  const expected = createHmac('sha256', secret).update(data).digest('hex');
-  // Constant-time comparison
-  if (sig.length !== expected.length) return null;
-  let diff = 0;
-  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
-  if (diff !== 0) return null;
-  try { return decode(data); } catch { return null; }
+/**
+ * DB-backed session lookup mirroring results-service's getSession + role-lookup query —
+ * api-service's old HMAC-signed-cookie scheme is incompatible with the opaque session
+ * tokens issued by results-service's /auth/login.
+ */
+export const getApiSession = async (pool: Pool, token: string | undefined): Promise<ApiSession | null> => {
+  if (!token) return null;
+
+  const { rows } = await pool.query<{ user_id: string; team_id: string | null }>(
+    `SELECT user_id, team_id FROM sessions
+     WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()`,
+    [hashToken(token)]
+  );
+  if (rows.length === 0) return null;
+
+  const { user_id: userId, team_id: teamId } = rows[0];
+  if (!teamId) return { projectId: null, role: null };
+
+  const { rows: memberRows } = await pool.query<{ role: TeamRole }>(
+    `SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2`,
+    [teamId, userId]
+  );
+
+  return { projectId: teamId, role: memberRows[0]?.role ?? null };
 };

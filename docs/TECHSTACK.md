@@ -45,7 +45,7 @@ Tech stack across all services. Single source for technology decisions.
 |-----------|-----------|
 | Provider | Google Gemini API |
 | Package | @google/generative-ai |
-| Model | gemini-2.5-flash |
+| Model | gemini-3.1-flash-lite (default; configurable via `GEMINI_MODEL`) |
 | Usage | Script generation, description comparison, AI insights, correlation detection |
 
 ## Load Testing
@@ -120,7 +120,7 @@ Tech stack across all services. Single source for technology decisions.
 | Protocol | Chrome DevTools Protocol (CDP) |
 | Virtual display | Xvfb + x11vnc |
 | Browser viewer | noVNC |
-| Correlation | Gemini AI (gemini-2.5-flash) |
+| Correlation | Gemini AI (gemini-3.1-flash-lite) |
 
 ## Auth / Session
 

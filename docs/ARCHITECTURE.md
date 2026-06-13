@@ -43,7 +43,7 @@ Scheduled path:
 | ui | 3006 | Vite + React Router SPA |
 | postgres | 5432 | Main database |
 | rabbitmq | 5672 + 15672 | Message queue |
-| redis | 6379 | Reserved (not yet used) |
+| redis | 6379 | Shared store for @fastify/rate-limit (api-service + results-service) |
 
 ## Message Queue Topology
 
@@ -71,8 +71,13 @@ Scheduled path:
 | webhooks | Webhook endpoints (fired on failed/degraded) |
 | schedules | node-cron schedule definitions |
 | test_presets | Reusable test form presets |
-| projects | Auth projects — `id` + `name`; all resource tables carry `project_id FK` |
+| projects | Auth projects ("teams") — `id`, `name`, `org_id` (nullable FK to organizations); all resource tables carry `project_id FK` |
 | schema_migrations | Tracks applied numbered migrations (version, name, applied_at) |
+| team_quotas | Per-team resource limits (concurrent tests, VUs, duration, scheduled tests, Gemini calls/day); absent row = `DEFAULT_TEAM_QUOTA` |
+| gemini_usage | Per-team daily Gemini call counter (`team_id`, `usage_date`, `call_count`) for `/ai/*` quota enforcement |
+| organizations | `id` + `name`; groups teams (`projects.org_id`) under an org admin panel |
+| org_members | Maps users to organizations with `role IN ('owner','admin','member')` |
+| team_api_keys | Per-team API keys (`key_hash` = sha256 of raw key); accepted as an alternative to session cookies, scoped to one team |
 
 ## Three-Way Script Routing (api-service)
 
@@ -92,17 +97,27 @@ Scheduled path:
 ## Security Architecture
 
 - **API key auth**: X-API-Key header on api-service + results-service + recorder-service; exempt: /health, internal /results/pending
-- **Cookie session auth**: `POST /auth/login` → `findOrCreateProject()` → HMAC-SHA256 signed `alt_session` cookie (HttpOnly, SameSite=Strict). `SESSION_SECRET` env var — empty = auth disabled (dev/test). Session middleware protects all routes except /health, /auth/*, and internal /results/pending.
-- **Project-scoped data**: `project_id UUID` column on all resource tables. All queries filter by `($N::uuid IS NULL OR project_id = $N::uuid)` — null means auth is disabled.
+- **User accounts (Phase 3 Org/Team/RBAC)**: `users` table (email + bcrypt password hash via `bcryptjs`). `POST /auth/register { email, password, name?, teamName }` creates a user, a new team (`projects` row), an `admin` `team_members` row, and a session in one transaction. `POST /auth/login { email, password }` verifies via `bcrypt.compare`.
+- **DB-backed sessions**: `sessions` table (`user_id`, `token_hash` = SHA-256 of a random 32-byte token, `team_id` = current team, `expires_at`, `revoked_at`). The raw token is set as the `alt_session` cookie (HttpOnly, SameSite=Strict, 30-day `maxAge`); only its hash is stored. `POST /auth/logout` sets `revoked_at`, immediately invalidating the cookie — closes the "no revocation" gap of the old HMAC-signed-cookie design. `SESSION_SECRET` env var now purely toggles whether session/RBAC enforcement is active — empty = auth disabled (dev/test), unchanged for the ~430 pre-existing tests.
+- **Teams = projects**: "team" is the user-facing name for the existing `projects` table / `project_id` columns — kept as-is to avoid an 81-site rename. `team_members` (team_id, user_id, role) maps users to teams with `role IN ('admin','member','viewer')`. A user can belong to multiple teams; `sessions.team_id` tracks which team is "current" for that session, switchable via `POST /auth/switch-team`.
+- **RBAC middleware**: the `onRequest` hook (when `SESSION_SECRET` set) loads `request.user`, `request.projectId` (= session's current `team_id`, feeding the existing project-scoping filters unchanged), and `request.role` (this user's role in the current team). A session with no current team is blocked (403) from all routes except `/teams` (create/join). On mutating methods (POST/PUT/PATCH/DELETE): `viewer` role gets 403 on resource routes; `/teams/:id/*` mutations additionally require `admin` role for that team. `/auth/*` routes are always exempt.
+- **Team management**: `POST /teams` (any authenticated user creates+admins a new team), `GET/POST/PUT/DELETE /teams/:id/members` (admin-only mutations; "last admin" protection prevents demoting/removing the final admin of a team).
+- **Session middleware** protects all routes except /health, /auth/*, internal /results/pending, and the internal POST variants of /running, /fail, /message, /live, /cancel (server-to-server, no cookie). `GET /results/:testId/live` is NOT exempt — it requires a session like other read endpoints, even though it shares the `/live` path suffix with the worker's internal POST.
+- **Project-scoped data**: `project_id UUID` column on all resource tables. All queries filter by `($N::uuid IS NULL OR project_id = $N::uuid)` — null means auth is disabled. Covers results listing/detail, scripts (incl. `saveScript` upsert via `COALESCE(test_scripts.project_id, EXCLUDED.project_id)` so worker-inserted rows don't lose ownership), presets, schedules, webhooks, log sources, baseline set/clear, PDF report download, and live metrics (via `LEFT JOIN test_results` since `live_metrics` itself has no `project_id` column). `worker-client` propagates `projectId` on its `test-results` queue message so client-side test results are correctly attributed.
 - **CORS**: ALLOWED_ORIGIN env var; defaults to * in dev
 - **Sensitive fields**: envVars/testData/csvData stripped from POST /tests response (safeTestResponse())
 - **Pino redact**: envVars, testData, csvData masked in all service logs; metrics/previousMetrics masked in analyser-service
 - **envVar injection**: k6 --env args validated against regex before spawn
-- **Input validation**: URL with new URL() + http/https-only scheme check; description ≤ 500 chars; steps ≤ 20
+- **Input validation**: URL with new URL() + http/https-only scheme check; description ≤ 500 chars; steps ≤ 20 (`POST /tests` returns 400 above this). FlowBuilder allows recording/HAR-import of up to 50 steps for review and trimming, but warns and blocks "Run Test" client-side once steps.length > 20.
 - **SSRF protection**: recorder-service validateRecorderUrl() blocks RFC-1918 ranges and Docker-internal hostnames before page.goto()
 - **Webhook HMAC**: X-Webhook-Signature: sha256=<hmac-sha256(secret, body)> computed server-side
 - **Non-root containers**: all Dockerfiles use node user (UID 1000)
 - **No hardcoded credentials**: services throw on missing env vars at startup
+- **api-service session bugfix (Phase 25)**: `api-service/src/session.ts` previously used a stale HMAC `verifySession()` that couldn't parse the Phase-24 opaque DB-backed session cookie, leaving `request.projectId` unset in production. Replaced with `getApiSession(pool, token)`, mirroring results-service's lookup (hash cookie token → `sessions` → `team_members` for role); `request.projectId`/`request.role` now populate correctly with `SESSION_SECRET` set.
+- **Team quotas (Phase 25a)**: `team_quotas` row per team (falls back to `DEFAULT_TEAM_QUOTA` if absent) limits concurrent tests, max VUs/test, max test duration, max scheduled tests, and max Gemini calls/day. `checkTestQuota()` (api-service) gates `POST /tests` (429 on violation); `checkScheduleQuota()`/`checkGeminiQuota()`/`incrementGeminiUsage()` (results-service) gate `POST /schedules` and the explicit `/ai/*`/`suggest-*` endpoints. `GET/PUT /teams/:id/quotas` exposes usage + limits (admin-only edit); all checks are skipped (`teamId == null`) in dev mode.
+- **Organizations (Phase 25b)**: `organizations` + `org_members` (`role IN ('owner','admin','member')`) sit above teams via `projects.org_id` (nullable — existing teams stay "ungrouped"). RBAC middleware additionally resolves `request.orgId`/`request.orgRole` for the session's current team. `POST /orgs`, `GET /orgs/:id`, `/orgs/:id/members*`, `POST /orgs/:id/teams` mirror the existing `/teams` endpoints with owner/admin RBAC + last-owner protection.
+- **Per-team API keys (Phase 25b)**: `POST/GET/DELETE /teams/:id/api-keys` (admin-only) generate/list/revoke `crypto.randomBytes(24).toString('hex')` keys, stored as `sha256(key)` in `team_api_keys`; the raw key is shown once. Both api-service and results-service `onRequest` hooks accept a team API key via `X-API-Key` (try/catch-guarded DB lookup) as an alternative to the global `API_KEYS` list or a session cookie — sets `request.projectId`/`request.role='admin'` and updates `last_used_at`. The scheduler passes `projectId` on its server-to-server `POST /tests` calls (trusted via the global `API_KEYS` list) so scheduled tests stay scoped to their owning team.
+- **Rate limiting (Phase 26)**: `@fastify/rate-limit`, registered globally (600 req/min/IP default) in both api-service and results-service, backed by `redisClient` (ioredis, shared store across replicas) when `REDIS_URL` is set, else in-memory. `skipOnError: true` — fails open if Redis is unreachable. `/health` (and results-service's internal worker callbacks) are exempt via `allowList`. Per-route overrides tighten `/auth/login`+`/auth/register` (`AUTH_RATE_LIMIT_MAX`, default 10/min) and the explicit `/ai/*`/`suggest-*`/`diagnose` endpoints (`AI_RATE_LIMIT_MAX`, default 20/min) — IP-based defense-in-depth on top of the per-team Gemini daily quota. `429` responses include a `Retry-After` header.
 
 ## Production Deployment (Caddy)
 
@@ -115,12 +130,12 @@ Scheduled path:
 
 | Layer | Framework | Isolation | Count |
 |-------|-----------|-----------|-------|
-| Unit | Vitest | In-process | ~111 tests |
-| Integration | Vitest + Testcontainers | Real PostgreSQL | ~125 tests |
-| UI | Vitest + RTL + jsdom | DOM simulation | ~49 tests |
+| Unit | Vitest | In-process | ~131 tests |
+| Integration | Vitest + Testcontainers | Real PostgreSQL | ~262 tests |
+| UI | Vitest + RTL + jsdom | DOM simulation | ~80 tests |
 | E2E | Playwright | Full stack (docker compose up) | 3 suites |
 
-**Total: ~430 tests**
+**Total: ~897 tests** (incl. Phase 25 additions: `api-service/session.test.ts` + `quotas.test.ts`, `results-service/quotas.test.ts` + `orgs.test.ts` + `apiKeys.test.ts`, and `ui/OrgPage.test.tsx` + expanded `TeamPage.test.tsx`)
 
 ## AI Feature Architecture
 
@@ -157,8 +172,13 @@ AI-12 and AI-13 are pure functions (no Gemini). All others degrade gracefully wh
 | analyser-service as separate service | Isolates Gemini AI from results-service; 12s timeout with local fallback |
 | analyzeResult in @alt/shared | Single source of truth for deterministic thresholds; eliminates 220-line duplication and future drift between results-service fallback and analyser-service primary |
 | AMQP connection.on(close) reconnect | amqplib has no built-in reconnect; silent channel faults were leaving services unable to consume without any health signal; 5s reconnect restores service automatically |
+| @fastify/rate-limit + ioredis, fail-open via skipOnError | Shared Redis store lets rate limits work correctly across multiple replicas; skipOnError ensures a Redis outage degrades to unlimited (in-memory per-instance) rather than blocking all traffic |
 | schema_migrations table | Numbered migration entries applied exactly once; idempotent ADD COLUMN IF NOT EXISTS pattern still used within each migration but guarded by version tracking |
-| HMAC-SHA256 cookie sessions | JWT adds library complexity; signed cookies are HttpOnly and same-origin — no CSRF risk behind Caddy. `SESSION_SECRET` empty = auth disabled so local dev needs no config change |
+| DB-backed opaque session tokens | Replaces HMAC-signed cookies (no revocation — gap A-U4). Random 32-byte token in cookie, SHA-256 hash stored in `sessions` table; `revoked_at` enables instant logout. `SESSION_SECRET` empty still = auth disabled, so local dev needs no config change |
+| projects table reused as "team" | Avoids an ~81-site rename of `project_id`/`projectId` across services, UI, and docs; `team_members` + `sessions.team_id` add RBAC on top of the existing project-scoping filters unchanged |
+| bcryptjs for password hashing | Pure JS, no native build step — keeps Alpine-based Docker images (`node:20-alpine`) simple, unlike `bcrypt` which needs node-gyp |
 | Vite proxy for /api + /data | Avoids CORS issues with cookies; same-origin requests mean SameSite=Strict cookies work without credentials: 'include' |
 | @fastify/cookie v11 | v9.x only supported Fastify 4.x; v11 is the first release compatible with Fastify 5 |
 | INP from Lighthouse preferred | Lighthouse `interaction-to-next-paint` audit measures the full interaction timeline (more accurate than PerformanceObserver event type which only measures pre-paint duration) |
+| projects.org_id nullable, no backfill | Existing teams stay "ungrouped" (org_id = NULL); orgs are opt-in via `POST /orgs/:id/teams`, avoiding a breaking migration for pre-Phase-25 teams |
+| Per-team API keys as a 2nd auth path | Lets CI/external automation call `POST /tests`/`/schedules/:id/run` scoped to one team without sharing session cookies or the global `API_KEYS` list; sha256-hashed like session tokens, revocable, last_used_at tracked |

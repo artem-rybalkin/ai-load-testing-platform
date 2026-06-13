@@ -53,10 +53,11 @@ node-cron in results-service → POST /tests (auto-trigger on schedule)
 ## Tech Stack
 
 - **Runtime:** Node.js 20 + TypeScript
-- **API Framework:** Fastify + @fastify/cors + @fastify/cookie v11
+- **API Framework:** Fastify + @fastify/cors + @fastify/cookie v11 + @fastify/rate-limit v11
 - **Message Queue:** RabbitMQ (amqplib)
+- **Rate Limiting:** ioredis-backed shared store (api-service + results-service)
 - **Database:** PostgreSQL (pg)
-- **AI:** Google Gemini API (@google/generative-ai), model: gemini-2.5-flash
+- **AI:** Google Gemini API (@google/generative-ai), model: gemini-3.1-flash-lite (configurable via `GEMINI_MODEL`)
 - **Load Testing:** k6 (installed in worker-backend Docker image)
 - **Browser Testing:** Puppeteer 22 + Lighthouse (headless Chromium in Alpine)
 - **Frontend:** Vite 6 + React Router v7 + Tailwind CSS 4 + Recharts
@@ -142,8 +143,9 @@ ai-load-testing-platform/
     ├── results-service/      # @alt/results-service
     │   └── src/
     │       ├── index.ts      # startup: initDb → consumer → scheduler → cleanup → app
-    │       ├── app.ts        # Fastify REST API (all endpoints + auth: /auth/login, /auth/logout, /auth/me)
-    │       ├── session.ts    # signSession/verifySession — HMAC-SHA256 HttpOnly cookie sessions
+    │       ├── app.ts        # Fastify REST API (all endpoints + auth: /auth/register, /auth/login, /auth/logout,
+    │       │                 #   /auth/me, /auth/switch-team, /teams, /teams/:id/members*) + RBAC middleware
+    │       ├── session.ts    # createSession/getSession/revokeSession/switchSessionTeam — DB-backed opaque tokens
     │       ├── consumer.ts   # RabbitMQ consumer, handleResult, webhook firing
     │       ├── analyzer.ts   # analyzeResult: thresholds + regression detection
     │       ├── db.ts         # PostgreSQL pool, createSchema (all tables + migrations), findOrCreateProject
@@ -153,8 +155,9 @@ ai-load-testing-platform/
     │   └── src/__tests__/
     │       ├── api.test.ts       # all REST endpoints (Testcontainers)
     │       ├── analyzer.test.ts  # analyzeResult unit tests (incl. INP/TBT thresholds)
-    │       ├── auth.test.ts      # POST /auth/login, /logout, GET /auth/me, session middleware (Testcontainers)
-    │       ├── session.test.ts   # signSession/verifySession unit tests
+    │       ├── auth.test.ts      # register/login/logout/me/switch-team, session middleware, RBAC, dev mode (Testcontainers)
+    │       ├── teams.test.ts     # POST /teams, GET/POST/PUT/DELETE /teams/:id/members, last-admin protection (Testcontainers)
+    │       ├── session.test.ts   # createSession/getSession/revokeSession/switchSessionTeam unit tests (Testcontainers)
     │       ├── consumer.test.ts  # handleResult pipeline, webhooks, baseline ordering
     │       ├── stale.test.ts     # runStaleCleanup unit tests (Testcontainers)
     │       └── scheduler.test.ts # startScheduler, triggerSchedule (mocked node-cron)
@@ -167,23 +170,33 @@ ai-load-testing-platform/
         ├── vitest.d.ts       # jest-dom type declarations (/// <reference types>)
         ├── lib/
         │   ├── api.ts        # fetch wrappers for all service endpoints + types (uses import.meta.env.VITE_*)
-        │   │                 #   also: login(), logout(), getMe() for auth
-        │   └── AuthContext.tsx  # AuthProvider + useAuth hook; SessionUser type; getMe() on mount
+        │   │                 #   also: login(), register(), logout(), getMe(), switchTeam(),
+        │   │                 #   getTeamMembers/addTeamMember/updateTeamMemberRole/removeTeamMember; SessionUser/TeamRole/TeamMemberRow types
+        │   └── AuthContext.tsx  # AuthProvider + useAuth hook; SessionUser; getMe() on mount; switchTeam()
         ├── __tests__/
         │   ├── setup.ts      # expect.extend(jest-dom matchers)
         │   ├── ActiveTests.test.tsx
         │   ├── AnalysisPanel.test.tsx
-        │   ├── AuthContext.test.tsx    # AuthProvider + AuthGate unit tests
+        │   ├── AuthContext.test.tsx    # AuthProvider + AuthGate + switchTeam unit tests
         │   ├── home.test.tsx           # form validation + INP/TBT SLO inputs
-        │   ├── LoginPage.test.tsx      # login form + API call behaviour
+        │   ├── LoginPage.test.tsx      # sign-in + register mode forms, API call behaviour
+        │   ├── TeamPage.test.tsx       # member list, admin add/role-change/remove, non-admin read-only view
+        │   │                           #   + Usage & Limits (quota) section + API Keys section (generate/revoke)
+        │   ├── OrgPage.test.tsx        # org member list, admin add/role-change/remove, "+ New team" form
         │   └── results.test.tsx
         └── app/
             ├── globals.css   # Tailwind 4 CSS-first config; CSS vars for Command Center palette
             ├── layout.tsx    # shell: Sidebar + TopBar + ActiveTests strip + main + BottomNav
             ├── page.tsx      # New Test — 2-col bento: form left, quick-stats panel right
-            │                 #   + INP/TBT SLO threshold inputs for browser type
+            │                 #   + INP/TBT SLO threshold inputs for browser type; viewer-role action gating
             ├── login/
-            │   └── page.tsx  # login form: username + project name → POST /auth/login
+            │   └── page.tsx  # sign-in / register forms (email+password[+name+teamName]) → POST /auth/login | /auth/register
+            ├── team/
+            │   └── page.tsx  # team member management (admin: add/role-change/remove; member/viewer: read-only)
+            │                 #   + Usage & Limits (quota) section + API Keys section (admin: generate/revoke)
+            ├── org/
+            │   └── page.tsx  # org member management (owner/admin: add/role-change/remove) + teams in org
+            │                 #   with usage summaries + "+ New team" form (owner/admin)
             ├── results/
             │   ├── page.tsx              # 2-line table rows (desktop) + card list (mobile)
             │   ├── [testId]/page.tsx     # 12-col bento grid: metric cells + charts + analysis
@@ -192,7 +205,9 @@ ai-load-testing-platform/
             ├── schedules/page.tsx        # schedule CRUD + manual trigger
             ├── presets/page.tsx          # preset CRUD + load into form
             └── components/
-                ├── Sidebar.tsx       # collapsible icon-rail sidebar (220px ↔ 48px, localStorage)
+                ├── Sidebar.tsx       # collapsible icon-rail sidebar (220px ↔ 48px, localStorage); "Team" nav item;
+                │                     #   team-switcher <select> (shown when user.teams.length > 1) calling switchTeam();
+                │                     #   "Org" nav item (⬡) shown only when user.orgs.length > 0
                 ├── BottomNav.tsx     # mobile bottom tab bar (5 items, lg:hidden)
                 ├── TopBar.tsx        # mobile top bar h-10 with page title (lg:hidden)
                 ├── ActiveTests.tsx   # inline strip (bg-[#ddf4ff]) showing running tests
@@ -207,6 +222,7 @@ ai-load-testing-platform/
                 └── FlowBuilder.tsx   # multi-step flow editor + HAR import + 🔴 Record button
                                     #   + extract source selector + inline data table + CSV upload
                                     #   + "Clear all" button + "Ignore list" for recordings
+                                    #   + per-step "Request headers" editor (key/value, supports {{varName}})
             # page.tsx also contains: flowRunner state + "Run as" toggle for flow tests
             #   + scriptMode state + "Script source" toggle (AI Generate | Custom Script) for backend tests
 ```
@@ -313,6 +329,7 @@ CREATE TABLE test_presets (
 );
 
 -- Auth projects (multi-tenancy) — migration #5
+-- "team" is the user-facing name for a project; project_id columns kept as-is (no rename)
 -- All resource tables carry project_id FK; null = auth disabled (dev mode)
 CREATE TABLE projects (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -320,6 +337,91 @@ CREATE TABLE projects (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 -- project_id added to: test_results, test_scripts, test_presets, schedules, webhooks, log_sources
+
+-- Org/Team/RBAC foundation — migration #6
+CREATE TABLE users (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,        -- bcrypt
+  name          TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Maps users to teams (= projects) with a role
+CREATE TABLE team_members (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id    UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role       VARCHAR(20) NOT NULL DEFAULT 'member' CHECK (role IN ('admin','member','viewer')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(team_id, user_id)
+);
+
+-- DB-backed revocable sessions; alt_session cookie holds the raw token, only its SHA-256 hash is stored
+CREATE TABLE sessions (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash  TEXT NOT NULL UNIQUE,
+  team_id     UUID REFERENCES projects(id) ON DELETE SET NULL,  -- "current team" for this session
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  expires_at  TIMESTAMPTZ NOT NULL,   -- 30 days from creation
+  revoked_at  TIMESTAMPTZ
+);
+CREATE INDEX sessions_user_id_idx ON sessions(user_id);
+CREATE INDEX sessions_token_hash_idx ON sessions(token_hash);
+
+-- Per-team quotas + Gemini usage tracking — migration #7
+CREATE TABLE team_quotas (
+  id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id                    UUID NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  max_concurrent_tests       INTEGER NOT NULL,
+  max_vus_per_test           INTEGER NOT NULL,
+  max_test_duration_seconds  INTEGER NOT NULL,
+  max_scheduled_tests        INTEGER NOT NULL,
+  max_gemini_calls_per_day   INTEGER NOT NULL,
+  created_at                 TIMESTAMPTZ DEFAULT NOW(),
+  updated_at                 TIMESTAMPTZ DEFAULT NOW()
+);
+-- A row only exists once an admin customizes limits; absent rows fall back to DEFAULT_TEAM_QUOTA in code
+
+CREATE TABLE gemini_usage (
+  team_id    UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  usage_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  call_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (team_id, usage_date)
+);
+
+-- Organizations + per-team API keys — migration #8
+CREATE TABLE organizations (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Maps users to orgs with an org-level role
+CREATE TABLE org_members (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id     UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role       VARCHAR(20) NOT NULL DEFAULT 'member' CHECK (role IN ('owner','admin','member')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(org_id, user_id)
+);
+
+-- projects.org_id: nullable FK — existing/new teams default to "ungrouped" (no org)
+ALTER TABLE projects ADD COLUMN org_id UUID REFERENCES organizations(id) ON DELETE SET NULL;
+
+-- Per-team API keys — scope external/CI callers to one team without a session
+CREATE TABLE team_api_keys (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  key_hash     TEXT NOT NULL UNIQUE,    -- sha256(raw key); raw key shown once on creation
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ,
+  revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX team_api_keys_hash_idx ON team_api_keys(key_hash);
 ```
 
 ## Shared Types (@alt/shared)
@@ -346,6 +448,24 @@ interface StepMetrics {
 
 interface LiveStepMetric { name: string; avgResponseTime: number; rps: number; errorRate: number }
 
+type TeamRole = 'admin' | 'member' | 'viewer'
+interface TeamMembership { id: string; name: string; role: TeamRole }
+type OrgRole = 'owner' | 'admin' | 'member'
+interface OrgMembership { id: string; name: string; role: OrgRole }
+interface SessionUser {
+  id: string; email: string; name?: string | null
+  teams: TeamMembership[]; currentTeamId: string | null; role: TeamRole | null
+  orgs: OrgMembership[]
+}
+
+interface TeamQuota {
+  maxConcurrentTests: number; maxVusPerTest: number; maxTestDurationSeconds: number
+  maxScheduledTests: number; maxGeminiCallsPerDay: number
+}
+// DEFAULT_TEAM_QUOTA: { maxConcurrentTests: 5, maxVusPerTest: 1000, maxTestDurationSeconds: 3600,
+//                       maxScheduledTests: 10, maxGeminiCallsPerDay: 100 } — used when no team_quotas row exists
+interface TeamUsage { concurrentTests: number; scheduledTests: number; geminiCallsToday: number }
+
 interface SLOThresholds {
   p95?: number; avg?: number; errorRate?: number; serverErrorRate?: number; timeoutRate?: number
   lcp?: number; fcp?: number; ttfb?: number; cls?: number
@@ -363,6 +483,8 @@ interface TestRequest {
   testData?: Array<Record<string, string>> // inline data table — NOT stored in DB
   csvData?: string                 // base64-encoded CSV — NOT stored in DB
   csvFilename?: string
+  customScript?: string            // user-supplied k6 script; bypasses AI generation entirely
+  projectId?: string                // set by api-service from session/team-API-key; filters DB scope
   createdAt: string
 }
 
@@ -376,8 +498,11 @@ interface EnrichedTestRequest extends TestRequest {
 }
 
 interface HttpOptions { keepAlive?, timeout?, http2?, discardResponseBodies?: boolean }
-interface BackendTestOptions { vus, duration, rampUp?, profile?: LoadProfile, peakVus?, httpOptions?: HttpOptions }
-interface ClientTestOptions  { sessions, duration, collectWebVitals }
+interface BackendTestOptions { vus, duration, rampUp?, profile?: LoadProfile, peakVus?, httpOptions?: HttpOptions, headers?: Record<string,string> }
+interface ClientTestOptions  { sessions, duration, collectWebVitals, headers?: Record<string,string> }
+// headers: custom request headers (e.g. API keys, auth tokens) sent with every request —
+//   k6: merged into params.headers for every http.request()/http.get()/http.post() call
+//   Puppeteer: applied via page.setExtraHTTPHeaders() before navigation
 
 interface BackendMetrics {
   type: 'backend'
@@ -464,10 +589,37 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `POST   /log-sources`      — create `{ name, platform?, urlTemplate }` — `urlTemplate` supports `{startedAtMs}`, `{completedAtMs}`, `{startedAtISO}`, `{completedAtISO}`, `{targetUrl}`, `{targetUrlEncoded}`, `{testId}`
 - `DELETE /log-sources/:id`  — delete log source
 
-**Auth (cookie session — requires SESSION_SECRET)**
-- `POST /auth/login`  — `{ username, projectName }` → creates or joins project → sets `alt_session` HttpOnly cookie; returns `{ projectId, username, projectName }`. If SESSION_SECRET empty: returns `{ dev: true }` with no cookie
-- `POST /auth/logout` — clears `alt_session` cookie → `{ success: true }`
-- `GET  /auth/me`     — returns current session payload or `401` if no valid cookie
+**Auth (DB-backed session — requires SESSION_SECRET)**
+- `POST /auth/register` — `{ email, password, name?, teamName }` → creates user (bcrypt hash) + new team (`projects` row) + `team_members` admin row + session → sets `alt_session` HttpOnly cookie; returns `SessionUser`. `409` if email or teamName taken
+- `POST /auth/login`    — `{ email, password }` → verifies bcrypt hash → sets `alt_session` cookie; returns `SessionUser` (`currentTeamId` = first team, or `null` if user has no team yet). `401` on invalid credentials
+- `POST /auth/logout`   — revokes the session row (`revoked_at`) + clears `alt_session` cookie → `{ success: true }`
+- `GET  /auth/me`       — returns `SessionUser` for the current session, or `401` if missing/expired/revoked
+- `POST /auth/switch-team` — `{ teamId }` → updates session's current team (must be a member) → returns updated `SessionUser`. `403` if not a member
+- If SESSION_SECRET empty: all `/auth/*` endpoints return the fixed dev user (`{ dev: true, ...DEV_USER }`-equivalent `SessionUser`) with no cookie
+
+**Teams (RBAC — requires SESSION_SECRET)**
+- `POST   /teams`                    — `{ name }` → create a new team, caller becomes its admin. `409` if name taken
+- `GET    /teams/:id/members`        — list `[{ userId, email, name, role }]` for the caller's current team. `403` if `:id` isn't the caller's current team
+- `POST   /teams/:id/members`        — admin only; `{ email, role? }` adds an existing user (`role` defaults to `member`). `404` if no user with that email, `409` if already a member
+- `PUT    /teams/:id/members/:userId` — admin only; `{ role }` changes a member's role. `400` invalid role, `404` not a member, `409` would remove last admin
+- `DELETE /teams/:id/members/:userId` — admin only; removes a member. `404` not a member, `409` would remove last admin
+
+**Team Quotas (RBAC — requires SESSION_SECRET)**
+- `GET /teams/:id/quotas` — any member of team `:id`; returns `{ quota: TeamQuota, usage: TeamUsage }` (absent `team_quotas` row → `DEFAULT_TEAM_QUOTA`)
+- `PUT /teams/:id/quotas` — admin only; body is a partial `TeamQuota` (positive integers); upserts `team_quotas`
+
+**Per-Team API Keys (RBAC — requires SESSION_SECRET, admin only)**
+- `POST   /teams/:id/api-keys` — `{ name }` → generates `crypto.randomBytes(24).toString('hex')`, stores `sha256(key)`; returns `{ id, name, key, createdAt }` — **the raw `key` is shown only once**
+- `GET    /teams/:id/api-keys` — list `[{ id, name, createdAt, lastUsedAt, revoked }]` (no key material)
+- `DELETE /teams/:id/api-keys/:keyId` — sets `revoked_at = NOW()`
+
+**Organizations (RBAC — requires SESSION_SECRET)**
+- `POST   /orgs` — `{ name }` → any authenticated user; creates org + `org_members` row with `role='owner'`. `409` if name taken
+- `GET    /orgs/:id` — any org member; returns `{ org, members: [...], teams: [...] }` (teams = `projects` where `org_id = :id`, each with usage summary)
+- `POST   /orgs/:id/members` — owner/admin only; `{ email, role? }`. `404` unknown email, `409` already a member
+- `PUT    /orgs/:id/members/:userId` — owner/admin only; `{ role }`. `409` would remove last owner
+- `DELETE /orgs/:id/members/:userId` — owner/admin only. `409` would remove last owner
+- `POST   /orgs/:id/teams` — owner/admin only; `{ name }` → creates a new team (`projects` row) with `org_id = :id`, caller becomes its admin
 
 ## RabbitMQ Queues & Exchanges
 
@@ -499,7 +651,7 @@ After 3 retries the message is routed to `<queue>.dlq` and acked.
 ### Semantic Script Comparison (ai-service/generator.ts)
 
 `compareDescriptions(newDescription, storedDescription)` → `'REUSE' | 'REGENERATE'`
-- Sends both descriptions to `gemini-2.5-flash` with a tight prompt asking for one-word verdict
+- Sends both descriptions to the configured Gemini model (`GEMINI_MODEL`, default `gemini-3.1-flash-lite`) with a tight prompt asking for one-word verdict
 - Defaults to `'REGENERATE'` on any unexpected response or error (safe fallback)
 - Same 3-attempt retry loop with 60/120/180s backoff as `generateScript`
 
@@ -649,6 +801,7 @@ The UI follows a "Command Center" aesthetic: GitHub-style color palette, collaps
 - **SLO thresholds:** collapsible section; backend/flow gets p95/avg/errorRate, browser gets LCP/FCP/TTFB/CLS/INP/TBT
 - **Presets:** save/load includes description, URL, VUs, duration, profile, peakVus, thresholds; dropdown is controlled (always resets to placeholder after selection)
 - **Flow runner selector** — below FlowBuilder, a toggle "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" controls `flowRunner` state (`'k6'` | `'browser'`); when `'browser'` is selected `handleSubmit` sends `type: 'client-side'` with `sessions/duration/collectWebVitals` options; auto-set by `applyDescriptionParams` type detection
+- **Custom Headers** — key/value editor in Advanced settings (backend + browser types only, not flow); `customHeaders` state → `options.headers` on submit. ai-service injects these into the generated script: k6 merges them into `params.headers` for every `http.*` call (`BACKEND_PROMPT`), Puppeteer calls `page.setExtraHTTPHeaders(...)` before navigation (`CLIENT_PROMPT`). Flow tests use per-step headers instead (see FlowBuilder below)
 
 ### UI Real-time Strategy
 Real-time updates use **WebSocket push** (`ws://localhost:3004/ws`) for the highest-frequency events; low-frequency diagnostics remain as polling.
@@ -719,12 +872,35 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 - Returns `401` on missing/invalid key; `/health` and internal `/results/pending` are exempt
 - Empty `API_KEYS` disables auth entirely — safe for local dev, required for cloud
 
-**Cookie Session Authentication** (`results-service/src/session.ts`, `results-service/src/app.ts`):
-- `POST /auth/login { username, projectName }` → `findOrCreateProject(name)` → HMAC-SHA256 sign payload → set `alt_session` cookie (HttpOnly, SameSite=Strict)
-- `SESSION_SECRET` env var controls signing. Empty = auth disabled (no cookie, dev mode)
-- Session middleware (Fastify `onRequest` hook) on all results-service routes except `/health`, `/auth/*`, internal `/results/pending`, `/results/:id/running|fail|message`, `/results/pending`
+**User Accounts & Org/Team/RBAC** (`results-service/src/session.ts`, `results-service/src/app.ts`):
+- `users` table: email + `bcrypt.hash(password, 10)` via `bcryptjs`. `POST /auth/register` creates a user, a new team (`projects` row), an `admin` `team_members` row, and a session in one transaction. `POST /auth/login` verifies via `bcrypt.compare`.
+- `sessions` table: DB-backed, revocable, opaque tokens — `createSession(pool, userId, teamId)` generates `crypto.randomBytes(32).toString('hex')`, stores `sha256(token)` as `token_hash` with 30-day `expires_at`. The raw token is the `alt_session` cookie value (HttpOnly, SameSite=Strict); only the hash is persisted. `POST /auth/logout` sets `revoked_at`, immediately invalidating the cookie.
+- `SESSION_SECRET` env var controls whether session/RBAC enforcement is active. Empty = auth disabled (no cookie, dev mode — `request.user/projectId/role` all `null`/`undefined`)
+- "Team" = the existing `projects` table/`project_id` columns (kept as-is, no rename). `team_members` (team_id, user_id, role) maps users to teams; `role IN ('admin','member','viewer')`. `sessions.team_id` tracks the session's "current team", switchable via `POST /auth/switch-team`.
+- RBAC middleware (Fastify `onRequest` hook): loads `request.user`, `request.projectId` (= session's current `team_id`, feeding existing project-scoping filters unchanged), `request.role`. A session with no current team is `403` on all routes except `/teams`/`/orgs`. On mutating methods: `viewer` role → `403` on resource routes; `/teams/:id/*` mutations require `admin` for that team.
+- Session middleware applies to all results-service routes except `/health`, `/auth/*`, internal `/results/pending`, `/results/:id/running|fail|message`, `/results/pending`
 - Project isolation: all resource queries filter by `($N::uuid IS NULL OR project_id = $N::uuid)` — null when SESSION_SECRET is empty
-- `signSession` / `verifySession` use `crypto.createHmac` + `timingSafeEqual` (constant-time comparison)
+- `getSession`/`createSession`/`revokeSession`/`switchSessionTeam` in `session.ts` (replaces the old `signSession`/`verifySession` HMAC cookie scheme)
+- `services/api-service/src/session.ts` mirrors this with `getApiSession(pool, token)` — same hash lookup, returns `{ projectId, role }` for api-service's own `onRequest` hook (fixes a prior bug where api-service still used the old HMAC cookie scheme and `request.projectId` was never set with `SESSION_SECRET` configured)
+
+**Organizations & Per-Team Quotas/API Keys** (results-service, migrations #7–#8):
+- `organizations` + `org_members` (`role IN ('owner','admin','member')`) sit above teams; `projects.org_id` is a nullable FK — teams created before this phase (or outside an org) have `org_id = NULL` ("ungrouped"), no breaking change
+- RBAC middleware additionally resolves `request.orgId`/`request.orgRole` for the org owning the session's *current* team (via `org_members` join); `/orgs/:id/*` mutations require `orgRole IN ('owner','admin')`, with last-owner protection mirroring `/teams/:id/members`' last-admin protection
+- `team_quotas` (per-team limits) + `gemini_usage` (daily Gemini call counter) back `TeamQuota`/`TeamUsage`. `getTeamQuota`/`checkTestQuota` (api-service `quotas.ts`) and `getTeamQuota`/`checkScheduleQuota`/`checkGeminiQuota`/`incrementGeminiUsage`/`getTeamUsage` (results-service `quotas.ts`) merge an absent row over `DEFAULT_TEAM_QUOTA`. `POST /tests` returns `429` over `maxConcurrentTests`/`maxVusPerTest`/`maxTestDurationSeconds`; `POST /schedules` and re-enabling a schedule return `429` over `maxScheduledTests`; explicit `/ai/*` endpoints return `429` over `maxGeminiCallsPerDay` (core pipeline Gemini calls — script generation, recording correlation, PDF summaries — are NOT metered)
+- `team_api_keys`: `crypto.randomBytes(24).toString('hex')` raw key, `sha256(key)` stored as `key_hash` (`hashApiKey` helper in both services' `session.ts`); raw key returned only once on `POST /teams/:id/api-keys`
+- Both api-service's and results-service's `onRequest` hooks check `X-API-Key` against `team_api_keys` (when it doesn't match the global `API_KEYS` list) **before** the global-key/session checks; on a hit, sets `request.projectId = team_id`, `request.role = 'admin'`, updates `last_used_at` (fire-and-forget), and returns early — scoping the request to that team without a session cookie. The lookup is wrapped in `try/catch` so a DB error falls through to the global-key/session checks rather than 500ing
+- Scheduler (`results-service/src/scheduler.ts`): `triggerSchedule` calls api-service with the global `API_KEY` plus `projectId: schedule.project_id` in the body; api-service's `POST /tests` only honors this `projectId` override when the caller authenticated via a key in the global `API_KEYS` list
+
+**Rate Limiting** (`api-service/src/redis.ts`, `results-service/src/redis.ts` + `app.ts`/`index.ts`):
+- `redisClient` (ioredis) is created from `REDIS_URL` if set, otherwise `undefined` — `@fastify/rate-limit` falls back to its built-in in-memory store (used by most tests, which don't set `REDIS_URL`)
+- `@fastify/rate-limit` registered globally (`global: true`) in both services with `redis: redisClient`, `skipOnError: true` (fails open if Redis is unreachable — rate limiting never blocks the API outage-style)
+- Default global limit: `RATE_LIMIT_MAX` (600) requests per `RATE_LIMIT_WINDOW_MS` (60000ms) per IP
+- `allowList` exempts `/health` (both services) and, in results-service, the internal worker→results-service callbacks (`/results/pending`, `/results/:id/running|fail|message|live`, `/results/:id/cancel`)
+- Per-route stricter limits via `config: { rateLimit: {...} }`:
+  - results-service `/auth/login` + `/auth/register`: `AUTH_RATE_LIMIT_MAX` (10) per minute per IP — brute-force protection
+  - results-service explicit AI endpoints (`/ai/cron`, `/ai/trend-narrative`, `/ai/webhook-noise`, `/ai/preset-name`, `/ai/param-suggestions`, `/results/suggest-settings`, `/results/suggest-thresholds`, `/results/:testId/diagnose`): `AI_RATE_LIMIT_MAX` (20) per minute per IP — IP-based defense-in-depth on top of the per-team `gemini_usage` daily quota
+- Exceeding a limit returns `429` with body `{"statusCode":429,"error":"Too Many Requests","message":"Rate limit exceeded, retry in N seconds"}` and a `Retry-After` header
+- `/health` `checks.redis`: `'ok'` (connected), `'disconnected'`, or `'disabled'` (no `REDIS_URL`) — informational only, does not flip overall health to unhealthy
 
 **CORS**: `ALLOWED_ORIGIN` env var replaces hardcoded `*` in both services. Defaults to `*` in dev.
 
@@ -770,6 +946,12 @@ API_KEYS=key1,key2            # comma-separated; empty string = auth disabled (d
 API_KEY=key1                  # single key passed to UI as VITE_API_KEY
 SESSION_SECRET=change-me-...  # results-service: HMAC-SHA256 cookie signing; empty = auth disabled
 ALLOWED_ORIGIN=https://yourdomain.com  # CORS origin; defaults to * in dev
+
+# Rate limiting (api-service + results-service; uses REDIS_URL as shared store, falls back to in-memory):
+RATE_LIMIT_MAX=600            # global requests/window per IP (default 600)
+RATE_LIMIT_WINDOW_MS=60000    # global window size in ms (default 60000)
+AUTH_RATE_LIMIT_MAX=10        # results-service /auth/login + /auth/register requests/min per IP (default 10)
+AI_RATE_LIMIT_MAX=20          # results-service /ai/* + suggest-*/diagnose requests/min per IP (default 20)
 
 # Worker tuning (optional, have defaults):
 WORKER_CONCURRENCY=1          # worker-backend (default 1)
@@ -817,7 +999,7 @@ docker compose down -v
 # Build shared types (required after any change to packages/shared/src/index.ts)
 npm run build:shared
 
-# Run unit + integration tests (~430 tests)
+# Run unit + integration tests (~445 tests)
 npm test
 
 # Run tests in watch mode
@@ -844,36 +1026,45 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~430 tests passing across 18+ test files
+**Total:** ~900 tests across 48 test files (`npm test` reports 897 tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
 |------|---------|-------|
 | `worker-backend/src/__tests__/parser.test.ts` | `parseK6Output`, `aggregateWindow` (per-step), `parseK6Errors` (error categorization) | 25 |
 | `results-service/src/__tests__/analyzer.test.ts` | `analyzeResult` thresholds + regression + error breakdown + INP/TBT thresholds | 44 |
-| `results-service/src/__tests__/session.test.ts` | `signSession`, `verifySession` (tamper, wrong secret, invalid base64) | 11 |
 | `api-service/src/__tests__/options.test.ts` | `buildK6Options`, `replaceK6Options`, `httpOptions` (http2, discard) | 16 |
-| `api-service/src/__tests__/index.test.ts` | POST /tests routing, parameterization passthrough, cancel, health, sensitive-field redaction | 23 |
-| `results-service/src/__tests__/scheduler.test.ts` | `startScheduler`, `triggerSchedule` (mocked cron) | 12 |
+| `api-service/src/__tests__/index.test.ts` | POST /tests routing, parameterization passthrough, cancel, health, sensitive-field redaction, quota 429s | 22 |
+| `results-service/src/__tests__/scheduler.test.ts` | `startScheduler`, `triggerSchedule` (mocked cron), `project_id` passthrough | 12 |
 | `ai-service/src/__tests__/generator.test.ts` | `FLOW_PROMPT` ExtractRule rendering, parameterization, `compareDescriptions` | 12 |
 
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
 |------|---------|-------|
-| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description in result response | 64 |
-| `results-service/src/__tests__/auth.test.ts` | POST /auth/login, /logout, GET /auth/me, session middleware, dev mode | 18 |
+| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s | 89 |
+| `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 41 |
+| `results-service/src/__tests__/orgs.test.ts` | POST /orgs, GET /orgs/:id, member role mgmt, last-owner protection, POST /orgs/:id/teams, cross-org isolation | 22 |
+| `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection | 27 |
+| `results-service/src/__tests__/quotas.test.ts` | `getTeamQuota`/`upsertTeamQuota` defaults+merge, `checkScheduleQuota`, `checkGeminiQuota`/`incrementGeminiUsage` rollover, `getTeamUsage` | 14 |
+| `results-service/src/__tests__/apiKeys.test.ts` | generate/list/revoke team API keys; auth middleware accepts valid key, rejects revoked/unknown | 9 |
+| `results-service/src/__tests__/session.test.ts` | `createSession`/`getSession`/`revokeSession`/`switchSessionTeam` (token hashing, expiry, revocation) | 11 |
 | `results-service/src/__tests__/consumer.test.ts` | `handleResult`, webhook firing, baseline ordering | 11 |
 | `results-service/src/__tests__/stale.test.ts` | `runStaleCleanup` | 10 |
 | `api-service/src/__tests__/scripts.test.ts` | `findExistingScript` + description field + no auto-increment | 9 |
+| `api-service/src/__tests__/quotas.test.ts` | `getTeamQuota`/`checkTestQuota` (VUs/duration/concurrent limits, `teamId == null` bypass) | 9 |
+| `api-service/src/__tests__/session.test.ts` | `getApiSession` (projectId/role lookup, revoked/expired/unknown tokens) | 7 |
+| `api-service/src/__tests__/teamApiKey.test.ts` | per-team API key auth scopes `POST /tests`, rejects revoked/unknown keys | 3 |
 
 ### UI Tests (RTL + jsdom via Vitest)
 | File | Subject | Tests |
 |------|---------|-------|
 | `ui/__tests__/AnalysisPanel.test.tsx` | threshold violations, diff rows, badges | 9 |
 | `ui/__tests__/ActiveTests.test.tsx` | count display, link, WS-triggered refetch | 6 |
-| `ui/__tests__/AuthContext.test.tsx` | AuthProvider loading/user state, AuthGate redirect/render | 6 |
+| `ui/__tests__/AuthContext.test.tsx` | AuthProvider loading/user/setUser/switchTeam state, AuthGate redirect/render | 6 |
 | `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, INP/TBT SLO inputs | 14 |
-| `ui/__tests__/LoginPage.test.tsx` | renders inputs, calls login(), setUser+navigate on success, error, disabled during submit | 5 |
+| `ui/__tests__/LoginPage.test.tsx` | sign-in mode + register mode forms, API calls, setUser+navigate, errors, disabled states | 11 |
+| `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke) | 16 |
+| `ui/__tests__/OrgPage.test.tsx` | org member list, admin add/role-change/remove, teams-in-org list, "+ New team" form | 9 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |
 
 ### Playwright E2E (requires `docker compose up`)
@@ -884,10 +1075,10 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `e2e/compare.spec.ts` | create 2 tests via API → select both → compare view |
 
 ## Known Issues / Tech Debt
-- Redis is running but not used (planned: caching, rate limiting, pub/sub)
-- Gemini rate limit: **20 requests/day** on free tier (`gemini-2.5-flash`); `compareDescriptions()` also consumes quota so each new-description test costs 2 calls. Paid key removes daily cap. Backoff retry (60s/120s/180s) handles 429 automatically.
+- **Breaking change (Org/Team/RBAC foundation, migration #6)**: the old `POST /auth/login { username, projectName }` free-text join-any-project flow is replaced by password-based `register`/`login` against real `users` accounts. Any `projects` rows created via the old flow become orphaned teams with no `team_members` — existing sessions are invalidated (new DB-backed session model); users must `POST /auth/register` to create an account + team (or be added to an existing team by its admin via `POST /teams/:id/members`).
+- Redis backs `@fastify/rate-limit` (see Security → Rate Limiting); pub/sub for WebSocket horizontal scaling still not implemented
+- Gemini rate limit: default model is `gemini-3.1-flash-lite` — free tier is roughly **15 requests/minute and ~1,000 requests/day** (flash-lite class; check the current values in [AI Studio's rate limit page](https://aistudio.google.com/rate-limit), as Google adjusts preview-model quotas frequently). `compareDescriptions()` also consumes quota so each new-description test costs 2 calls. Paid key removes/raises the daily cap. Backoff retry (60s/120s/180s) handles 429 automatically.
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
-- No rate limiting yet — planned via `@fastify/rate-limit` (Redis back-end when Redis is wired up)
 - **recorder-service**: noVNC requires `xvfb` + `x11vnc` + `novnc` APK packages; these add ~60 MB to the Docker image. On Windows/Mac host without Docker the recording browser appears natively (no virtual display needed) when `DISPLAY` is unset.
 - **Playwright → Puppeteer script import**: allow users to upload existing Playwright test scripts; an AI agent would translate them to Puppeteer scripts compatible with worker-client. Requires a new conversion endpoint in ai-service (or a dedicated converter-service) and a UI file upload step in the test form.
 - **Strict input contract for analyser-service AI prompt** — `aiInsights.ts` currently forwards raw metric objects to the Gemini prompt without enforcing which fields are included or capping array lengths (e.g. `stepMetrics` for large flows, `statusCodes` maps). This risks inflated token usage, inconsistent prompt structure across test types, and weaker model output. Define a typed `AnalysisPromptPayload` interface that explicitly picks only the fields the prompt uses, caps lists (e.g. top-5 step metrics by p95), and normalises units (all times in ms, rates as percentages) before building the prompt string.

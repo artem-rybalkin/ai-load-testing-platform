@@ -35,7 +35,7 @@ vi.mock('react-router-dom', () => ({
   useSearchParams: () => [new URLSearchParams(), vi.fn()],
 }));
 
-import FlowBuilder from '../app/components/FlowBuilder';
+import FlowBuilder, { parseHar } from '../app/components/FlowBuilder';
 afterEach(() => cleanup());
 
 // ── Default props ─────────────────────────────────────────────────────────────
@@ -105,6 +105,49 @@ describe('FlowBuilder — initial state', () => {
     render(<FlowBuilder {...defaultProps} />);
     expect(screen.queryByText(/recording in progress/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/stop recording/i)).not.toBeInTheDocument();
+  });
+});
+
+// ─── Request headers editor ────────────────────────────────────────────────────
+
+describe('FlowBuilder — request headers editor', () => {
+  it('shows "No custom headers" when a step has no headers', () => {
+    render(<FlowBuilder {...defaultProps} steps={[makeFlowStep('Get profile')]} />);
+    expect(screen.getByText(/no custom headers/i)).toBeInTheDocument();
+  });
+
+  it('renders existing headers (e.g. recorded Authorization placeholder)', () => {
+    const step = { ...makeFlowStep('Get bag count'), headers: { Authorization: 'Bearer {{access_token}}' } };
+    render(<FlowBuilder {...defaultProps} steps={[step]} />);
+    expect(screen.getByDisplayValue('Authorization')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Bearer {{access_token}}')).toBeInTheDocument();
+  });
+
+  it('adds a new empty header row when "+ add" is clicked', () => {
+    render(<FlowBuilder {...defaultProps} steps={[makeFlowStep('Get profile')]} />);
+    // "Request headers" section's "+ add" is the first of several "+ add" buttons on the page
+    fireEvent.click(screen.getAllByRole('button', { name: /^\+ add$/i })[0]);
+    const [step] = defaultProps.onChange.mock.calls[0][0];
+    expect(step.headers).toEqual({ '': '' });
+  });
+
+  it('updates a header value', () => {
+    const step = { ...makeFlowStep('Get profile'), headers: { 'X-Auth-Token': 'old' } };
+    render(<FlowBuilder {...defaultProps} steps={[step]} />);
+    fireEvent.change(screen.getByDisplayValue('old'), { target: { value: '{{token}}' } });
+    const [updated] = defaultProps.onChange.mock.calls[0][0];
+    expect(updated.headers).toEqual({ 'X-Auth-Token': '{{token}}' });
+  });
+
+  it('removes a header row', () => {
+    const step = { ...makeFlowStep('Get profile'), headers: { 'X-Auth-Token': 'abc' } };
+    const { container } = render(<FlowBuilder {...defaultProps} steps={[step]} />);
+    const headerRow = screen.getByDisplayValue('X-Auth-Token').closest('div')!;
+    const removeBtn = headerRow.querySelector('button')!;
+    fireEvent.click(removeBtn);
+    const [updated] = defaultProps.onChange.mock.calls[0][0];
+    expect(updated.headers).toEqual({});
+    void container;
   });
 });
 
@@ -282,11 +325,11 @@ describe('FlowBuilder — cancel button during processing', () => {
     fireEvent.click(screen.getByRole('button', { name: /stop recording/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
     });
   });
 
-  it('clicking Cancel immediately clears recording state', async () => {
+  it('clicking Skip immediately clears recording state', async () => {
     mockStartRecording.mockResolvedValue(makeSession());
     mockStopRecording.mockReturnValue(new Promise(() => {}));
 
@@ -296,12 +339,12 @@ describe('FlowBuilder — cancel button during processing', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /stop recording/i }));
-    await waitFor(() => screen.getByRole('button', { name: /cancel/i }));
+    await waitFor(() => screen.getByRole('button', { name: /skip/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     expect(screen.getByRole('button', { name: /record/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument();
   });
 });
 
@@ -314,14 +357,14 @@ describe('FlowBuilder — __recordingDone callback from viewer tab', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /record/i }));
     });
-    return (window as any).__recordingDone as (steps: unknown[]) => void;
+    return (window as any).__recordingDone as (result: Record<string, unknown>) => void;
   };
 
   it('imports steps when viewer tab calls __recordingDone with steps', async () => {
     const callback = await startRecordingAndGetCallback();
     const steps = [makeFlowStep('home'), makeFlowStep('login')];
 
-    await act(async () => { callback(steps); });
+    await act(async () => { callback({ status: 'completed', id: 'session-123', steps, stepCount: steps.length }); });
 
     expect(defaultProps.onChange).toHaveBeenCalledWith(steps);
   });
@@ -329,7 +372,7 @@ describe('FlowBuilder — __recordingDone callback from viewer tab', () => {
   it('clears recording state after __recordingDone is called', async () => {
     const callback = await startRecordingAndGetCallback();
 
-    await act(async () => { callback([]); });
+    await act(async () => { callback({ status: 'completed', id: 'session-123', steps: [], stepCount: 0 }); });
 
     expect(screen.getByRole('button', { name: /record/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /stop recording/i })).not.toBeInTheDocument();
@@ -338,7 +381,7 @@ describe('FlowBuilder — __recordingDone callback from viewer tab', () => {
   it('cleans up __recordingDone from window after it fires', async () => {
     const callback = await startRecordingAndGetCallback();
 
-    await act(async () => { callback([]); });
+    await act(async () => { callback({ status: 'completed', id: 'session-123', steps: [], stepCount: 0 }); });
 
     expect((window as any).__recordingDone).toBeUndefined();
   });
@@ -346,9 +389,28 @@ describe('FlowBuilder — __recordingDone callback from viewer tab', () => {
   it('does not call onChange when steps array is empty', async () => {
     const callback = await startRecordingAndGetCallback();
 
-    await act(async () => { callback([]); });
+    await act(async () => { callback({ status: 'completed', id: 'session-123', steps: [], stepCount: 0 }); });
 
     expect(defaultProps.onChange).not.toHaveBeenCalled();
+  });
+
+  it('shows AI-suggested ignore patterns panel when viewer tab returns suggestedIgnore', async () => {
+    const callback = await startRecordingAndGetCallback();
+    const steps = [makeFlowStep('home')];
+
+    await act(async () => {
+      callback({
+        status: 'completed',
+        id: 'session-123',
+        steps,
+        stepCount: steps.length,
+        suggestedIgnore: ['analytics.example.com', 'cdn.example.com'],
+      });
+    });
+
+    expect(screen.getByText(/Suggested ignore patterns for next recording/i)).toBeInTheDocument();
+    expect(screen.getByText('analytics.example.com')).toBeInTheDocument();
+    expect(screen.getByText('cdn.example.com')).toBeInTheDocument();
   });
 });
 
@@ -620,5 +682,23 @@ describe('FlowBuilder — Import from HAR', () => {
 
     await waitFor(() => expect(defaultProps.onChange).toHaveBeenCalled());
     expect(input.value).toBe('');
+  });
+});
+
+// ─── Performance ──────────────────────────────────────────────────────────────
+
+describe('performance', () => {
+  it('parses a 300-entry HAR file within a generous time budget', () => {
+    const entries = Array.from({ length: 300 }, (_, i) =>
+      makeHarEntry({ url: `https://api.example.com/item/${i}`, method: i % 2 === 0 ? 'GET' : 'POST', postDataText: i % 2 === 0 ? undefined : '{"id":1}' })
+    );
+    const raw = makeHar(entries);
+
+    const start = performance.now();
+    const steps = parseHar(raw);
+    const elapsed = performance.now() - start;
+
+    expect(steps).toHaveLength(50);
+    expect(elapsed).toBeLessThan(200);
   });
 });

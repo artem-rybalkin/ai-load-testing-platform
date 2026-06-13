@@ -3,13 +3,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../lib/AuthContext';
+import type { SessionUser } from '../lib/api';
 
-const mockGetMe  = vi.hoisted(() => vi.fn());
-const mockLogout = vi.hoisted(() => vi.fn());
+const mockGetMe       = vi.hoisted(() => vi.fn());
+const mockLogout      = vi.hoisted(() => vi.fn());
+const mockSwitchTeam  = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
-  getMe:   mockGetMe,
-  logout:  mockLogout,
+  getMe:      mockGetMe,
+  logout:     mockLogout,
+  switchTeam: mockSwitchTeam,
 }));
 
 // Inline AuthGate mirrors the one in App.tsx, avoids importing the whole app
@@ -20,6 +23,26 @@ function AuthGate() {
   return <Outlet />;
 }
 
+const aliceUser: SessionUser = {
+  id: 'u1',
+  email: 'alice@example.com',
+  name: 'Alice',
+  teams: [{ id: 't1', name: 'team-alpha', role: 'admin' }],
+  currentTeamId: 't1',
+  role: 'admin',
+  orgs: [],
+};
+
+const bobUser: SessionUser = {
+  id: 'u2',
+  email: 'bob@example.com',
+  name: 'Bob',
+  teams: [{ id: 't2', name: 'team-beta', role: 'member' }],
+  currentTeamId: 't2',
+  role: 'member',
+  orgs: [],
+};
+
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => cleanup());
 
@@ -29,15 +52,15 @@ const UserDisplay = () => {
   const { user, loading } = useAuth();
   if (loading) return <span>loading</span>;
   if (!user)   return <span>no user</span>;
-  return <span>user:{user.username}</span>;
+  return <span>user:{user.email}</span>;
 };
 
 describe('AuthProvider', () => {
   it('shows loading initially then the user once getMe resolves', async () => {
-    mockGetMe.mockResolvedValue({ projectId: 'p1', username: 'alice', projectName: 'team' });
+    mockGetMe.mockResolvedValue(aliceUser);
     render(<AuthProvider><MemoryRouter><UserDisplay /></MemoryRouter></AuthProvider>);
     expect(screen.getByText('loading')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('user:alice')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('user:alice@example.com')).toBeInTheDocument());
   });
 
   it('shows no user when getMe rejects (not logged in)', async () => {
@@ -52,15 +75,37 @@ describe('AuthProvider', () => {
       const { user, setUser } = useAuth();
       return (
         <div>
-          <span>{user ? `user:${user.username}` : 'no user'}</span>
-          <button onClick={() => setUser({ projectId: 'p2', username: 'bob', projectName: 'team' })}>set</button>
+          <span>{user ? `user:${user.email}` : 'no user'}</span>
+          <button onClick={() => setUser(bobUser)}>set</button>
         </div>
       );
     };
     render(<AuthProvider><MemoryRouter><Setter /></MemoryRouter></AuthProvider>);
     await waitFor(() => expect(screen.getByText('no user')).toBeInTheDocument());
     screen.getByRole('button', { name: 'set' }).click();
-    await waitFor(() => expect(screen.getByText('user:bob')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('user:bob@example.com')).toBeInTheDocument());
+  });
+
+  it('switchTeam calls the API and updates the user state', async () => {
+    mockGetMe.mockResolvedValue(aliceUser);
+    const switched: SessionUser = { ...aliceUser, currentTeamId: 't2', teams: [...aliceUser.teams, { id: 't2', name: 'team-beta', role: 'viewer' }], role: 'viewer' };
+    mockSwitchTeam.mockResolvedValue(switched);
+
+    const Switcher = () => {
+      const { user, switchTeam } = useAuth();
+      return (
+        <div>
+          <span>current:{user?.currentTeamId}</span>
+          <button onClick={() => switchTeam('t2')}>switch</button>
+        </div>
+      );
+    };
+    render(<AuthProvider><MemoryRouter><Switcher /></MemoryRouter></AuthProvider>);
+    await waitFor(() => expect(screen.getByText('current:t1')).toBeInTheDocument());
+
+    screen.getByRole('button', { name: 'switch' }).click();
+    await waitFor(() => expect(screen.getByText('current:t2')).toBeInTheDocument());
+    expect(mockSwitchTeam).toHaveBeenCalledWith('t2');
   });
 });
 
@@ -86,7 +131,7 @@ describe('AuthGate', () => {
   });
 
   it('renders protected content when user is authenticated', async () => {
-    mockGetMe.mockResolvedValue({ projectId: 'p1', username: 'carol', projectName: 'team' });
+    mockGetMe.mockResolvedValue(aliceUser);
     render(
       <AuthProvider>
         <MemoryRouter initialEntries={['/']}>

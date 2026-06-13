@@ -27,38 +27,90 @@ Returns `401 Unauthorized` if the key is missing or invalid.
 
 ---
 
-### Cookie session auth (UI / project-scoped)
+### Cookie session auth (UI / team-scoped)
 
 When `SESSION_SECRET` is set on results-service, session middleware is active. All results-service endpoints (except `/health`, `/auth/*`, internal `/results/pending`, and internal worker callbacks) require a valid `alt_session` cookie.
 
-#### `POST /auth/login`
+A session token is an opaque random value; only its SHA-256 hash is stored server-side in the `sessions` table (with `expires_at` and `revoked_at`), so `POST /auth/logout` immediately invalidates the cookie. Each session also tracks a "current team" (`team_id`), switchable via `POST /auth/switch-team`.
 
-Create or join a project and issue a session cookie.
+A user with no current team (e.g. just logged in but not yet a member of any team) is blocked with `403` from all routes except `/teams` (to create or be added to one).
+
+**Roles:** `admin` | `member` | `viewer`, scoped per team via `team_members`. On mutating requests (`POST`/`PUT`/`PATCH`/`DELETE`): a `viewer` gets `403` on resource routes (tests, schedules, webhooks, presets, etc.); `/teams/:id/*` mutations additionally require `admin` for that team.
+
+If `SESSION_SECRET` is empty, all `/auth/*` endpoints return a fixed dev user `{ "dev": true, ... }` and set no cookie — auth is fully disabled (local dev default).
+
+---
+
+### Per-team API key auth (CI / external automation)
+
+In addition to the global `API_KEYS` list and session cookies, both api-service and results-service accept a **per-team API key** via `X-API-Key`. These are generated via `POST /teams/:id/api-keys` (see below), stored as `sha256(key)` in `team_api_keys`, and scope the request to that team — equivalent to an `admin` session with no current-team-switching ability.
+
+```bash
+curl -X POST http://localhost:3000/tests \
+  -H "X-API-Key: <team-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{ "type": "backend", "targetUrl": "https://api.example.com", "options": { "vus": 5, "duration": "30s" } }'
+```
+
+A revoked key returns `401 { "error": "Not authenticated" }`.
+
+#### `POST /auth/register`
+
+Create a new user account, a new team, and sign in as that team's admin.
 
 **Request body:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `username` | string | Display name (1–80 chars) |
-| `projectName` | string | Project slug (1–80 chars, lowercased) |
+| `email` | string | Valid email address |
+| `password` | string | At least 8 characters |
+| `name` | string? | Optional display name |
+| `teamName` | string | New team name (1–80 chars, lowercased); `409` if already taken |
+
+```bash
+curl -X POST http://localhost:3004/auth/register \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{ "email": "alice@example.com", "password": "password123", "name": "Alice", "teamName": "my-team" }'
+```
+
+**Response `200`** (`SessionUser`):
+```json
+{
+  "id": "550e8400-...",
+  "email": "alice@example.com",
+  "name": "Alice",
+  "teams": [{ "id": "...", "name": "my-team", "role": "admin" }],
+  "currentTeamId": "...",
+  "role": "admin"
+}
+```
+
+Sets `alt_session` cookie (HttpOnly, SameSite=Strict, 30-day expiry). `400` for invalid email/password; `409` if email or team name already taken.
+
+#### `POST /auth/login`
+
+Authenticate with email + password and issue a session cookie.
+
+**Request body:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `email` | string | Account email |
+| `password` | string | Account password |
 
 ```bash
 curl -X POST http://localhost:3004/auth/login \
   -H "Content-Type: application/json" \
   -c cookies.txt \
-  -d '{ "username": "alice", "projectName": "my-team" }'
+  -d '{ "email": "alice@example.com", "password": "password123" }'
 ```
 
-**Response `200`:**
-```json
-{ "projectId": "550e8400-...", "username": "alice", "projectName": "my-team" }
-```
-
-Sets `alt_session` cookie (HttpOnly, SameSite=Strict). If `SESSION_SECRET` is empty, returns a 200 dev response with `{ "dev": true }` and sets no cookie.
+**Response `200`:** `SessionUser` (see above) — `currentTeamId` is the user's first team, or `null` if they belong to no team yet. Returns `401` on invalid email/password.
 
 #### `POST /auth/logout`
 
-Clear the session cookie.
+Revoke the session and clear the cookie.
 
 ```bash
 curl -X POST http://localhost:3004/auth/logout -b cookies.txt
@@ -74,9 +126,180 @@ Return the currently authenticated user from the session cookie.
 curl http://localhost:3004/auth/me -b cookies.txt
 ```
 
-**Response `200`:** `{ "projectId": "...", "username": "alice", "projectName": "my-team" }`
+**Response `200`:** `SessionUser` (see `/auth/register`). Returns `401` if not authenticated.
 
-Returns `401` if not authenticated.
+#### `POST /auth/switch-team`
+
+Switch the session's current team (must already be a member).
+
+**Request body:** `{ "teamId": "..." }`
+
+```bash
+curl -X POST http://localhost:3004/auth/switch-team \
+  -H "Content-Type: application/json" \
+  -b cookies.txt -c cookies.txt \
+  -d '{ "teamId": "660e8400-..." }'
+```
+
+**Response `200`:** `SessionUser` with updated `currentTeamId`/`role`. Returns `400` if `teamId` missing, `403` if not a member of that team.
+
+---
+
+### Team management
+
+#### `POST /teams`
+
+Create a new team; the caller becomes its admin.
+
+**Request body:** `{ "name": "..." }`
+
+**Response `200`:** `{ "id": "...", "name": "...", "role": "admin" }`. Returns `400` if name missing, `409` if name already taken.
+
+#### `GET /teams/:id/members`
+
+List members of a team. `:id` must be the caller's current team (`403` otherwise).
+
+**Response `200`:** `[{ "userId": "...", "email": "...", "name": "...", "role": "admin" | "member" | "viewer" }]`
+
+#### `POST /teams/:id/members`
+
+Add an existing user to the team. **Admin only.**
+
+**Request body:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `email` | string | Email of an existing registered user |
+| `role` | string? | `admin` \| `member` \| `viewer` — defaults to `member` |
+
+**Response `200`:** `{ "success": true }`. Returns `404` if no user with that email exists, `409` if already a member.
+
+#### `PUT /teams/:id/members/:userId`
+
+Change a member's role. **Admin only.**
+
+**Request body:** `{ "role": "admin" | "member" | "viewer" }`
+
+**Response `200`:** `{ "success": true }`. Returns `400` for an invalid role, `404` if not a member, `409` if this would demote the last remaining admin.
+
+#### `DELETE /teams/:id/members/:userId`
+
+Remove a member from the team. **Admin only.**
+
+**Response `200`:** `{ "success": true }`. Returns `404` if not a member, `409` if this would remove the last remaining admin.
+
+---
+
+### Team quotas
+
+Per-team resource limits, enforced before queuing tests/schedules and metering `/ai/*` Gemini calls. Any row absent from `team_quotas` falls back to `DEFAULT_TEAM_QUOTA` (5 concurrent tests, 1000 max VUs/test, 3600s max duration, 10 scheduled tests, 100 Gemini calls/day).
+
+#### `GET /teams/:id/quotas`
+
+Any member of team `:id`.
+
+```bash
+curl http://localhost:3004/teams/<id>/quotas -b cookies.txt
+```
+
+**Response `200`:**
+```json
+{
+  "quota": { "maxConcurrentTests": 5, "maxVusPerTest": 1000, "maxTestDurationSeconds": 3600, "maxScheduledTests": 10, "maxGeminiCallsPerDay": 100 },
+  "usage": { "concurrentTests": 1, "scheduledTests": 2, "geminiCallsToday": 7 }
+}
+```
+
+#### `PUT /teams/:id/quotas`
+
+**Admin only.** Body is a partial `TeamQuota` (positive integers); upserts the team's `team_quotas` row.
+
+```bash
+curl -X PUT http://localhost:3004/teams/<id>/quotas \
+  -H "Content-Type: application/json" -b cookies.txt \
+  -d '{ "maxConcurrentTests": 2 }'
+```
+
+**Response `200`:** `{ "quota": { ...TeamQuota } }`
+
+When a quota is exceeded, `POST /tests` and `POST /schedules` return `429 { "error": "..." }`; `/ai/*` and `suggest-*` endpoints return `429 { "error": "Daily AI quota exceeded for this team" }`.
+
+---
+
+### Per-team API keys
+
+**Admin only** (all three endpoints).
+
+#### `POST /teams/:id/api-keys`
+
+Generate a new key. The raw key is returned **once** — it is not retrievable afterwards.
+
+**Request body:** `{ "name": "ci-pipeline" }`
+
+```bash
+curl -X POST http://localhost:3004/teams/<id>/api-keys \
+  -H "Content-Type: application/json" -b cookies.txt \
+  -d '{ "name": "ci-pipeline" }'
+```
+
+**Response `201`:** `{ "apiKey": { "id": "...", "name": "ci-pipeline", "key": "a1b2c3...", "createdAt": "..." } }`
+
+#### `GET /teams/:id/api-keys`
+
+List keys (no key material).
+
+**Response `200`:** `{ "apiKeys": [ { "id": "...", "name": "ci-pipeline", "createdAt": "...", "lastUsedAt": "...", "revoked": false } ] }`
+
+#### `DELETE /teams/:id/api-keys/:keyId`
+
+Revoke a key (`revoked_at = NOW()`). Returns `204`.
+
+---
+
+### Organizations
+
+Organizations group teams under `org_members` roles `owner` | `admin` | `member`. A team's `org_id` is nullable — teams stay "ungrouped" until added to an org via `POST /orgs/:id/teams`.
+
+#### `POST /orgs`
+
+Any authenticated user; creates the org and an `owner` membership for the caller.
+
+**Request body:** `{ "name": "..." }`
+
+**Response `200`:** `{ "id": "...", "name": "...", "role": "owner" }`. Returns `409` if name taken.
+
+#### `GET /orgs/:id`
+
+Any org member.
+
+**Response `200`:**
+```json
+{
+  "org": { "id": "...", "name": "..." },
+  "members": [ { "userId": "...", "email": "...", "name": "...", "role": "owner" } ],
+  "teams": [ { "id": "...", "name": "...", "usage": { "concurrentTests": 0, "scheduledTests": 1, "geminiCallsToday": 3 } } ]
+}
+```
+
+#### `POST /orgs/:id/members`
+
+**Owner/admin only.** Body: `{ "email": "...", "role"?: "owner" | "admin" | "member" }` (defaults to `member`). Returns `404` if no user with that email, `409` if already a member.
+
+#### `PUT /orgs/:id/members/:userId`
+
+**Owner/admin only.** Body: `{ "role": "owner" | "admin" | "member" }`. Returns `400` invalid role, `404` not a member, `409` would remove the last owner.
+
+#### `DELETE /orgs/:id/members/:userId`
+
+**Owner/admin only.** Returns `404` not a member, `409` would remove the last owner.
+
+#### `POST /orgs/:id/teams`
+
+**Owner/admin only.** Creates a new team (`projects` row with `org_id = :id`) and makes the caller its admin.
+
+**Request body:** `{ "name": "..." }`
+
+**Response `200`:** `{ "id": "...", "name": "...", "role": "admin" }`. Returns `409` if team name taken.
 
 ---
 
@@ -133,6 +356,7 @@ Create and start a new test.
 | `profile` | `"load"` \| `"spike"` \| `"capacity"` \| `"soak"` | `"load"` | Load profile shape |
 | `peakVus` | number | `vus * 10` | Peak VUs for spike/capacity profiles |
 | `httpOptions` | object | — | HTTP transport settings (see below) |
+| `headers` | object | — | Custom request headers (e.g. API keys, auth tokens), sent with every request. Merged into `params.headers` for every `http.*` call in the generated k6 script |
 
 **HTTP options (`options.httpOptions`):**
 
@@ -150,6 +374,7 @@ Create and start a new test.
 | `sessions` | number | — | Concurrent Puppeteer sessions |
 | `duration` | string | — | Session duration |
 | `collectWebVitals` | boolean | `true` | Collect LCP, FID, CLS, TTFB, FCP |
+| `headers` | object | — | Custom request headers, applied via `page.setExtraHTTPHeaders(...)` before navigation |
 
 **SLO thresholds (`thresholds`):**
 
@@ -258,6 +483,8 @@ curl -X POST http://localhost:3000/tests \
 ```
 
 `scriptReused: true` means an existing cached script was used without calling Gemini.
+
+Returns `429 { "error": "..." }` if the caller's team has exceeded its `team_quotas` limits (concurrent tests, max VUs/test, or max test duration) — see [Team quotas](#team-quotas).
 
 ---
 
@@ -377,7 +604,7 @@ curl "http://localhost:3004/results/trend?url=https://api.example.com&limit=10"
 
 ### `GET /results/:testId/live`
 
-All live metric points recorded during a k6 test (5-second windows, chronological).
+All live metric points recorded during a k6 test (5-second windows, chronological). Requires a valid session when `SESSION_SECRET` is set, and is project-scoped — returns only points for tests owned by the caller's project (only `POST /results/:testId/live`, used internally by `worker-backend`, is exempt from auth).
 
 ```bash
 curl http://localhost:3004/results/550e8400/live
@@ -414,7 +641,7 @@ Download a PDF report for a completed test.
 curl http://localhost:3004/results/550e8400/report.pdf -o report.pdf
 ```
 
-Returns `application/pdf`. Includes test summary, metrics, and performance analysis.
+Returns `application/pdf`. Includes test summary, metrics, and performance analysis. Project-scoped — returns `404` if the test belongs to a different project.
 
 ---
 
@@ -429,7 +656,7 @@ curl -X POST http://localhost:3004/results/550e8400/baseline
 
 **Response:** `{ "success": true, "testId": "..." }`
 
-Returns `404` if the test is not completed.
+Returns `404` if the test is not completed, or if it belongs to a different project.
 
 ---
 
@@ -650,7 +877,23 @@ Common status codes:
 | Code | Meaning |
 |------|---------|
 | 400 | Invalid request body or parameters |
-| 401 | Missing or invalid `X-API-Key` |
+| 401 | Missing or invalid `X-API-Key` / session |
+| 403 | Insufficient role (viewer on mutating routes, non-admin on team/org admin routes, no current team) |
 | 404 | Resource not found |
+| 409 | Conflict (duplicate name, last-admin/owner protection, etc.) |
+| 429 | Team quota exceeded (concurrent tests, VUs, duration, scheduled tests, or daily Gemini calls) **or** rate limit exceeded |
 | 500 | Internal server error |
 | 503 | Service health check failed |
+
+### Rate limiting (429)
+
+In addition to the team-quota `429`s above, both api-service and results-service apply a global per-IP rate limit (`RATE_LIMIT_MAX`, default 600 requests/minute). Exceeding it returns (this is `@fastify/rate-limit`'s default error shape, distinct from this API's usual `{ "error": "..." }` format):
+
+```json
+{ "statusCode": 429, "error": "Too Many Requests", "message": "Rate limit exceeded, retry in N seconds" }
+```
+
+with a `Retry-After` header (seconds). `/health` is exempt. Two route groups in results-service have stricter per-IP limits:
+
+- `POST /auth/login` and `POST /auth/register`: `AUTH_RATE_LIMIT_MAX` (default 10/min) — brute-force protection
+- `/ai/*`, `suggest-*`, and `/results/:testId/diagnose`: `AI_RATE_LIMIT_MAX` (default 20/min) — IP-based defense-in-depth on top of the per-team daily Gemini quota

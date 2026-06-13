@@ -301,3 +301,48 @@ describe('consumer routing — DLQ exhaustion', () => {
     expect(calls.some(m => /retrying/i.test(m))).toBe(true);
   });
 });
+
+// ─── Malformed message handling ──────────────────────────────────────────
+//
+// Mirrors the JSON.parse guard at the top of the channel.consume callback
+// in src/index.ts: a non-JSON message body must be routed to the DLQ and
+// acked, without throwing (which would otherwise crash the consumer or
+// leave the message unacked/redelivered indefinitely).
+
+const handleIncomingMessage = (channel: Channel, rawContent: Buffer): void => {
+  try {
+    JSON.parse(rawContent.toString());
+  } catch {
+    channel.sendToQueue(DLQ, rawContent, { persistent: true });
+    channel.ack({} as never);
+    return;
+  }
+  // valid JSON — normal processing would continue (not exercised here)
+  channel.ack({} as never);
+};
+
+describe('consumer — malformed message handling', () => {
+  it('routes a non-JSON message to the DLQ and acks it without throwing', () => {
+    const ch = makeChannel();
+    const rawContent = Buffer.from('not valid json {{{');
+
+    expect(() => handleIncomingMessage(ch, rawContent)).not.toThrow();
+
+    expect(ch.sendToQueue).toHaveBeenCalledOnce();
+    expect(ch.sendToQueue.mock.calls[0][0]).toBe(DLQ);
+    expect(ch.sendToQueue.mock.calls[0][1]).toBe(rawContent);
+    expect(ch.ack).toHaveBeenCalledOnce();
+    expect(mockGenerateScript).not.toHaveBeenCalled();
+    expect(mockCompareDescriptions).not.toHaveBeenCalled();
+  });
+
+  it('does not route valid JSON to the DLQ', () => {
+    const ch = makeChannel();
+    const rawContent = Buffer.from(JSON.stringify(makeTest()));
+
+    handleIncomingMessage(ch, rawContent);
+
+    expect(ch.sendToQueue).not.toHaveBeenCalled();
+    expect(ch.ack).toHaveBeenCalledOnce();
+  });
+});

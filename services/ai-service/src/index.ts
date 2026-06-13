@@ -120,7 +120,15 @@ const startConsumer = async (): Promise<void> => {
   channel.consume(CONSUME_QUEUE, async (msg) => {
     if (!msg) return;
 
-    let test: EnrichedTestRequest = JSON.parse(msg.content.toString());
+    let test: EnrichedTestRequest;
+    try {
+      test = JSON.parse(msg.content.toString());
+    } catch (err) {
+      log.error({ err: (err as Error).message }, 'Malformed message on ai-requests — routing to DLQ');
+      channel.sendToQueue(DLQ, msg.content, { persistent: true });
+      channel.ack(msg);
+      return;
+    }
     log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Processing script request');
 
     const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';

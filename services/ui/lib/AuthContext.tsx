@@ -1,21 +1,22 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { AuthUser, getMe, logout as apiLogout } from '@/lib/api';
+import { SessionUser, getMe, logout as apiLogout, switchTeam as apiSwitchTeam } from '@/lib/api';
 
 interface AuthContextValue {
-  user: AuthUser | null;
+  user: SessionUser | null;
   loading: boolean;
   logout: () => Promise<void>;
-  setUser: (u: AuthUser | null) => void;
+  setUser: (u: SessionUser | null) => void;
+  switchTeam: (teamId: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
-  user: null, loading: true, logout: async () => {}, setUser: () => {},
+  user: null, loading: true, logout: async () => {}, setUser: () => {}, switchTeam: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,8 +31,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  const switchTeam = async (teamId: string) => {
+    const updated = await apiSwitchTeam(teamId);
+    setUser(updated);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, logout, setUser }}>
+    <AuthContext.Provider value={{ user, loading, logout, setUser, switchTeam }}>
       {children}
     </AuthContext.Provider>
   );

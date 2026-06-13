@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../index';
 import { publishTest, publishCancel, isQueueConnected } from '../queue';
-import { findExistingScript, checkDbHealth, incrementUsedCount } from '../scripts';
+import { findExistingScript, checkDbHealth } from '../scripts';
 
 vi.mock('../queue', () => ({
   publishTest: vi.fn(),
@@ -17,6 +17,7 @@ vi.mock('../scripts', () => ({
   checkDbHealth: vi.fn().mockResolvedValue(undefined),
   incrementUsedCount: vi.fn().mockResolvedValue(undefined),
   stepsToKey: vi.fn().mockReturnValue('flow:abc123'),
+  pool: {},
 }));
 
 let app: FastifyInstance;

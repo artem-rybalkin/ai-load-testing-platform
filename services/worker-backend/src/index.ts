@@ -61,7 +61,8 @@ const saveScript = async (
     `INSERT INTO test_scripts (target_url, test_type, script, description, project_id)
      VALUES ($1, 'backend', $2, $3, $4)
      ON CONFLICT (target_url, test_type) DO UPDATE
-     SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW()
+     SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW(),
+         project_id = COALESCE(test_scripts.project_id, EXCLUDED.project_id)
      RETURNING id`,
     [targetUrl, script, description ?? null, projectId ?? null]
   );

@@ -268,3 +268,50 @@ describe('GET /results/:testId/diagnose', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+// ─── Gemini quota enforcement (/ai/* with SESSION_SECRET) ─────────────────────
+
+describe('Gemini quota enforcement', () => {
+  const SESSION_SECRET = 'test-session-secret-32-chars-min!';
+  let sessionApp: FastifyInstance;
+
+  const sessionCookie = (res: { headers: Record<string, unknown> }): string =>
+    (res.headers['set-cookie'] as string).split(';')[0];
+
+  beforeAll(async () => {
+    process.env.SESSION_SECRET = SESSION_SECRET;
+    sessionApp = await buildApp(pool);
+  });
+
+  afterAll(async () => {
+    delete process.env.SESSION_SECRET;
+    await sessionApp.close();
+  });
+
+  it('returns 429 once the team exhausts its daily Gemini quota', async () => {
+    const reg = await sessionApp.inject({
+      method: 'POST', url: '/auth/register',
+      payload: { email: 'quota-ai@example.com', password: 'password123', teamName: 'quota-ai-team', name: 'Quota Tester' },
+    });
+    const cookie = sessionCookie(reg);
+    const teamId = reg.json().currentTeamId as string;
+
+    await pool.query(
+      `INSERT INTO team_quotas (team_id, max_concurrent_tests, max_vus_per_test, max_test_duration_seconds, max_scheduled_tests, max_gemini_calls_per_day)
+       VALUES ($1, 5, 1000, 3600, 10, 1)`,
+      [teamId]
+    );
+
+    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ cron: '0 9 * * 1-5', preview: 'Every weekday at 9 AM' }));
+    const first = await sessionApp.inject({
+      method: 'POST', url: '/ai/cron', payload: { phrase: 'every weekday at 9am' }, headers: { cookie },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await sessionApp.inject({
+      method: 'POST', url: '/ai/cron', payload: { phrase: 'every weekday at 9am' }, headers: { cookie },
+    });
+    expect(second.statusCode).toBe(429);
+    expect(second.json().error).toMatch(/daily AI quota/);
+  });
+});

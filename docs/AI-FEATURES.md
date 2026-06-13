@@ -6,7 +6,7 @@ All AI functionality in one place. Structured for presentation use.
 
 ## Overview
 
-The platform uses **Google Gemini AI** (`gemini-2.5-flash` by default, configurable via `GEMINI_MODEL` env var) across **4 services** for **18 distinct AI-powered capabilities**. Every AI call is lazy (user-triggered or event-triggered), non-fatal (graceful fallback when quota is exceeded), and surfaced to the user with a clear indicator.
+The platform uses **Google Gemini AI** (`gemini-3.1-flash-lite` by default, configurable via `GEMINI_MODEL` env var) across **4 services** for **18 distinct AI-powered capabilities**. Every AI call is lazy (user-triggered or event-triggered), non-fatal (graceful fallback when quota is exceeded), and surfaced to the user with a clear indicator.
 
 ---
 
@@ -81,6 +81,8 @@ Identifies tokens/IDs that flow from a response into later requests — so the k
 **Example:** `POST /auth/token` response contains `access_token` → subsequent requests use it as `Authorization: Bearer ...` header → Gemini detects this and adds an extract rule to the token step.
 
 Supports: JSON body (`$.access_token`), response headers, cookies, regex patterns.
+
+**Restoring stripped auth headers:** `toFlowSteps()` strips sensitive request headers (`Authorization`, `Cookie`, etc. — see `SKIP_HEADERS` in `recorder.ts`) from `FlowStep.headers` to avoid hardcoding stale tokens. When a correlation is found, `substituteValue()` checks the *raw* recorded request headers (still available via `RecordedRequest.headers`) for the literal value — if found, it re-adds the header to the consuming step's `FlowStep.headers` with the `{{varName}}` placeholder (e.g. `Authorization: Bearer {{access_token}}`), so the chained token is visible and editable in FlowBuilder's "Request headers" section.
 
 ### 3b. Human-Readable Step Naming
 
@@ -262,7 +264,7 @@ Tags:  e-commerce  load  authenticated
 ### Model configuration
 All AI calls use a single configurable model:
 ```bash
-GEMINI_MODEL=gemini-2.5-flash  # default
+GEMINI_MODEL=gemini-3.1-flash-lite  # default
 # Override with any Gemini model ID
 ```
 

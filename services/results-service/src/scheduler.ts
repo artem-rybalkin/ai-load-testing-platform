@@ -14,6 +14,7 @@ interface Schedule {
   options: Record<string, unknown>;
   thresholds: Record<string, unknown> | null;
   enabled: boolean;
+  project_id: string | null;
 }
 
 const activeTasks = new Map<string, ScheduledTask>();
@@ -33,6 +34,7 @@ const triggerSchedule = async (pool: Pool, schedule: Schedule): Promise<void> =>
         description: schedule.description ?? `Scheduled: ${schedule.name}`,
         options: schedule.options,
         thresholds: schedule.thresholds ?? undefined,
+        projectId: schedule.project_id ?? undefined,
       }),
     });
 

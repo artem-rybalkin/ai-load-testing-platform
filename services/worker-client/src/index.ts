@@ -51,6 +51,33 @@ type WebVitalsSnapshot = Omit<ClientMetrics, 'type' | 'lighthouseScore'>;
 
 // r1: retry helper imported from ./retry
 
+// ── Per-session metric aggregation (exported for unit testing) ─────────────────
+
+// Averages a numeric Web Vitals field across session snapshots, rounded to 2 decimals.
+// Returns 0 for an empty snapshots array (division by zero -> NaN -> handled by caller checks).
+export const avgNum = (
+  snapshots: WebVitalsSnapshot[],
+  key: 'lcp' | 'fid' | 'cls' | 'ttfb' | 'fcp' | 'inp' | 'longTaskCount'
+): number => {
+  if (snapshots.length === 0) return 0;
+  const sum = snapshots.reduce((s, m) => s + (m[key] ?? 0), 0);
+  return Math.round((sum / snapshots.length) * 100) / 100;
+};
+
+// Averages resourceBreakdown across sessions that have one, rounded to 1 decimal.
+// Returns undefined if no session has a resourceBreakdown.
+export const avgResourceBreakdown = (snapshots: WebVitalsSnapshot[]): ResourceBreakdown | undefined => {
+  const valid = snapshots.filter(s => s.resourceBreakdown);
+  if (!valid.length) return undefined;
+  const keys: Array<keyof ResourceBreakdown> = ['jsSize', 'cssSize', 'imageSize', 'fontSize', 'xhrSize', 'totalSize', 'requestCount'];
+  const result = {} as ResourceBreakdown;
+  for (const k of keys) {
+    const sum = valid.reduce((s, m) => s + (m.resourceBreakdown?.[k] ?? 0), 0);
+    result[k] = Math.round((sum / valid.length) * 10) / 10;
+  }
+  return result;
+};
+
 const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
   const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
   testLog.info('Launching browser');
@@ -232,41 +259,26 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
     }
   
     // ── Average Web Vitals across sessions ───────────────────────────────────
-    const avgNum = (key: 'lcp' | 'fid' | 'cls' | 'ttfb' | 'fcp' | 'inp' | 'longTaskCount'): number => {
-      const sum = snapshots.reduce((s, m) => s + (m[key] ?? 0), 0);
-      return Math.round((sum / snapshots.length) * 100) / 100;
-    };
-  
-    const avgResourceBreakdown = (): ResourceBreakdown | undefined => {
-      const valid = snapshots.filter(s => s.resourceBreakdown);
-      if (!valid.length) return undefined;
-      const keys: Array<keyof ResourceBreakdown> = ['jsSize', 'cssSize', 'imageSize', 'fontSize', 'xhrSize', 'totalSize', 'requestCount'];
-      const result = {} as ResourceBreakdown;
-      for (const k of keys) {
-        const sum = valid.reduce((s, m) => s + (m.resourceBreakdown?.[k] ?? 0), 0);
-        result[k] = Math.round((sum / valid.length) * 10) / 10;
-      }
-      return result;
-    };
-  
     // INP: prefer Lighthouse audit value (more accurate); fall back to PerformanceObserver average
-    const inpValue = lhInp ?? (avgNum('inp') > 0 ? avgNum('inp') : undefined);
-  
+    const avgInp = avgNum(snapshots, 'inp');
+    const inpValue = lhInp ?? (avgInp > 0 ? avgInp : undefined);
+    const avgLongTaskCount = avgNum(snapshots, 'longTaskCount');
+
     return {
       type: 'client',
-      lcp:              avgNum('lcp'),
-      fid:              avgNum('fid'),
-      cls:              avgNum('cls'),
-      ttfb:             avgNum('ttfb'),
-      fcp:              avgNum('fcp'),
+      lcp:              avgNum(snapshots, 'lcp'),
+      fid:              avgNum(snapshots, 'fid'),
+      cls:              avgNum(snapshots, 'cls'),
+      ttfb:             avgNum(snapshots, 'ttfb'),
+      fcp:              avgNum(snapshots, 'fcp'),
       inp:              inpValue,
       tbt:              lhTbt,
       tti:              lhTti,
       jsErrors:         totalJsErrors > 0 ? totalJsErrors : undefined,
-      longTaskCount:    avgNum('longTaskCount') > 0 ? Math.round(avgNum('longTaskCount')) : undefined,
+      longTaskCount:    avgLongTaskCount > 0 ? Math.round(avgLongTaskCount) : undefined,
       domNodeCount:     lhDomNodes,
       pageLoadCount,
-      resourceBreakdown: avgResourceBreakdown(),
+      resourceBreakdown: avgResourceBreakdown(snapshots),
       lighthouseScore,
     };
   } finally {
@@ -371,7 +383,7 @@ const start = async (): Promise<void> => {
         completedAt: new Date().toISOString(),
       };
 
-      channel.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds })), { persistent: true });
+      channel.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId })), { persistent: true });
       log.info({ testId: test.id, metrics }, 'Client test completed');
       channel.ack(msg);
     } catch (err) {

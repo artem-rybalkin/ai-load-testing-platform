@@ -2,15 +2,18 @@ import './tracing'; // must be first — OTel patches modules at import time
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
 
-import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, SLOThresholds, FlowStep } from '@alt/shared';
+import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, FlowStep, TeamRole } from '@alt/shared';
 import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
-import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount } from './scripts';
-import { verifySession } from './session';
+import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount, pool } from './scripts';
+import { getApiSession, hashApiKey } from './session';
+import { checkTestQuota } from './quotas';
+import { redisClient } from './redis';
 
 // Augment Fastify request type — must be at module level
 declare module 'fastify' {
-  interface FastifyRequest { projectId: string | undefined; }
+  interface FastifyRequest { projectId: string | undefined; role: TeamRole | null; }
 }
 
 const parseDurationSeconds = (d: string): number => {
@@ -55,29 +58,58 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   });
   await app.register(cookie);
 
+  await app.register(rateLimit, {
+    global: true,
+    max: Number(process.env.RATE_LIMIT_MAX) || 600,
+    timeWindow: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000,
+    redis: redisClient,
+    skipOnError: true,
+    allowList: (request) => request.url === '/health',
+  });
+
   // API key authentication — exempt /health
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-  if (apiKeys.length > 0) {
-    app.addHook('onRequest', async (request, reply) => {
-      if (request.url === '/health') return;
-      const key = request.headers['x-api-key'];
-      if (!key || !apiKeys.includes(key as string)) {
-        return reply.code(401).send({ error: 'Unauthorized' });
-      }
-    });
-  }
-
   const sessionSecret = process.env.SESSION_SECRET || '';
 
-  // Session auth runs after API key hook
   app.addHook('onRequest', async (request, reply) => {
     if (request.url === '/health') return;
+
+    const apiKeyHeader = request.headers['x-api-key'] as string | undefined;
+
+    // Per-team API key — scopes the request to one team regardless of global
+    // API_KEYS / session config. Checked first since it's the most specific.
+    if (apiKeyHeader && !apiKeys.includes(apiKeyHeader)) {
+      const keyHash = hashApiKey(apiKeyHeader);
+      try {
+        const { rows } = await pool.query<{ team_id: string }>(
+          `SELECT team_id FROM team_api_keys WHERE key_hash = $1 AND revoked_at IS NULL`,
+          [keyHash]
+        );
+        if (rows.length > 0) {
+          pool.query(`UPDATE team_api_keys SET last_used_at = NOW() WHERE key_hash = $1`, [keyHash]).catch(() => {});
+          request.projectId = rows[0].team_id;
+          request.role = 'admin';
+          return;
+        }
+      } catch {
+        // team_api_keys lookup unavailable — fall through to global API key / session checks
+      }
+    }
+
+    if (apiKeys.length > 0) {
+      if (!apiKeyHeader || !apiKeys.includes(apiKeyHeader)) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+      }
+    }
+
     if (sessionSecret) {
-      const session = verifySession(request.cookies?.['alt_session'], sessionSecret);
+      const session = await getApiSession(pool, request.cookies?.['alt_session']);
       if (!session) return reply.code(401).send({ error: 'Not authenticated' });
-      request.projectId = session.projectId;
+      request.projectId = session.projectId ?? undefined;
+      request.role = session.role;
     } else {
       request.projectId = undefined;
+      request.role = null;
     }
   });
 
@@ -92,6 +124,8 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     checks.queue = queueOk ? 'ok' : 'disconnected';
     if (!queueOk) healthy = false;
 
+    checks.redis = !redisClient ? 'disabled' : redisClient.status === 'ready' ? 'ok' : 'disconnected';
+
     return reply.code(healthy ? 200 : 503).send({
       status: healthy ? 'ok' : 'degraded',
       service: 'api-service',
@@ -103,7 +137,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
     '/tests',
     async (request, reply) => {
-      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript } = request.body;
+      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript, projectId: bodyProjectId } = request.body;
+
+      // Internal callers authenticated via the global API_KEYS list (e.g. the
+      // scheduler) may scope a test to a specific team by passing `projectId`.
+      const apiKeyHeader = request.headers['x-api-key'] as string | undefined;
+      const isGlobalKeyAuth = apiKeys.length > 0 && !!apiKeyHeader && apiKeys.includes(apiKeyHeader);
+      const effectiveProjectId = (isGlobalKeyAuth && bodyProjectId) ? bodyProjectId : request.projectId;
 
       const validTypes: TestType[] = ['backend', 'client-side', 'flow'];
       if (!validTypes.includes(type)) {
@@ -112,8 +152,8 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       if (description && description.length > 500) {
         return reply.code(400).send({ error: 'Description must be 500 characters or fewer' });
       }
-      if (steps && steps.length > 50) {
-        return reply.code(400).send({ error: 'Flow tests support a maximum of 50 steps' });
+      if (steps && steps.length > 20) {
+        return reply.code(400).send({ error: 'Flow tests support a maximum of 20 steps' });
       }
 
       // For flow tests, targetUrl defaults to first step's URL
@@ -146,13 +186,18 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         csvData,
         csvFilename,
         customScript,
-        projectId: request.projectId,
+        projectId: effectiveProjectId,
         scriptCacheKey: flowCacheKey,
         createdAt: new Date().toISOString(),
       };
 
       const rawDuration = (options as BackendTestOptions & { duration?: string }).duration;
       const durationSeconds = rawDuration ? parseDurationSeconds(rawDuration) : undefined;
+
+      const quotaError = await checkTestQuota(pool, effectiveProjectId, { type, options, durationSeconds });
+      if (quotaError) {
+        return reply.code(429).send({ error: quotaError });
+      }
 
       // Create pending record for UI display — non-blocking; a slow or unavailable
       // results-service must not prevent the test from being queued.
@@ -203,7 +248,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
 
-      const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey, request.projectId);
+      const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey, effectiveProjectId);
 
       if (!existingScript) {
         // Cache miss — generate new script

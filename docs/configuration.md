@@ -174,7 +174,7 @@ With `WORKER_CONCURRENCY=2` and 3 replicas, you get 6 parallel test slots for ba
 
 ## Gemini API limits
 
-The free tier of `gemini-2.5-flash` allows **20 requests per day**. Each test that goes through AI (new URL, no cache, with description comparison) uses 1–2 Gemini calls.
+The default model is `gemini-3.1-flash-lite` (set via `GEMINI_MODEL`). Its free tier is roughly **15 requests/minute and ~1,000 requests/day** (flash-lite class — Google adjusts preview-model quotas frequently, so check [AI Studio's rate limit page](https://aistudio.google.com/rate-limit) for current values). Each test that goes through AI (new URL, no cache, with description comparison) uses 1–2 Gemini calls.
 
 When the quota is exhausted, the platform automatically retries with backoff (60s / 120s / 180s). The UI shows a status message: `"Gemini unavailable — retrying… (N attempts left)"`.
 

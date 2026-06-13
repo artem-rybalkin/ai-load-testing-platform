@@ -452,3 +452,43 @@ describe('analyzeResult — INP and TBT thresholds', () => {
     expect(result.diffs.find(d => d.metric === 'INP')).toBeUndefined();
   });
 });
+
+// ─── Performance ──────────────────────────────────────────────────────────
+
+describe('performance', () => {
+  // CLAUDE.md caps flow tests at 20 steps; build a synthetic 20-step flow
+  // BackendMetrics for the current run and a matching previous/baseline run.
+  const buildFlowMetrics = (avgBase: number): BackendMetrics => ({
+    ...backend({
+      requestsTotal: 20000,
+      requestsFailed: 0,
+      avgResponseTime: avgBase,
+      p50ResponseTime: avgBase * 0.9,
+      p95ResponseTime: avgBase * 2,
+      p99ResponseTime: avgBase * 3,
+      rps: 100,
+    }),
+    stepMetrics: Array.from({ length: 20 }, (_, i) => ({
+      name: `Step ${i + 1}: action-${i + 1}`,
+      avgResponseTime: avgBase + i * 5,
+      p95ResponseTime: avgBase * 2 + i * 10,
+      requestsTotal: 1000,
+      requestsFailed: 0,
+    })),
+  });
+
+  it('analyzeResult completes within budget for a 20-step flow with a previous run', () => {
+    const previous = buildFlowMetrics(180);
+    const current = buildFlowMetrics(200);
+
+    const start = performance.now();
+    const result = analyzeResult(current, previous);
+    const elapsedMs = performance.now() - start;
+
+    expect(result).toBeDefined();
+    expect(result.diffs.length).toBeGreaterThan(0);
+    // analyzeResult runs synchronously in the consumer's hot path before the DB write —
+    // generous budget to catch any accidental O(n^2) blowup on stepMetrics diffing.
+    expect(elapsedMs).toBeLessThan(50);
+  });
+});

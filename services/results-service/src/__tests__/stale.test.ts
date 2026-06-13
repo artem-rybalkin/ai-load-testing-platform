@@ -4,6 +4,9 @@ import { Pool } from 'pg';
 import { runStaleCleanup, startStaleCleanup } from '../cleanup';
 import { createSchema } from '../db';
 
+const mockBroadcast = vi.hoisted(() => vi.fn());
+vi.mock('../ws', () => ({ broadcast: mockBroadcast }));
+
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
 
@@ -37,6 +40,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets CASCADE');
+  mockBroadcast.mockClear();
 });
 
 describe('runStaleCleanup — running tests', () => {
@@ -115,6 +119,43 @@ describe('runStaleCleanup — non-target statuses', () => {
     expect(result.runningFixed).toBe(0);
     expect(result.pendingFixed).toBe(0);
     expect(result.liveMetricsDeleted).toBe(0);
+  });
+});
+
+describe('runStaleCleanup — WebSocket broadcasts', () => {
+  it('broadcasts test:status and tests:changed when a stale running test is marked failed', async () => {
+    const id = await insertResult('running', 20, 'started_at');
+    await runStaleCleanup(pool, 15, 30);
+
+    expect(mockBroadcast).toHaveBeenCalledWith({ type: 'test:status', testId: id, status: 'failed', perfStatus: null });
+    expect(mockBroadcast).toHaveBeenCalledWith({ type: 'tests:changed' });
+  });
+
+  it('broadcasts test:status and tests:changed when a stale pending test is marked failed', async () => {
+    const id = await insertResult('pending', 40, 'created_at');
+    await runStaleCleanup(pool, 15, 30);
+
+    expect(mockBroadcast).toHaveBeenCalledWith({ type: 'test:status', testId: id, status: 'failed', perfStatus: null });
+    expect(mockBroadcast).toHaveBeenCalledWith({ type: 'tests:changed' });
+  });
+
+  it('broadcasts one test:status per stale test plus a single tests:changed', async () => {
+    const id1 = await insertResult('running', 20, 'started_at');
+    const id2 = await insertResult('pending', 40, 'created_at');
+    await runStaleCleanup(pool, 15, 30);
+
+    const statusEvents = mockBroadcast.mock.calls.filter(([e]) => e.type === 'test:status');
+    const changedEvents = mockBroadcast.mock.calls.filter(([e]) => e.type === 'tests:changed');
+    expect(statusEvents.map(([e]) => e.testId).sort()).toEqual([id1, id2].sort());
+    expect(changedEvents).toHaveLength(1);
+  });
+
+  it('does not broadcast when nothing is stale', async () => {
+    await insertResult('running', 5, 'started_at');
+    await insertResult('pending', 10, 'created_at');
+    await runStaleCleanup(pool, 15, 30);
+
+    expect(mockBroadcast).not.toHaveBeenCalled();
   });
 });
 

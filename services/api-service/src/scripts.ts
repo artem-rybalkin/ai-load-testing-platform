@@ -18,7 +18,7 @@ export const stepsToKey = (steps: FlowStep[]): string => {
 };
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export const checkDbHealth = (): Promise<void> => pool.query('SELECT 1').then(() => undefined);
 

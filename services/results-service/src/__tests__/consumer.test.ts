@@ -50,7 +50,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets CASCADE');
+  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
   mockFetch.mockReset();
   // Default: analyser-service returns non-ok so consumer falls back to local analyzeResult;
   // webhook calls also return ok. Tests that need different behaviour override per-test.
@@ -357,5 +357,281 @@ describe('handleResult — webhook firing', () => {
     await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()), { timeout: 1000 });
     const callWithoutSecret = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
     expect(callWithoutSecret![1].headers['X-Webhook-Signature']).toBeUndefined();
+  });
+});
+
+// ─── Webhook payload formats ───────────────────────────────────────────────
+
+describe('handleResult — webhook payload formats', () => {
+  const insertWebhookWithFormat = (events: string[], format: string) =>
+    pool.query(
+      `INSERT INTO webhooks (url, events, format) VALUES ('https://hook.example.com/notify', $1, $2)`,
+      [events, format]
+    );
+
+  const fireAndGetPayload = async (format: string, perfStatus: 'failed' | 'degraded' = 'failed') => {
+    await insertWebhookWithFormat([perfStatus], format);
+    const result = makeResult(perfStatus === 'failed' ? { metrics: failedMetrics } : {
+      targetUrl: 'http://degrade-format.com',
+      metrics: { ...baseMetrics, avgResponseTime: 200 },
+    });
+    if (perfStatus === 'degraded') {
+      await pool.query(
+        `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at)
+         VALUES ($1, 'backend', 'http://degrade-format.com', 'completed', $2, NOW()-INTERVAL '5 min', NOW()-INTERVAL '4 min')`,
+        [crypto.randomUUID(), JSON.stringify({ ...baseMetrics, avgResponseTime: 100 })]
+      );
+    }
+    await handleResult(pool, result);
+    await vi.waitFor(
+      () => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()),
+      { timeout: 1000 }
+    );
+    const call = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
+    return { result, options: call![1], body: JSON.parse(call![1].body) };
+  };
+
+  it('builds a Slack attachment payload for format = slack', async () => {
+    const { result, options, body } = await fireAndGetPayload('slack');
+
+    expect(options.headers['Content-Type']).toBe('application/json');
+    expect(body.text).toMatch(/FAILED/);
+    expect(Array.isArray(body.attachments)).toBe(true);
+    expect(body.attachments[0].color).toBe('#cf222e');
+    const fields = body.attachments[0].fields;
+    expect(fields.find((f: { title: string }) => f.title === 'URL').value).toBe(result.targetUrl);
+    expect(fields.find((f: { title: string }) => f.title === 'Test ID').value).toBe(result.testId);
+    expect(fields.find((f: { title: string }) => f.title === 'Status').value).toBe('failed');
+  });
+
+  it('builds a PagerDuty Events API v2 payload for format = pagerduty', async () => {
+    const { result, body } = await fireAndGetPayload('pagerduty', 'failed');
+
+    expect(body.event_action).toBe('trigger');
+    expect(body.payload.severity).toBe('error');
+    expect(body.payload.source).toBe(result.targetUrl);
+    expect(body.payload.custom_details.testId).toBe(result.testId);
+    expect(body.payload.custom_details.perfStatus).toBe('failed');
+  });
+
+  it('builds a PagerDuty payload with acknowledge action + warning severity for degraded', async () => {
+    const { body } = await fireAndGetPayload('pagerduty', 'degraded');
+
+    expect(body.event_action).toBe('acknowledge');
+    expect(body.payload.severity).toBe('warning');
+  });
+
+  it('builds an OpsGenie Alert API payload for format = opsgenie', async () => {
+    const { result, body } = await fireAndGetPayload('opsgenie', 'failed');
+
+    expect(body.message).toMatch(result.targetUrl);
+    expect(body.alias).toBe(result.testId);
+    expect(body.priority).toBe('P2');
+    expect(body.details.testId).toBe(result.testId);
+    expect(body.details.targetUrl).toBe(result.targetUrl);
+    expect(body.source).toBe('AI Load Testing Platform');
+  });
+
+  it('builds an OpsGenie payload with P3 priority for degraded', async () => {
+    const { body } = await fireAndGetPayload('opsgenie', 'degraded');
+
+    expect(body.priority).toBe('P3');
+  });
+
+  it('does not apply HMAC signature to non-generic formats even when secret is set', async () => {
+    await pool.query(
+      `INSERT INTO webhooks (url, events, secret, format) VALUES ('https://hook.example.com/notify', '{failed}', 'my-secret', 'slack')`
+    );
+    const result = makeResult({ metrics: failedMetrics });
+    await handleResult(pool, result);
+    await vi.waitFor(
+      () => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()),
+      { timeout: 1000 }
+    );
+    const call = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
+    expect(call![1].headers['X-Webhook-Signature']).toBeUndefined();
+  });
+
+  it('falls back to generic payload format when format column is null', async () => {
+    await pool.query(
+      `INSERT INTO webhooks (url, events, format) VALUES ('https://hook.example.com/notify', '{failed}', NULL)`
+    );
+    const result = makeResult({ metrics: failedMetrics });
+    await handleResult(pool, result);
+    await vi.waitFor(
+      () => expect(mockFetch).toHaveBeenCalledWith('https://hook.example.com/notify', expect.anything()),
+      { timeout: 1000 }
+    );
+    const call = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
+    const body = JSON.parse(call![1].body);
+    expect(body.perfStatus).toBe('failed');
+    expect(body.testId).toBe(result.testId);
+    expect(body.targetUrl).toBe(result.targetUrl);
+    expect(body.timestamp).toBeDefined();
+  });
+});
+
+// ─── fetchExternalMetricsForTest (via handleResult → callAnalyserService) ────
+
+describe('handleResult — fetchExternalMetricsForTest', () => {
+  const insertLogSource = (overrides: Record<string, unknown> = {}) =>
+    pool.query(
+      `INSERT INTO log_sources (name, platform, url_template, metrics_endpoint_template, auth_header)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        overrides.name ?? 'Grafana',
+        overrides.platform ?? 'Grafana',
+        overrides.urlTemplate ?? 'https://grafana.example.com/{testId}',
+        overrides.metricsEndpointTemplate ?? null,
+        overrides.authHeader ?? null,
+      ]
+    );
+
+  const getAnalyseBody = () => {
+    const call = mockFetch.mock.calls.find(([url]) => String(url).includes('/analyse'));
+    return call ? JSON.parse(call[1].body) : null;
+  };
+
+  it('returns empty externalMetrics when no log source has a metrics_endpoint_template', async () => {
+    await insertLogSource({ metricsEndpointTemplate: null });
+    const result = makeResult();
+    await handleResult(pool, result);
+    const body = getAnalyseBody();
+    expect(body.externalMetrics).toEqual([]);
+  });
+
+  it('interpolates placeholders and includes auth header when fetching from a configured log source', async () => {
+    await insertLogSource({
+      name: 'Loki',
+      platform: 'Loki',
+      metricsEndpointTemplate:
+        'https://loki.example.com/query?start={startedAtMs}&end={completedAtMs}&startS={startedAtS}&endS={completedAtS}&startISO={startedAtISO}&endISO={completedAtISO}&url={targetUrlEncoded}&raw={targetUrl}',
+      authHeader: 'Bearer test-token',
+    });
+
+    let capturedUrl: string | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+    mockFetch.mockImplementation((url: string, opts?: { headers?: Record<string, string> }) => {
+      if (String(url).includes('/analyse')) return Promise.resolve({ ok: false });
+      if (String(url).includes('loki.example.com')) {
+        capturedUrl = String(url);
+        capturedHeaders = opts?.headers;
+        return Promise.resolve({ ok: true, text: () => Promise.resolve('{"data":"loki-result"}') });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const started = new Date(Date.now() - 60_000);
+    const completed = new Date();
+    const result = makeResult({ startedAt: started.toISOString(), completedAt: completed.toISOString() });
+    await handleResult(pool, result);
+
+    expect(capturedUrl).toContain(`start=${started.getTime()}`);
+    expect(capturedUrl).toContain(`end=${completed.getTime()}`);
+    expect(capturedUrl).toContain(`startS=${Math.floor(started.getTime() / 1000)}`);
+    expect(capturedUrl).toContain(`endS=${Math.floor(completed.getTime() / 1000)}`);
+    expect(capturedUrl).toContain(`startISO=${started.toISOString()}`);
+    expect(capturedUrl).toContain(`endISO=${completed.toISOString()}`);
+    expect(capturedUrl).toContain(`raw=${result.targetUrl}`);
+    expect(capturedUrl).toContain(`url=${encodeURIComponent(result.targetUrl)}`);
+    expect(capturedHeaders?.Authorization).toBe('Bearer test-token');
+
+    const body = getAnalyseBody();
+    expect(body.externalMetrics).toHaveLength(1);
+    expect(body.externalMetrics[0].sourceName).toBe('Loki');
+    expect(body.externalMetrics[0].platform).toBe('Loki');
+    expect(body.externalMetrics[0].data).toBe('{"data":"loki-result"}');
+  });
+
+  it('skips a log source whose fetch returns non-ok', async () => {
+    await insertLogSource({ name: 'Datadog', metricsEndpointTemplate: 'https://datadog.example.com/metrics' });
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) return Promise.resolve({ ok: false });
+      if (String(url).includes('datadog.example.com')) return Promise.resolve({ ok: false, status: 500 });
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await handleResult(pool, result);
+
+    const body = getAnalyseBody();
+    expect(body.externalMetrics).toEqual([]);
+  });
+
+  it('non-fatally skips a log source whose fetch throws', async () => {
+    await insertLogSource({ name: 'Kibana', metricsEndpointTemplate: 'https://kibana.example.com/metrics' });
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) return Promise.resolve({ ok: false });
+      if (String(url).includes('kibana.example.com')) return Promise.reject(new Error('ECONNREFUSED'));
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await expect(handleResult(pool, result)).resolves.toBeUndefined();
+
+    const body = getAnalyseBody();
+    expect(body.externalMetrics).toEqual([]);
+  });
+
+  it('aggregates results from multiple log sources via Promise.allSettled (mixed success/failure)', async () => {
+    await insertLogSource({ name: 'Grafana', metricsEndpointTemplate: 'https://grafana.example.com/metrics' });
+    await insertLogSource({ name: 'Datadog', metricsEndpointTemplate: 'https://datadog.example.com/metrics' });
+    await insertLogSource({ name: 'Kibana', metricsEndpointTemplate: 'https://kibana.example.com/metrics' });
+
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/analyse')) return Promise.resolve({ ok: false });
+      if (u.includes('grafana.example.com')) return Promise.resolve({ ok: true, text: () => Promise.resolve('grafana-ok') });
+      if (u.includes('datadog.example.com')) return Promise.resolve({ ok: false, status: 503 });
+      if (u.includes('kibana.example.com')) return Promise.reject(new Error('timeout'));
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await handleResult(pool, result);
+
+    const body = getAnalyseBody();
+    expect(body.externalMetrics).toHaveLength(1);
+    expect(body.externalMetrics[0].sourceName).toBe('Grafana');
+    expect(body.externalMetrics[0].data).toBe('grafana-ok');
+  });
+
+  it('truncates response body to 3000 characters', async () => {
+    await insertLogSource({ name: 'BigSource', metricsEndpointTemplate: 'https://big.example.com/metrics' });
+    const largeBody = 'x'.repeat(5000);
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/analyse')) return Promise.resolve({ ok: false });
+      if (u.includes('big.example.com')) return Promise.resolve({ ok: true, text: () => Promise.resolve(largeBody) });
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await handleResult(pool, result);
+
+    const body = getAnalyseBody();
+    expect(body.externalMetrics).toHaveLength(1);
+    expect(body.externalMetrics[0].data).toHaveLength(3000);
+  });
+
+  it('only includes log sources matching the result projectId', async () => {
+    // log_sources without project_id (NULL) — project_id filter in fetchExternalMetricsForTest
+    // resolves to ($1::uuid IS NULL OR project_id = $1::uuid); result has no projectId (null),
+    // so the NULL-project_id source is matched (project_id IS NULL is not equal to NULL,
+    // but $1 IS NULL short-circuits to true).
+    await insertLogSource({ name: 'Unscoped', metricsEndpointTemplate: 'https://unscoped.example.com/metrics' });
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/analyse')) return Promise.resolve({ ok: false });
+      if (u.includes('unscoped.example.com')) return Promise.resolve({ ok: true, text: () => Promise.resolve('unscoped-ok') });
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult(); // projectId undefined → null
+    await handleResult(pool, result);
+
+    const body = getAnalyseBody();
+    expect(body.externalMetrics).toHaveLength(1);
+    expect(body.externalMetrics[0].sourceName).toBe('Unscoped');
   });
 });

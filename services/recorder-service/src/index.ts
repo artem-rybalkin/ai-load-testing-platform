@@ -3,7 +3,7 @@ import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { RecordingSession, FlowStep } from '@alt/shared';
 import { startSession, stopSession, toFlowSteps, computeThinkTimes, compileIgnorePatterns, RecordingSessionInternal } from './recorder';
-import { detectCorrelations, suggestStepNames, suggestIgnorePatterns, detectDuplicateSteps, correlatorRateLimited } from './correlator';
+import { detectCorrelations, suggestStepNames, suggestIgnorePatterns, detectDuplicateSteps, correlatorRateLimited, DeduplicationSuggestion } from './correlator';
 import { log } from './logger';
 
 const PORT = Number(process.env.PORT) || 3007;
@@ -13,7 +13,7 @@ const NOVNC_URL = process.env.NOVNC_URL || `http://localhost:6080/vnc.html?autoc
 const BLOCKED_HOSTNAME_RE = /^(localhost|.*\.local|host\.docker\.internal|.*\.internal|metadata\.google\.internal)$/i;
 const PRIVATE_IPV4_RE = /^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|169\.254\.\d+\.\d+)$/;
 
-const validateRecorderUrl = (raw: string): string | null => {
+export const validateRecorderUrl = (raw: string): string | null => {
   let parsed: URL;
   try { parsed = new URL(raw); } catch { return 'Invalid URL'; }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'URL must use http or https';
@@ -26,8 +26,16 @@ const validateRecorderUrl = (raw: string): string | null => {
 // Active sessions: sessionId → internal state
 const sessions = new Map<string, RecordingSessionInternal>();
 
-// Completed results kept for 10 min so the UI can retrieve steps after an external stop
-const completedResults = new Map<string, { steps: FlowStep[]; at: number }>();
+// Completed results kept for 10 min so the UI can retrieve steps + AI suggestions after an external stop
+interface CompletedResult {
+  steps: FlowStep[];
+  at: number;
+  geminiRateLimited?: boolean;
+  suggestedIgnore?: string[];
+  thinkTimes?: number[];
+  duplicates?: DeduplicationSuggestion[];
+}
+const completedResults = new Map<string, CompletedResult>();
 setInterval(() => {
   const cutoff = Date.now() - 10 * 60 * 1000;
   for (const [id, r] of completedResults) {
@@ -129,6 +137,10 @@ export async function buildApp(
         noVncUrl: NOVNC_URL,
         steps: done.steps,
         stepCount: done.steps.length,
+        ...(done.geminiRateLimited ? { geminiRateLimited: true } : {}),
+        ...(done.suggestedIgnore ? { suggestedIgnore: done.suggestedIgnore } : {}),
+        ...(done.thinkTimes ? { thinkTimes: done.thinkTimes } : {}),
+        ...(done.duplicates ? { duplicates: done.duplicates } : {}),
       } as RecordingSession;
     }
     return reply.code(404).send({ error: 'Session not found' });
@@ -160,7 +172,14 @@ export async function buildApp(
     const duplicates = detectDuplicateSteps(enrichedSteps);
 
     _sessions.delete(request.params.id);
-    _completed.set(request.params.id, { steps: enrichedSteps, at: Date.now() });
+    _completed.set(request.params.id, {
+      steps: enrichedSteps,
+      at: Date.now(),
+      ...(correlatorRateLimited ? { geminiRateLimited: true } : {}),
+      ...(suggestedIgnore.length > 0 ? { suggestedIgnore } : {}),
+      ...(thinkTimes.some(t => t > 500) ? { thinkTimes } : {}),
+      ...(duplicates.length > 0 ? { duplicates } : {}),
+    });
 
     const response: RecordingSession & { geminiRateLimited?: boolean; suggestedIgnore?: string[]; thinkTimes?: number[]; duplicates?: typeof duplicates } = {
       id: request.params.id,
@@ -259,7 +278,7 @@ export async function buildApp(
         .then(function(result){
           done=true;clearInterval(poll);
           if(window.opener&&typeof window.opener.__recordingDone==='function'){
-            window.opener.__recordingDone(result.steps||[]);
+            window.opener.__recordingDone(result);
           }
           markStopped();
         })
@@ -295,13 +314,15 @@ export async function buildApp(
 }
 
 // ── Startup ───────────────────────────────────────────────────────────────────
-(async () => {
-  const app = await buildApp(sessions, completedResults);
-  try {
-    await app.listen({ port: PORT, host: '0.0.0.0' });
-    log.info({ port: PORT }, 'recorder-service started');
-  } catch (err) {
-    log.error(err, 'Failed to start recorder-service');
-    process.exit(1);
-  }
-})();
+if (!process.env.VITEST) {
+  (async () => {
+    const app = await buildApp(sessions, completedResults);
+    try {
+      await app.listen({ port: PORT, host: '0.0.0.0' });
+      log.info({ port: PORT }, 'recorder-service started');
+    } catch (err) {
+      log.error(err, 'Failed to start recorder-service');
+      process.exit(1);
+    }
+  })();
+}

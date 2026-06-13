@@ -59,6 +59,7 @@ const saveScriptFn = async (
   script: string,
   scriptId?: string,
   description?: string,
+  projectId?: string,
 ): Promise<string> => {
   if (scriptId) {
     await pool.query(
@@ -68,12 +69,13 @@ const saveScriptFn = async (
     return scriptId;
   }
   const { rows } = await pool.query(
-    `INSERT INTO test_scripts (target_url, test_type, script, description)
-     VALUES ($1, 'backend', $2, $3)
+    `INSERT INTO test_scripts (target_url, test_type, script, description, project_id)
+     VALUES ($1, 'backend', $2, $3, $4)
      ON CONFLICT (target_url, test_type) DO UPDATE
-     SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW()
+     SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW(),
+         project_id = COALESCE(test_scripts.project_id, EXCLUDED.project_id)
      RETURNING id`,
-    [targetUrl, script, description ?? null],
+    [targetUrl, script, description ?? null, projectId ?? null],
   );
   return rows[0].id;
 };
@@ -203,6 +205,30 @@ describe('saveScript — no scriptId (new script path)', () => {
     await saveScriptFn(pool, 'http://x.com', 'k6script');
 
     expect(mockQuery.mock.calls[0][1]).toContain(null);
+  });
+
+  it('stores projectId when provided', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
+
+    await saveScriptFn(pool, 'http://x.com', 'k6script', undefined, undefined, 'project-123');
+
+    expect(mockQuery.mock.calls[0][1]).toContain('project-123');
+  });
+
+  it('stores null projectId when none provided', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
+
+    await saveScriptFn(pool, 'http://x.com', 'k6script');
+
+    expect(mockQuery.mock.calls[0][1]).toEqual(['http://x.com', 'k6script', null, null]);
+  });
+
+  it('preserves an existing project_id on conflict via COALESCE', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'existing-uuid' }] });
+
+    await saveScriptFn(pool, 'http://x.com', 'k6script', undefined, undefined, 'project-123');
+
+    expect(mockQuery.mock.calls[0][0]).toMatch(/project_id = COALESCE\(test_scripts\.project_id, EXCLUDED\.project_id\)/);
   });
 });
 

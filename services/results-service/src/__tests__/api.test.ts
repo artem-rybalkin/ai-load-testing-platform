@@ -789,6 +789,45 @@ describe('GET /results/:testId/live', () => {
     expect(points).toHaveLength(3);
     expect(new Date(points[0].timestamp) <= new Date(points[1].timestamp)).toBe(true);
   });
+
+  it('handles 500 live_metric rows with step_metrics within a generous time budget', async () => {
+    const testId = '00000000-0000-0000-0000-000000000041';
+    const baseTime = new Date('2024-01-01T00:00:00.000Z').getTime();
+    const stepMetrics = Array.from({ length: 5 }, (_, i) => ({
+      name: `Step ${i + 1}`,
+      avgResponseTime: 100 + i,
+      rps: 10 + i,
+      errorRate: 0,
+    }));
+
+    const values: string[] = [];
+    const params: unknown[] = [];
+    for (let i = 0; i < 500; i++) {
+      const ts = new Date(baseTime + i * 5000).toISOString();
+      const base = params.length;
+      params.push(testId, ts, 10, 5.5, 120, 0, JSON.stringify(stepMetrics));
+      values.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`);
+    }
+    await pool.query(
+      `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate, step_metrics) VALUES ${values.join(', ')}`,
+      params
+    );
+
+    const start = performance.now();
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/live` });
+    const elapsedMs = performance.now() - start;
+
+    expect(res.statusCode).toBe(200);
+    const { points } = res.json();
+    expect(points).toHaveLength(500);
+    // chronological order
+    for (let i = 1; i < points.length; i++) {
+      expect(new Date(points[i - 1].timestamp) <= new Date(points[i].timestamp)).toBe(true);
+    }
+    expect(points[0].stepMetrics).toHaveLength(5);
+    expect(points[0].stepMetrics[0].name).toBe('Step 1');
+    expect(elapsedMs).toBeLessThan(500);
+  });
 });
 
 // ─── DELETE /scripts/:id ──────────────────────────────────────────────────────

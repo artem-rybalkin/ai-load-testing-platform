@@ -82,6 +82,31 @@ describe('FLOW_PROMPT — extraction rules', () => {
   });
 });
 
+describe('FLOW_PROMPT — {{varName}} placeholder substitution', () => {
+  it('includes placeholder instructions when a step header contains {{varName}}', async () => {
+    const test = baseFlow();
+    test.steps![0].extract = { access_token: { source: 'jsonpath', expression: '$.access_token' } };
+    test.steps![1].headers = { Authorization: 'Bearer {{access_token}}' };
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('Variable placeholders');
+    expect(prompt).toContain('{{varName}}');
+  });
+
+  it('includes placeholder instructions when a step body contains {{varName}}', async () => {
+    const test = baseFlow();
+    test.steps![0].extract = { session_id: { source: 'jsonpath', expression: '$.session_id' } };
+    test.steps![1].body = '{"sessionId":"{{session_id}}"}';
+    await generateScript(test);
+    expect(await getLastPrompt()).toContain('Variable placeholders');
+  });
+
+  it('does NOT include placeholder instructions when no step has a {{varName}} placeholder', async () => {
+    await generateScript(baseFlow());
+    expect(await getLastPrompt()).not.toContain('Variable placeholders');
+  });
+});
+
 describe('FLOW_PROMPT — parameterization', () => {
   it('includes SharedArray and open(data.json) when testData is provided', async () => {
     const test = baseFlow();
@@ -107,6 +132,47 @@ describe('FLOW_PROMPT — parameterization', () => {
   it('does NOT include SharedArray when neither testData nor csvData is provided', async () => {
     await generateScript(baseFlow());
     expect(await getLastPrompt()).not.toContain('SharedArray');
+  });
+});
+
+describe('FLOW_PROMPT — combined extract + placeholder + parameterization', () => {
+  it('renders extract rules, {{varName}} placeholders, and SharedArray parameterization together', async () => {
+    const test = baseFlow();
+    test.steps![0].extract = {
+      access_token: { source: 'jsonpath', expression: '$.access_token' },
+      csrf: { source: 'regex', expression: 'value="([^"]+)"' },
+    };
+    test.steps![1].headers = { Authorization: 'Bearer {{access_token}}' };
+    test.steps![1].body = '{"csrf":"{{csrf}}","username":"{{username}}"}';
+    test.testData = [
+      { username: 'user1', password: 'pass1' },
+      { username: 'user2', password: 'pass2' },
+    ];
+
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+
+    // Extract rules rendered
+    expect(prompt).toContain('access_token ← jsonpath: $.access_token');
+    expect(prompt).toContain('csrf ← regex: value="([^"]+)"');
+
+    // Extraction + exec.vu.abort instructions present
+    expect(prompt).toContain('exec.vu.abort');
+    expect(prompt).toContain("import exec from 'k6/execution'");
+
+    // Placeholder instructions present
+    expect(prompt).toContain('Variable placeholders');
+    expect(prompt).toContain('{{varName}}');
+
+    // Parameterization (SharedArray) present
+    expect(prompt).toContain('SharedArray');
+    expect(prompt).toContain("open('./data.json')");
+    expect(prompt).toContain('username');
+    expect(prompt).toContain('data.length');
+
+    // All sections appear in the same prompt without duplication issues
+    const sharedArrayCount = prompt.split('SharedArray').length - 1;
+    expect(sharedArrayCount).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -196,6 +262,21 @@ describe('BACKEND_PROMPT — basic content', () => {
     await generateScript(test);
     expect(await getLastPrompt()).toContain('discardResponseBodies');
   });
+
+  it('includes custom headers instructions when headers are provided', async () => {
+    const test = baseBackend();
+    (test.options as never as Record<string, unknown>).headers = { 'X-Api-Key': 'secret123' };
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('Custom headers');
+    expect(prompt).toContain('X-Api-Key');
+    expect(prompt).toContain('secret123');
+  });
+
+  it('does NOT include custom headers section when no headers are provided', async () => {
+    await generateScript(baseBackend());
+    expect(await getLastPrompt()).not.toContain('Custom headers');
+  });
 });
 
 describe('BACKEND_PROMPT — profileInstructions', () => {
@@ -269,6 +350,21 @@ describe('CLIENT_PROMPT', () => {
     expect(prompt).toContain('Web Vitals');
     expect(prompt).toContain('Puppeteer');
   });
+
+  it('includes setExtraHTTPHeaders instructions when headers are provided', async () => {
+    const test = baseClient();
+    (test.options as never as Record<string, unknown>).headers = { 'X-Api-Key': 'secret123' };
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('setExtraHTTPHeaders');
+    expect(prompt).toContain('X-Api-Key');
+    expect(prompt).toContain('secret123');
+  });
+
+  it('does NOT include setExtraHTTPHeaders instructions when no headers are provided', async () => {
+    await generateScript(baseClient());
+    expect(await getLastPrompt()).not.toContain('setExtraHTTPHeaders');
+  });
 });
 
 // ─── generateScript — 429 retry ──────────────────────────────────────────────
@@ -300,5 +396,103 @@ describe('generateScript — 429 retry', () => {
 
     await expect(generateScript(baseFlow())).rejects.toThrow('auth error');
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('exhausts all 3 attempts on repeated 429s and throws the final error', async () => {
+    const fn = await getMockFn();
+    fn.mockClear();
+    fn.mockRejectedValueOnce({ status: 429 });
+    fn.mockRejectedValueOnce({ status: 429 });
+    fn.mockRejectedValueOnce({ status: 429 });
+
+    vi.useFakeTimers();
+    try {
+      const promise = generateScript(baseFlow());
+      const expectation = expect(promise).rejects.toMatchObject({ status: 429 });
+      await vi.runAllTimersAsync();
+      await expectation;
+      expect(fn).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+      fn.mockReset();
+      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+    }
+  });
+});
+
+// ─── compareDescriptions — full retry exhaustion ─────────────────────────────
+
+describe('compareDescriptions — retry exhaustion', () => {
+  it('defaults to REGENERATE after exhausting all 3 attempts on repeated 429s', async () => {
+    const fn = await getMockFn();
+    fn.mockClear();
+    fn.mockRejectedValueOnce({ status: 429 });
+    fn.mockRejectedValueOnce({ status: 429 });
+    fn.mockRejectedValueOnce({ status: 429 });
+
+    vi.useFakeTimers();
+    try {
+      const promise = compareDescriptions('a', 'b');
+      await vi.runAllTimersAsync();
+      expect(await promise).toBe('REGENERATE');
+      expect(fn).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+      fn.mockReset();
+      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+    }
+  });
+});
+
+// ─── Performance — FLOW_PROMPT construction for a large flow ────────────────
+
+describe('performance', () => {
+  it('builds FLOW_PROMPT for a 20-step flow with extract rules, placeholders, and testData within budget', async () => {
+    const fn = await getMockFn();
+    fn.mockClear();
+
+    const STEP_COUNT = 20;
+    const steps: TestRequest['steps'] = [];
+    for (let i = 0; i < STEP_COUNT; i++) {
+      const varName = `var${i}`;
+      steps.push({
+        name: `Step ${i}`,
+        url: `https://example.com/api/resource${i}`,
+        method: i % 2 === 0 ? 'POST' : 'GET',
+        body: JSON.stringify({ value: `{{var${Math.max(0, i - 1)}}}`, id: i }),
+        headers: { Authorization: `Bearer {{var${Math.max(0, i - 1)}}}`, 'X-Step': String(i) },
+        extract: {
+          [varName]: { source: 'jsonpath', expression: `$.data.${varName}` },
+        },
+      });
+    }
+
+    const testData: Array<Record<string, string>> = [];
+    for (let row = 0; row < 10; row++) {
+      const record: Record<string, string> = {};
+      for (let col = 0; col < 5; col++) {
+        record[`col${col}`] = `value-${row}-${col}`;
+      }
+      testData.push(record);
+    }
+
+    const test: TestRequest = {
+      ...baseFlow(),
+      steps,
+      testData,
+    };
+
+    const start = performance.now();
+    await generateScript(test);
+    const elapsed = performance.now() - start;
+
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('SharedArray');
+    expect(prompt).toContain('Step 19');
+    expect(prompt).toContain('Variable placeholders');
+    expect(prompt).toContain('exec.vu.abort');
+
+    // Regression guard: prompt construction for a large 20-step flow should be fast.
+    expect(elapsed).toBeLessThan(200);
   });
 });

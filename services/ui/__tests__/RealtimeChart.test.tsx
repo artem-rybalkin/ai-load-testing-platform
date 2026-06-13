@@ -16,7 +16,7 @@ vi.mock('recharts', () => ({
   ResponsiveContainer: () => null,
 }));
 
-import RealtimeChart from '../app/components/RealtimeChart';
+import RealtimeChart, { toKey, labelFor, fmtElapsed } from '../app/components/RealtimeChart';
 import type { LiveMetricPoint } from '@/lib/api';
 
 const basePoint = (overrides?: Partial<LiveMetricPoint>): LiveMetricPoint => ({
@@ -78,5 +78,112 @@ describe('RealtimeChart — chart titles with step metrics', () => {
     expect(screen.getByText('Response Time')).toBeInTheDocument();
     expect(screen.getByText('VUs & Error Rate')).toBeInTheDocument();
     expect(screen.getByText('Throughput')).toBeInTheDocument();
+  });
+});
+
+// ─── toKey ──────────────────────────────────────────────────────────────────────
+
+describe('toKey', () => {
+  it('leaves alphanumeric and underscore characters unchanged', () => {
+    expect(toKey('Step1_Login')).toBe('Step1_Login');
+  });
+
+  it('replaces spaces and punctuation with underscores', () => {
+    expect(toKey('Step 1: Login')).toBe('Step_1__Login');
+  });
+
+  it('replaces special characters like dashes and slashes', () => {
+    expect(toKey('GET /api/users-list')).toBe('GET__api_users_list');
+  });
+
+  it('returns an empty string unchanged', () => {
+    expect(toKey('')).toBe('');
+  });
+});
+
+// ─── labelFor ───────────────────────────────────────────────────────────────────
+
+describe('labelFor', () => {
+  const names = ['Step 1: Login', 'Step 2: Browse'];
+
+  it('strips the prefix and resolves the original step name', () => {
+    const raw = `avg_${toKey('Step 1: Login')}`;
+    expect(labelFor(names, 'avg', raw)).toBe('Step 1: Login');
+  });
+
+  it('resolves a different step for a different prefix', () => {
+    const raw = `err_${toKey('Step 2: Browse')}`;
+    expect(labelFor(names, 'err', raw)).toBe('Step 2: Browse');
+  });
+
+  it('falls back to the raw name when no step matches', () => {
+    const raw = 'rps_unknown_step';
+    expect(labelFor(names, 'rps', raw)).toBe(raw);
+  });
+
+  it('handles a rawName that does not start with the given prefix', () => {
+    const raw = toKey('Step 1: Login'); // no "avg_" prefix
+    // Regex replace of "^avg_" won't match, so key stays as the full toKey value.
+    expect(labelFor(names, 'avg', raw)).toBe('Step 1: Login');
+  });
+});
+
+// ─── fmtElapsed ─────────────────────────────────────────────────────────────────
+
+describe('fmtElapsed', () => {
+  it('formats elapsed seconds under a minute as "Ns"', () => {
+    expect(fmtElapsed('2024-01-01T00:00:30.000Z', '2024-01-01T00:00:00.000Z')).toBe('30s');
+  });
+
+  it('formats elapsed time at exactly 60s as "1m"', () => {
+    expect(fmtElapsed('2024-01-01T00:01:00.000Z', '2024-01-01T00:00:00.000Z')).toBe('1m');
+  });
+
+  it('formats elapsed time over a minute with remaining seconds as "XmYYs"', () => {
+    expect(fmtElapsed('2024-01-01T00:01:05.000Z', '2024-01-01T00:00:00.000Z')).toBe('1m05s');
+  });
+
+  it('formats elapsed time with double-digit remaining seconds', () => {
+    expect(fmtElapsed('2024-01-01T00:02:45.000Z', '2024-01-01T00:00:00.000Z')).toBe('2m45s');
+  });
+
+  it('falls back to wall-clock time when startedAt is not provided', () => {
+    const iso = '2024-01-01T12:34:56.000Z';
+    const expected = new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    expect(fmtElapsed(iso)).toBe(expected);
+  });
+
+  it('falls back to wall-clock time when startedAt is null', () => {
+    const iso = '2024-01-01T12:34:56.000Z';
+    const expected = new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    expect(fmtElapsed(iso, null)).toBe(expected);
+  });
+});
+
+// ─── Render performance ───────────────────────────────────────────────────────
+
+describe('RealtimeChart — render performance', () => {
+  it('renders 500 points with 7-step stepMetrics within budget', () => {
+    const stepNames = Array.from({ length: 7 }, (_, i) => `Step ${i + 1}: Action`);
+    const points: LiveMetricPoint[] = Array.from({ length: 500 }, (_, i) => ({
+      timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, i * 5)).toISOString(),
+      vus: 10,
+      rps: 5 + (i % 10),
+      avgResponseTime: 100 + (i % 50),
+      errorRate: i % 3,
+      stepMetrics: stepNames.map((name, si) => ({
+        name,
+        avgResponseTime: 100 + si * 10 + (i % 20),
+        rps: 1 + si,
+        errorRate: (i + si) % 4,
+      })),
+    }));
+
+    const start = performance.now();
+    expect(() => render(<RealtimeChart points={points} startedAt="2024-01-01T00:00:00.000Z" />)).not.toThrow();
+    const elapsed = performance.now() - start;
+
+    expect(screen.getByText('Response Time per Step')).toBeInTheDocument();
+    expect(elapsed).toBeLessThan(1000);
   });
 });

@@ -1,22 +1,69 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
+import bcrypt from 'bcryptjs';
 import { Pool } from 'pg';
 import PDFDocument from 'pdfkit';
 import cronValidator from 'node-cron';
 import { isConsumerConnected } from './consumer';
 import { reloadSchedule, removeSchedule } from './scheduler';
 import { setupWebSocketServer, broadcast } from './ws';
-import { findOrCreateProject } from './db';
-import { signSession, verifySession, SessionPayload } from './session';
+import { randomBytes } from 'crypto';
+import { createSession, getSession, revokeSession, switchSessionTeam, hashApiKey } from './session';
+import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, incrementGeminiUsage, getTeamUsage } from './quotas';
+import { redisClient } from './redis';
+import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole } from '@alt/shared';
 
-// Augment Fastify request type with session payload — must be at module level
+// Augment Fastify request type with session info — must be at module level
 declare module 'fastify' {
   interface FastifyRequest {
-    session: SessionPayload | null;
+    user: { id: string; email: string; name: string | null } | null;
     projectId: string | undefined;
+    role: TeamRole | null;
+    orgId: string | null;
+    orgRole: OrgRole | null;
   }
 }
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** All teams a user belongs to, with their role in each. */
+const loadUserTeams = async (p: Pool, userId: string): Promise<TeamMembership[]> => {
+  const { rows } = await p.query<{ id: string; name: string; role: TeamRole }>(
+    `SELECT pr.id, pr.name, tm.role
+     FROM team_members tm
+     JOIN projects pr ON pr.id = tm.team_id
+     WHERE tm.user_id = $1
+     ORDER BY tm.created_at ASC`,
+    [userId]
+  );
+  return rows.map(r => ({ id: r.id, name: r.name, role: r.role }));
+};
+
+/** All organizations a user belongs to, with their role in each. */
+const loadUserOrgs = async (p: Pool, userId: string): Promise<OrgMembership[]> => {
+  const { rows } = await p.query<{ id: string; name: string; role: OrgRole }>(
+    `SELECT o.id, o.name, om.role
+     FROM org_members om
+     JOIN organizations o ON o.id = om.org_id
+     WHERE om.user_id = $1
+     ORDER BY om.created_at ASC`,
+    [userId]
+  );
+  return rows.map(r => ({ id: r.id, name: r.name, role: r.role }));
+};
+
+/** Dummy session user returned by /auth/* when SESSION_SECRET is empty (auth disabled). */
+const DEV_USER: SessionUser = {
+  id: 'dev',
+  email: 'dev@local',
+  name: 'dev',
+  teams: [{ id: 'dev', name: 'dev', role: 'admin' }],
+  currentTeamId: 'dev',
+  role: 'admin',
+  orgs: [],
+};
 
 export const buildApp = async (
   pool: Pool,
@@ -40,72 +87,605 @@ export const buildApp = async (
   // Internal endpoints called by backend services (no cookie) — always exempt
   const internalPaths = new Set(['/health', '/system/ai-status', '/results/pending', '/ws']);
   const internalSuffixes = ['/running', '/fail', '/message', '/live', '/cancel'];
-  const isInternal = (url: string) =>
-    internalPaths.has(url.split('?')[0]) ||
-    internalSuffixes.some(s => url.split('?')[0].endsWith(s));
+  const isInternal = (url: string, method: string) => {
+    if (internalPaths.has(url)) return true;
+    // GET /results/:testId/live is read by the UI and must be project-scoped;
+    // only the worker's POST (pushing live metric points) is server-to-server.
+    if (url.endsWith('/live') && method === 'GET') return false;
+    return internalSuffixes.some(s => url.endsWith(s));
+  };
+
+  await app.register(rateLimit, {
+    global: true,
+    max: Number(process.env.RATE_LIMIT_MAX) || 600,
+    timeWindow: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000,
+    redis: redisClient,
+    skipOnError: true,
+    allowList: (request) => isInternal(request.url.split('?')[0], request.method),
+  });
+
+  const cookieOpts = {
+    httpOnly: true,
+    sameSite: 'strict' as const,
+    path: '/',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 30 * 24 * 60 * 60,
+    ...(process.env.DOMAIN ? { domain: `.${process.env.DOMAIN}` } : {}),
+  };
 
   app.addHook('onRequest', async (request, reply) => {
     const url = request.url.split('?')[0];
-    if (url === '/auth/login' || url === '/auth/logout' || url === '/auth/me') return;
-    if (isInternal(request.url)) return;
+    if (url.startsWith('/auth/')) return;
+    if (isInternal(url, request.method)) return;
+
+    const apiKeyHeader = request.headers['x-api-key'] as string | undefined;
+
+    // Per-team API key — scopes the request to one team regardless of global
+    // API_KEYS / session config. Checked first since it's the most specific.
+    if (apiKeyHeader && !apiKeys.includes(apiKeyHeader)) {
+      const keyHash = hashApiKey(apiKeyHeader);
+      try {
+        const { rows } = await pool.query<{ team_id: string }>(
+          `SELECT team_id FROM team_api_keys WHERE key_hash = $1 AND revoked_at IS NULL`,
+          [keyHash]
+        );
+        if (rows.length > 0) {
+          pool.query(`UPDATE team_api_keys SET last_used_at = NOW() WHERE key_hash = $1`, [keyHash]).catch(() => {});
+          request.user = null;
+          request.projectId = rows[0].team_id;
+          request.role = 'admin';
+          request.orgId = null;
+          request.orgRole = null;
+          return;
+        }
+      } catch {
+        // team_api_keys lookup unavailable — fall through to global API key / session checks
+      }
+    }
 
     // API key auth (existing, kept for backward compat)
     if (apiKeys.length > 0) {
-      const key = request.headers['x-api-key'];
-      if (!key || !apiKeys.includes(key as string)) {
+      if (!apiKeyHeader || !apiKeys.includes(apiKeyHeader)) {
         return reply.code(401).send({ error: 'Unauthorized' });
       }
     }
 
     // Session auth — only enforced when SESSION_SECRET is configured
     if (sessionSecret) {
-      const session = verifySession(request.cookies['alt_session'], sessionSecret);
+      const session = await getSession(pool, request.cookies['alt_session']);
       if (!session) return reply.code(401).send({ error: 'Not authenticated' });
-      request.session = session;
-      request.projectId = session.projectId;
+
+      const { rows } = await pool.query<{ id: string; email: string; name: string | null; role: TeamRole | null }>(
+        `SELECT u.id, u.email, u.name, tm.role
+         FROM users u
+         LEFT JOIN team_members tm ON tm.user_id = u.id AND tm.team_id = $2
+         WHERE u.id = $1`,
+        [session.userId, session.teamId]
+      );
+      if (rows.length === 0) return reply.code(401).send({ error: 'Not authenticated' });
+
+      request.user = { id: rows[0].id, email: rows[0].email, name: rows[0].name };
+      request.projectId = session.teamId ?? undefined;
+      request.role = rows[0].role;
+      request.orgId = null;
+      request.orgRole = null;
+
+      // A session with no current team (or no longer a member of it) has no
+      // access to project-scoped resources — except /teams and /orgs, where it
+      // can create/join a new team or org.
+      if (request.role === null && !url.startsWith('/teams') && !url.startsWith('/orgs')) {
+        return reply.code(403).send({ error: 'No team selected — create or join a team first' });
+      }
+
+      // Resolve the org owning the current team (if any) and the caller's role in it.
+      if (request.projectId) {
+        const { rows: orgRows } = await pool.query<{ orgId: string; role: OrgRole }>(
+          `SELECT p.org_id AS "orgId", om.role
+           FROM projects p
+           JOIN org_members om ON om.org_id = p.org_id AND om.user_id = $1
+           WHERE p.id = $2`,
+          [session.userId, request.projectId]
+        );
+        if (orgRows.length > 0) {
+          request.orgId = orgRows[0].orgId;
+          request.orgRole = orgRows[0].role;
+        }
+      }
+
+      // /orgs/:id/* handlers resolve org membership/role for :id directly
+      // (request.orgRole reflects the *current team's* org, which may differ).
+      const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method);
+      if (isMutation) {
+        if (/^\/teams\/[^/]+/.test(url)) {
+          if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+        } else if (url !== '/teams' && url !== '/orgs' && !url.startsWith('/orgs/') && request.role === 'viewer') {
+          return reply.code(403).send({ error: 'Viewer role cannot perform this action' });
+        }
+      }
     } else {
-      request.session = null;
+      request.user = null;
       request.projectId = undefined;
+      request.role = null;
+      request.orgId = null;
+      request.orgRole = null;
     }
   });
 
   // ── Auth endpoints ────────────────────────────────────────────────────────
-  app.post<{ Body: { username: string; projectName: string } }>(
-    '/auth/login',
+  app.post<{ Body: { email: string; password: string; name?: string; teamName: string } }>(
+    '/auth/register',
+    { config: { rateLimit: { max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 10, timeWindow: 60_000 } } },
     async (request, reply) => {
-      const { username, projectName } = request.body ?? {};
-      if (!username?.trim() || !projectName?.trim()) {
-        return reply.code(400).send({ error: 'username and projectName are required' });
+      if (!sessionSecret) return DEV_USER;
+
+      const { email, password, name, teamName } = request.body ?? {};
+      if (!email?.trim() || !EMAIL_RE.test(email.trim())) {
+        return reply.code(400).send({ error: 'A valid email is required' });
       }
-      if (!sessionSecret) {
-        // Auth disabled — return a dummy session so the UI works in dev
-        return { projectId: 'dev', username: username.trim(), projectName: projectName.trim() };
+      if (!password || password.length < 8) {
+        return reply.code(400).send({ error: 'Password must be at least 8 characters' });
       }
-      const projectId = await findOrCreateProject(projectName.trim(), pool);
-      const payload: SessionPayload = { projectId, username: username.trim(), projectName: projectName.trim().toLowerCase() };
-      const cookieValue = signSession(payload, sessionSecret);
-      reply.setCookie('alt_session', cookieValue, {
-        httpOnly: true,
-        sameSite: 'strict',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 30 * 24 * 60 * 60,
-        ...(process.env.DOMAIN ? { domain: `.${process.env.DOMAIN}` } : {}),
-      });
-      return payload;
+      if (!teamName?.trim()) {
+        return reply.code(400).send({ error: 'teamName is required' });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const existing = await client.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
+        if (existing.rows.length > 0) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'Email already registered' });
+        }
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const userResult = await client.query<{ id: string }>(
+          'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id',
+          [normalizedEmail, passwordHash, name?.trim() || null]
+        );
+        const userId = userResult.rows[0].id;
+
+        const normalizedTeamName = teamName.trim().toLowerCase();
+        let teamId: string;
+        try {
+          const teamResult = await client.query<{ id: string }>(
+            'INSERT INTO projects (name) VALUES ($1) RETURNING id',
+            [normalizedTeamName]
+          );
+          teamId = teamResult.rows[0].id;
+        } catch (err) {
+          await client.query('ROLLBACK');
+          if ((err as { code?: string }).code === '23505') {
+            return reply.code(409).send({ error: 'Team name already taken' });
+          }
+          throw err;
+        }
+
+        await client.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamId, userId]);
+        await client.query('COMMIT');
+
+        const token = await createSession(pool, userId, teamId);
+        reply.setCookie('alt_session', token, cookieOpts);
+
+        const result: SessionUser = {
+          id: userId,
+          email: normalizedEmail,
+          name: name?.trim() || null,
+          teams: [{ id: teamId, name: normalizedTeamName, role: 'admin' }],
+          currentTeamId: teamId,
+          role: 'admin',
+          orgs: [],
+        };
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
     }
   );
 
-  app.post('/auth/logout', async (_request, reply) => {
+  app.post<{ Body: { email: string; password: string } }>(
+    '/auth/login',
+    { config: { rateLimit: { max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 10, timeWindow: 60_000 } } },
+    async (request, reply) => {
+      if (!sessionSecret) return DEV_USER;
+
+      const { email, password } = request.body ?? {};
+      if (!email?.trim() || !password) {
+        return reply.code(400).send({ error: 'email and password are required' });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const { rows } = await pool.query<{ id: string; email: string; name: string | null; password_hash: string }>(
+        'SELECT id, email, name, password_hash FROM users WHERE email = $1',
+        [normalizedEmail]
+      );
+      if (rows.length === 0) return reply.code(401).send({ error: 'Invalid email or password' });
+
+      const valid = await bcrypt.compare(password, rows[0].password_hash);
+      if (!valid) return reply.code(401).send({ error: 'Invalid email or password' });
+
+      const teams = await loadUserTeams(pool, rows[0].id);
+      const currentTeamId = teams.length > 0 ? teams[0].id : null;
+      const orgs = await loadUserOrgs(pool, rows[0].id);
+
+      const token = await createSession(pool, rows[0].id, currentTeamId);
+      reply.setCookie('alt_session', token, cookieOpts);
+
+      const result: SessionUser = {
+        id: rows[0].id,
+        email: rows[0].email,
+        name: rows[0].name,
+        teams,
+        currentTeamId,
+        role: currentTeamId ? teams[0].role : null,
+        orgs,
+      };
+      return result;
+    }
+  );
+
+  app.post('/auth/logout', async (request, reply) => {
+    if (sessionSecret) await revokeSession(pool, request.cookies?.['alt_session']);
     reply.clearCookie('alt_session', { path: '/' });
-    return { ok: true };
+    return { success: true };
   });
 
   app.get('/auth/me', async (request, reply) => {
-    if (!sessionSecret) return { projectId: 'dev', username: 'dev', projectName: 'dev' };
-    const session = verifySession(request.cookies?.['alt_session'], sessionSecret);
+    if (!sessionSecret) return DEV_USER;
+
+    const session = await getSession(pool, request.cookies?.['alt_session']);
     if (!session) return reply.code(401).send({ error: 'Not authenticated' });
-    return session;
+
+    const { rows } = await pool.query<{ id: string; email: string; name: string | null }>(
+      'SELECT id, email, name FROM users WHERE id = $1',
+      [session.userId]
+    );
+    if (rows.length === 0) return reply.code(401).send({ error: 'Not authenticated' });
+
+    const teams = await loadUserTeams(pool, session.userId);
+    const currentTeamId = session.teamId;
+    const role = currentTeamId ? teams.find(t => t.id === currentTeamId)?.role ?? null : null;
+    const orgs = await loadUserOrgs(pool, session.userId);
+
+    const result: SessionUser = { id: rows[0].id, email: rows[0].email, name: rows[0].name, teams, currentTeamId, role, orgs };
+    return result;
+  });
+
+  app.post<{ Body: { teamId: string } }>('/auth/switch-team', async (request, reply) => {
+    if (!sessionSecret) return DEV_USER;
+
+    const session = await getSession(pool, request.cookies?.['alt_session']);
+    if (!session) return reply.code(401).send({ error: 'Not authenticated' });
+
+    const { teamId } = request.body ?? {};
+    if (!teamId) return reply.code(400).send({ error: 'teamId is required' });
+
+    const teams = await loadUserTeams(pool, session.userId);
+    const team = teams.find(t => t.id === teamId);
+    if (!team) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    await switchSessionTeam(pool, request.cookies?.['alt_session'], teamId);
+
+    const { rows } = await pool.query<{ id: string; email: string; name: string | null }>(
+      'SELECT id, email, name FROM users WHERE id = $1',
+      [session.userId]
+    );
+    const orgs = await loadUserOrgs(pool, session.userId);
+
+    const result: SessionUser = { id: rows[0].id, email: rows[0].email, name: rows[0].name, teams, currentTeamId: teamId, role: team.role, orgs };
+    return result;
+  });
+
+  // ── Team management endpoints ────────────────────────────────────────────
+  app.post<{ Body: { name: string } }>('/teams', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+
+    const { name } = request.body ?? {};
+    if (!name?.trim()) return reply.code(400).send({ error: 'name is required' });
+
+    const normalizedName = name.trim().toLowerCase();
+    try {
+      const { rows } = await pool.query<{ id: string }>('INSERT INTO projects (name) VALUES ($1) RETURNING id', [normalizedName]);
+      const teamId = rows[0].id;
+      await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamId, request.user.id]);
+      return { id: teamId, name: normalizedName, role: 'admin' as TeamRole };
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'Team name already taken' });
+      throw err;
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/teams/:id/members', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const { rows } = await pool.query<{ userId: string; email: string; name: string | null; role: TeamRole }>(
+      `SELECT u.id AS "userId", u.email, u.name, tm.role
+       FROM team_members tm JOIN users u ON u.id = tm.user_id
+       WHERE tm.team_id = $1 ORDER BY tm.created_at ASC`,
+      [request.params.id]
+    );
+    return rows;
+  });
+
+  app.post<{ Params: { id: string }; Body: { email: string; role?: TeamRole } }>('/teams/:id/members', async (request, reply) => {
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const { email, role } = request.body ?? {};
+    if (!email?.trim()) return reply.code(400).send({ error: 'email is required' });
+    const memberRole: TeamRole = role && ['admin', 'member', 'viewer'].includes(role) ? role : 'member';
+
+    const { rows: userRows } = await pool.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [email.trim().toLowerCase()]);
+    if (userRows.length === 0) return reply.code(404).send({ error: 'No user with that email' });
+
+    try {
+      await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)`, [request.params.id, userRows[0].id, memberRole]);
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'User is already a member of this team' });
+      throw err;
+    }
+    return { success: true };
+  });
+
+  app.put<{ Params: { id: string; userId: string }; Body: { role: TeamRole } }>('/teams/:id/members/:userId', async (request, reply) => {
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const { role } = request.body ?? {};
+    if (!role || !['admin', 'member', 'viewer'].includes(role)) return reply.code(400).send({ error: 'role must be admin, member, or viewer' });
+
+    if (role !== 'admin') {
+      const { rows } = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
+        [request.params.id, request.params.userId]
+      );
+      if (parseInt(rows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last admin' });
+    }
+
+    const { rowCount } = await pool.query(`UPDATE team_members SET role = $1 WHERE team_id = $2 AND user_id = $3`, [role, request.params.id, request.params.userId]);
+    if (!rowCount) return reply.code(404).send({ error: 'Member not found' });
+    return { success: true };
+  });
+
+  app.delete<{ Params: { id: string; userId: string } }>('/teams/:id/members/:userId', async (request, reply) => {
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const { rows } = await pool.query<{ role: TeamRole }>(`SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+    if (rows.length === 0) return reply.code(404).send({ error: 'Member not found' });
+
+    if (rows[0].role === 'admin') {
+      const { rows: adminRows } = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
+        [request.params.id, request.params.userId]
+      );
+      if (parseInt(adminRows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last admin' });
+    }
+
+    await pool.query(`DELETE FROM team_members WHERE team_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+    return { success: true };
+  });
+
+  // ── Team quotas & usage ──────────────────────────────────────────────────
+  app.get<{ Params: { id: string } }>('/teams/:id/quotas', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const [quota, usage] = await Promise.all([
+      getTeamQuota(pool, request.params.id),
+      getTeamUsage(pool, request.params.id),
+    ]);
+    return { quota, usage };
+  });
+
+  app.put<{ Params: { id: string }; Body: Partial<TeamQuota> }>('/teams/:id/quotas', async (request, reply) => {
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const updates = request.body ?? {};
+    const allowedKeys: (keyof TeamQuota)[] = [
+      'maxConcurrentTests', 'maxVusPerTest', 'maxTestDurationSeconds', 'maxScheduledTests', 'maxGeminiCallsPerDay',
+    ];
+    const sanitized: Partial<TeamQuota> = {};
+    for (const key of Object.keys(updates) as (keyof TeamQuota)[]) {
+      if (!allowedKeys.includes(key)) continue;
+      const value = updates[key];
+      if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+        return reply.code(400).send({ error: `${key} must be a positive integer` });
+      }
+      sanitized[key] = value;
+    }
+    if (Object.keys(sanitized).length === 0) return reply.code(400).send({ error: 'No valid quota fields provided' });
+
+    const quota = await upsertTeamQuota(pool, request.params.id, sanitized);
+    return { quota };
+  });
+
+  // ── Organizations ─────────────────────────────────────────────────────────
+  const getOrgRole = async (orgId: string, userId: string): Promise<OrgRole | null> => {
+    const { rows } = await pool.query<{ role: OrgRole }>(
+      'SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2',
+      [orgId, userId]
+    );
+    return rows.length > 0 ? rows[0].role : null;
+  };
+
+  app.post<{ Body: { name: string } }>('/orgs', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+
+    const { name } = request.body ?? {};
+    if (!name?.trim()) return reply.code(400).send({ error: 'name is required' });
+
+    const normalizedName = name.trim().toLowerCase();
+    try {
+      const { rows } = await pool.query<{ id: string }>('INSERT INTO organizations (name) VALUES ($1) RETURNING id', [normalizedName]);
+      const orgId = rows[0].id;
+      await pool.query(`INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, 'owner')`, [orgId, request.user.id]);
+      return { id: orgId, name: normalizedName, role: 'owner' as OrgRole };
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'Organization name already taken' });
+      throw err;
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/orgs/:id', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+
+    const role = await getOrgRole(request.params.id, request.user.id);
+    if (!role) return reply.code(403).send({ error: 'Not a member of this organization' });
+
+    const { rows: orgRows } = await pool.query<{ id: string; name: string; createdAt: string }>(
+      'SELECT id, name, created_at AS "createdAt" FROM organizations WHERE id = $1',
+      [request.params.id]
+    );
+    if (orgRows.length === 0) return reply.code(404).send({ error: 'Organization not found' });
+
+    const { rows: members } = await pool.query<{ userId: string; email: string; name: string | null; role: OrgRole }>(
+      `SELECT u.id AS "userId", u.email, u.name, om.role
+       FROM org_members om JOIN users u ON u.id = om.user_id
+       WHERE om.org_id = $1 ORDER BY om.created_at ASC`,
+      [request.params.id]
+    );
+
+    const { rows: teamRows } = await pool.query<{ id: string; name: string }>(
+      'SELECT id, name FROM projects WHERE org_id = $1 ORDER BY created_at ASC',
+      [request.params.id]
+    );
+    const teams = await Promise.all(teamRows.map(async (t) => ({
+      id: t.id,
+      name: t.name,
+      quota: await getTeamQuota(pool, t.id),
+      usage: await getTeamUsage(pool, t.id),
+    })));
+
+    return { org: orgRows[0], members, teams, role };
+  });
+
+  app.post<{ Params: { id: string }; Body: { email: string; role?: OrgRole } }>('/orgs/:id/members', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+
+    const callerRole = await getOrgRole(request.params.id, request.user.id);
+    if (callerRole !== 'owner' && callerRole !== 'admin') return reply.code(403).send({ error: 'Org owner or admin role required' });
+
+    const { email, role: newRole } = request.body ?? {};
+    if (!email?.trim()) return reply.code(400).send({ error: 'email is required' });
+    const memberRole: OrgRole = newRole && ['owner', 'admin', 'member'].includes(newRole) ? newRole : 'member';
+
+    const { rows: userRows } = await pool.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [email.trim().toLowerCase()]);
+    if (userRows.length === 0) return reply.code(404).send({ error: 'No user with that email' });
+
+    try {
+      await pool.query(`INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)`, [request.params.id, userRows[0].id, memberRole]);
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'User is already a member of this organization' });
+      throw err;
+    }
+    return { success: true };
+  });
+
+  app.put<{ Params: { id: string; userId: string }; Body: { role: OrgRole } }>('/orgs/:id/members/:userId', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+
+    const callerRole = await getOrgRole(request.params.id, request.user.id);
+    if (callerRole !== 'owner' && callerRole !== 'admin') return reply.code(403).send({ error: 'Org owner or admin role required' });
+
+    const { role } = request.body ?? {};
+    if (!role || !['owner', 'admin', 'member'].includes(role)) return reply.code(400).send({ error: 'role must be owner, admin, or member' });
+
+    if (role !== 'owner') {
+      const { rows } = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
+        [request.params.id, request.params.userId]
+      );
+      if (parseInt(rows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last owner' });
+    }
+
+    const { rowCount } = await pool.query(`UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3`, [role, request.params.id, request.params.userId]);
+    if (!rowCount) return reply.code(404).send({ error: 'Member not found' });
+    return { success: true };
+  });
+
+  app.delete<{ Params: { id: string; userId: string } }>('/orgs/:id/members/:userId', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+
+    const callerRole = await getOrgRole(request.params.id, request.user.id);
+    if (callerRole !== 'owner' && callerRole !== 'admin') return reply.code(403).send({ error: 'Org owner or admin role required' });
+
+    const { rows } = await pool.query<{ role: OrgRole }>(`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+    if (rows.length === 0) return reply.code(404).send({ error: 'Member not found' });
+
+    if (rows[0].role === 'owner') {
+      const { rows: ownerRows } = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
+        [request.params.id, request.params.userId]
+      );
+      if (parseInt(ownerRows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last owner' });
+    }
+
+    await pool.query(`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+    return { success: true };
+  });
+
+  app.post<{ Params: { id: string }; Body: { name: string } }>('/orgs/:id/teams', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+
+    const callerRole = await getOrgRole(request.params.id, request.user.id);
+    if (callerRole !== 'owner' && callerRole !== 'admin') return reply.code(403).send({ error: 'Org owner or admin role required' });
+
+    const { name } = request.body ?? {};
+    if (!name?.trim()) return reply.code(400).send({ error: 'name is required' });
+
+    const normalizedName = name.trim().toLowerCase();
+    try {
+      const { rows } = await pool.query<{ id: string }>('INSERT INTO projects (name, org_id) VALUES ($1, $2) RETURNING id', [normalizedName, request.params.id]);
+      const teamId = rows[0].id;
+      await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamId, request.user.id]);
+      return { id: teamId, name: normalizedName, role: 'admin' as TeamRole };
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'Team name already taken' });
+      throw err;
+    }
+  });
+
+  // ── Per-team API keys ────────────────────────────────────────────────────
+  app.post<{ Params: { id: string }; Body: { name: string } }>('/teams/:id/api-keys', async (request, reply) => {
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const { name } = request.body ?? {};
+    if (!name?.trim()) return reply.code(400).send({ error: 'name is required' });
+
+    const rawKey = randomBytes(24).toString('hex');
+    const { rows } = await pool.query<{ id: string; createdAt: string }>(
+      `INSERT INTO team_api_keys (team_id, name, key_hash) VALUES ($1, $2, $3) RETURNING id, created_at AS "createdAt"`,
+      [request.params.id, name.trim(), hashApiKey(rawKey)]
+    );
+    return { id: rows[0].id, name: name.trim(), key: rawKey, createdAt: rows[0].createdAt };
+  });
+
+  app.get<{ Params: { id: string } }>('/teams/:id/api-keys', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+    if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+
+    const { rows } = await pool.query<{ id: string; name: string; createdAt: string; lastUsedAt: string | null; revoked: boolean }>(
+      `SELECT id, name, created_at AS "createdAt", last_used_at AS "lastUsedAt", (revoked_at IS NOT NULL) AS revoked
+       FROM team_api_keys WHERE team_id = $1 ORDER BY created_at ASC`,
+      [request.params.id]
+    );
+    return rows;
+  });
+
+  app.delete<{ Params: { id: string; keyId: string } }>('/teams/:id/api-keys/:keyId', async (request, reply) => {
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+
+    const { rowCount } = await pool.query(
+      `UPDATE team_api_keys SET revoked_at = NOW() WHERE id = $1 AND team_id = $2 AND revoked_at IS NULL`,
+      [request.params.keyId, request.params.id]
+    );
+    if (!rowCount) return reply.code(404).send({ error: 'API key not found' });
+    return { success: true };
   });
 
   app.get('/health', async (_request, reply) => {
@@ -117,6 +697,8 @@ export const buildApp = async (
 
     checks.queue = isConsumerConnected() ? 'ok' : 'disconnected';
     if (!isConsumerConnected()) healthy = false;
+
+    checks.redis = !redisClient ? 'disabled' : redisClient.status === 'ready' ? 'ok' : 'disconnected';
 
     return reply.code(healthy ? 200 : 503).send({
       status: healthy ? 'ok' : 'degraded',
@@ -391,11 +973,15 @@ export const buildApp = async (
     '/results/:testId/live',
     async (request, reply) => {
       const { testId } = request.params;
+      const projectId = request.projectId ?? null;
       try {
         const { rows } = await rPool.query(
-          `SELECT timestamp, vus, rps, avg_response_time AS "avgResponseTime", error_rate AS "errorRate", step_metrics AS "stepMetrics"
-           FROM live_metrics WHERE test_id = $1 ORDER BY timestamp ASC`,
-          [testId]
+          `SELECT lm.timestamp, lm.vus, lm.rps, lm.avg_response_time AS "avgResponseTime", lm.error_rate AS "errorRate", lm.step_metrics AS "stepMetrics"
+           FROM live_metrics lm
+           LEFT JOIN test_results tr ON tr.test_id = lm.test_id
+           WHERE lm.test_id = $1 AND ($2::uuid IS NULL OR tr.project_id = $2::uuid)
+           ORDER BY lm.timestamp ASC`,
+          [testId, projectId]
         );
         return { points: rows };
       } catch (err) {
@@ -436,17 +1022,23 @@ export const buildApp = async (
     '/results/:testId/baseline',
     async (request, reply) => {
       const { testId } = request.params;
+      const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
-        `SELECT target_url, type FROM test_results WHERE test_id = $1 AND status = 'completed'`,
-        [testId]
+        `SELECT target_url, type FROM test_results
+         WHERE test_id = $1 AND status = 'completed' AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+        [testId, projectId]
       );
       if (rows.length === 0) return reply.code(404).send({ error: 'Completed result not found' });
       const { target_url, type } = rows[0];
       await pool.query(
-        `UPDATE test_results SET is_baseline = FALSE WHERE target_url = $1 AND type = $2`,
-        [target_url, type]
+        `UPDATE test_results SET is_baseline = FALSE
+         WHERE target_url = $1 AND type = $2 AND ($3::uuid IS NULL OR project_id = $3::uuid)`,
+        [target_url, type, projectId]
       );
-      await pool.query(`UPDATE test_results SET is_baseline = TRUE WHERE test_id = $1`, [testId]);
+      await pool.query(
+        `UPDATE test_results SET is_baseline = TRUE WHERE test_id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+        [testId, projectId]
+      );
       return { success: true, testId };
     }
   );
@@ -454,7 +1046,11 @@ export const buildApp = async (
   app.delete<{ Params: { testId: string } }>(
     '/results/:testId/baseline',
     async (request, reply) => {
-      await pool.query(`UPDATE test_results SET is_baseline = FALSE WHERE test_id = $1`, [request.params.testId]);
+      const projectId = request.projectId ?? null;
+      await pool.query(
+        `UPDATE test_results SET is_baseline = FALSE WHERE test_id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+        [request.params.testId, projectId]
+      );
       return reply.code(204).send();
     }
   );
@@ -592,11 +1188,14 @@ export const buildApp = async (
   // ── AI-5: Cron natural-language assistant ───────────────────────────────
   app.post<{ Body: { phrase: string } }>(
     '/ai/cron',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { phrase } = request.body;
       if (!phrase) return reply.code(400).send({ error: 'phrase is required' });
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const { GoogleGenerativeAI } = await import('@google/generative-ai');
         const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
@@ -608,6 +1207,7 @@ Description: "${phrase}"
 
 Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
         );
+        await incrementGeminiUsage(pool, request.projectId);
         const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
@@ -621,11 +1221,14 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
   // ── AI-7: Trend regression narrative ────────────────────────────────────
   app.post<{ Body: { trend: Array<{ created_at: string; metrics: Record<string, number>; perf_status?: string }> } }>(
     '/ai/trend-narrative',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { trend } = request.body;
       if (!trend || trend.length < 3) return reply.code(422).send({ error: 'Need at least 3 trend points' });
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const summary = trend.map(t => ({
           date: t.created_at,
@@ -656,11 +1259,14 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`
   // ── AI-9: Optimal VU/duration recommendation ─────────────────────────────
   app.get<{ Querystring: { url: string; type?: string } }>(
     '/results/suggest-settings',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const projectId = request.projectId ?? null;
         const { rows } = await pool.query(
@@ -683,6 +1289,7 @@ ${history.length > 0 ? `Recent run history:\n${JSON.stringify(history, null, 2)}
 Return ONLY valid JSON:
 {"vus": <number>, "duration": "<e.g. 1m>", "profile": "load|spike|soak|capacity", "reasoning": "<one sentence>"}`
         );
+        await incrementGeminiUsage(pool, request.projectId);
         const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
@@ -696,11 +1303,14 @@ Return ONLY valid JSON:
   // ── AI-11: Webhook alert noise prediction ───────────────────────────────
   app.post<{ Body: { events: string[] } }>(
     '/ai/webhook-noise',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { events } = request.body;
       if (!events?.length) return reply.code(400).send({ error: 'events is required' });
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const { rows } = await pool.query(
           `SELECT perf_status, COUNT(*) as count
@@ -722,6 +1332,7 @@ ${JSON.stringify(dist)}
 Return ONLY valid JSON:
 {"level": "noisy|ok|silent", "message": "<one sentence warning or confirmation>"}`
         );
+        await incrementGeminiUsage(pool, request.projectId);
         const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return { warning: null };
@@ -736,10 +1347,13 @@ Return ONLY valid JSON:
   // ── AI-14: Preset name + tag suggestion ──────────────────────────────────
   app.post<{ Body: { url: string; type: string; vus?: number; duration?: string; profile?: string; stepCount?: number } }>(
     '/ai/preset-name',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type, vus, duration, profile, stepCount } = request.body;
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const { GoogleGenerativeAI } = await import('@google/generative-ai');
         const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
@@ -752,6 +1366,7 @@ Tags should be lowercase, single words or hyphenated (e.g. "e2e", "smoke", "auth
 
 Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
         );
+        await incrementGeminiUsage(pool, request.projectId);
         const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
@@ -765,11 +1380,14 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
   // ── AI-10: Parameterisation suggestions ─────────────────────────────────
   app.post<{ Body: { steps: Array<{ url: string; method: string; body?: string }> } }>(
     '/ai/param-suggestions',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { steps } = request.body;
       if (!steps || steps.length === 0) return reply.code(400).send({ error: 'steps is required' });
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const { GoogleGenerativeAI } = await import('@google/generative-ai');
         const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
@@ -783,6 +1401,7 @@ ${JSON.stringify(steps.slice(0, 20), null, 2)}
 Return ONLY valid JSON:
 {"columns": ["column_name_1", "column_name_2"], "reasoning": "<one sentence>"}`
         );
+        await incrementGeminiUsage(pool, request.projectId);
         const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
@@ -796,12 +1415,16 @@ Return ONLY valid JSON:
   // ── AI-1: Threshold suggestions ─────────────────────────────────────────
   app.get<{ Querystring: { url: string; type?: string } }>(
     '/results/suggest-thresholds',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
 
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
 
       try {
         const projectId = request.projectId ?? null;
@@ -846,6 +1469,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
 }`;
 
         const result = await model.generateContent(prompt);
+        await incrementGeminiUsage(pool, request.projectId);
         const text = result.response.text().trim();
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return reply.code(500).send({ error: 'AI returned unexpected response' });
@@ -861,10 +1485,14 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
   // ── AI-4: Error root-cause diagnosis ────────────────────────────────────
   app.get<{ Params: { testId: string } }>(
     '/results/:testId/diagnose',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { testId } = request.params;
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
 
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
@@ -923,6 +1551,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
 ]`;
 
         const result = await model.generateContent(prompt);
+        await incrementGeminiUsage(pool, request.projectId);
         const text = result.response.text().trim();
         const match = text.match(/\[[\s\S]*\]/);
         if (!match) return { diagnoses: [], message: 'AI returned unexpected response' };
@@ -1006,6 +1635,10 @@ Return ONLY valid JSON array. Include only categories with count > 0:
       const { name, cron, type, target_url, description, options, thresholds, enabled = true } = request.body;
       if (!name || !cron || !type || !target_url || !options) return reply.code(400).send({ error: 'name, cron, type, target_url, options are required' });
       if (!cronValidator.validate(cron)) return reply.code(400).send({ error: 'Invalid cron expression' });
+      if (enabled) {
+        const quotaError = await checkScheduleQuota(pool, request.projectId);
+        if (quotaError) return reply.code(429).send({ error: quotaError });
+      }
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
         `INSERT INTO schedules (name, cron, type, target_url, description, options, thresholds, enabled, project_id)
@@ -1031,6 +1664,15 @@ Return ONLY valid JSON array. Include only categories with count > 0:
       if (updates.options  !== undefined) { sets.push(`options = $${i++}`); vals.push(JSON.stringify(updates.options)); }
       if (updates.thresholds !== undefined) { sets.push(`thresholds = $${i++}`); vals.push(JSON.stringify(updates.thresholds)); }
       if (sets.length === 0) return reply.code(400).send({ error: 'No fields to update' });
+
+      if (updates.enabled === true) {
+        const { rows: existingRows } = await pool.query<{ enabled: boolean }>(`SELECT enabled FROM schedules WHERE id = $1`, [id]);
+        if (existingRows.length > 0 && !existingRows[0].enabled) {
+          const quotaError = await checkScheduleQuota(pool, request.projectId);
+          if (quotaError) return reply.code(429).send({ error: quotaError });
+        }
+      }
+
       const projectId = request.projectId ?? null;
       vals.push(id);
       vals.push(projectId);
@@ -1129,9 +1771,11 @@ Return ONLY valid JSON array. Include only categories with count > 0:
     '/results/:testId/report.pdf',
     async (request, reply) => {
       const { testId } = request.params;
+      const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
-        `SELECT r.*, s.script FROM test_results r LEFT JOIN test_scripts s ON r.script_id = s.id WHERE r.test_id = $1`,
-        [testId]
+        `SELECT r.*, s.script FROM test_results r LEFT JOIN test_scripts s ON r.script_id = s.id
+         WHERE r.test_id = $1 AND ($2::uuid IS NULL OR r.project_id = $2::uuid)`,
+        [testId, projectId]
       );
       if (rows.length === 0) return reply.code(404).send({ error: 'Result not found' });
 

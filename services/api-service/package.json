@@ -6,8 +6,10 @@
     "@alt/shared": "*",
     "@fastify/cookie": "^11.0.0",
     "@fastify/cors": "^11.2.0",
+    "@fastify/rate-limit": "^11.0.0",
     "amqplib": "^0.10.0",
     "fastify": "^5.8.5",
+    "ioredis": "^5.4.1",
     "pg": "^8.20.0"
   },
   "devDependencies": {

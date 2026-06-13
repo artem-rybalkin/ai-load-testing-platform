@@ -12,7 +12,7 @@ interface Props {
   startedAt?: string | null;
 }
 
-const fmtElapsed = (iso: string, startedAt?: string | null): string => {
+export const fmtElapsed = (iso: string, startedAt?: string | null): string => {
   if (!startedAt) return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const secs = Math.round((new Date(iso).getTime() - new Date(startedAt).getTime()) / 1000);
   if (secs < 60) return `${secs}s`;
@@ -32,9 +32,9 @@ const TOOLTIP_STYLE = {
 
 const TICK = { fill: '#57606a', fontSize: 11, fontFamily: 'monospace' };
 
-const toKey = (name: string) => name.replace(/[^a-zA-Z0-9_]/g, '_');
+export const toKey = (name: string) => name.replace(/[^a-zA-Z0-9_]/g, '_');
 
-const labelFor = (stepNames: string[], prefix: string, rawName: string) => {
+export const labelFor = (stepNames: string[], prefix: string, rawName: string) => {
   const key = String(rawName).replace(new RegExp(`^${prefix}_`), '');
   return stepNames.find(n => toKey(n) === key) ?? rawName;
 };

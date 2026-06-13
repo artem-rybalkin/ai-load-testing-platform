@@ -2,6 +2,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
+import { useAuth } from '@/lib/AuthContext';
 
 interface EnvVar { key: string; value: string }
 
@@ -118,7 +119,7 @@ function QuickStatsPanel({ active, recent }: { active: ActiveTest[]; recent: Tes
   );
 }
 
-const DURATION_OPTIONS = ['30s', '1m', '2m', '5m', '10m', '30m'];
+const DURATION_OPTIONS = ['30s', '1m', '2m', '3m', '5m', '10m', '30m'];
 const toSecs = (d: string) => {
   const m = d.match(/^(\d+)(s|m|h)$/);
   if (!m) return 0;
@@ -132,6 +133,8 @@ const snapDuration = (secs: number) =>
 function HomeContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { user } = useAuth();
+  const isViewer = user?.role === 'viewer';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -171,6 +174,7 @@ function HomeContent() {
   const [suggestingSettings, setSuggestingSettings] = useState(false);
   const [settingsSuggestionNote, setSettingsSuggestionNote] = useState<string | null>(null);
   const [presetNameSuggestion, setPresetNameSuggestion] = useState<{ name: string; tags: string[] } | null>(null);
+  const [customHeaders, setCustomHeaders] = useState<EnvVar[]>([]);
 
   const applyDescriptionParams = (desc: string) => {
     const updates: Partial<typeof form> = {};
@@ -192,10 +196,10 @@ function HomeContent() {
     if (vusM) updates.vus = Math.min(100, Math.max(1, parseInt(vusM[1])));
     const sessM = desc.match(/\b(\d+)\s*(?:sessions?|browsers?|tabs?)\b/i);
     if (sessM) updates.sessions = Math.min(10, Math.max(1, parseInt(sessM[1])));
-    const durM = desc.match(/\b(?:full\s+)?duration[:\s]+(\d+)\s*(minutes?|mins?|seconds?|secs?|hours?|hrs?|[smh])\b|\b(\d+)\s*(?:minute|min|second|sec|hour|hr)s?\s+(?:duration|test|long)\b|\bfor\s+(\d+)\s*(minutes?|mins?|seconds?|secs?|hours?|hrs?|[smh])\b/i);
+    const durM = desc.match(/\b(?:full\s+)?duration[:\s]+(\d+)\s*(minutes?|mins?|seconds?|secs?|hours?|hrs?|[smh])\b|\b(\d+)\s*(?:minute|min|second|sec|hour|hr)s?\s+(?:duration|test|long)\b|\bfor\s+(\d+)\s*(minutes?|mins?|seconds?|secs?|hours?|hrs?|[smh])\b|\b(\d+)\s*(minutes?|mins?|hours?|hrs?|seconds?|secs?)\b/i);
     if (durM) {
-      const n = parseInt(durM[1] ?? durM[3] ?? durM[4]);
-      const u = (durM[2] ?? durM[5] ?? 'm').toLowerCase()[0];
+      const n = parseInt(durM[1] ?? durM[3] ?? durM[4] ?? durM[6]);
+      const u = (durM[2] ?? durM[5] ?? durM[7] ?? 'm').toLowerCase()[0];
       const secs = n * (u === 'h' ? 3600 : u === 'm' ? 60 : 1);
       updates.duration = snapDuration(secs);
     }
@@ -342,6 +346,12 @@ function HomeContent() {
     }
   };
 
+  const buildCustomHeaders = () => {
+    const map: Record<string, string> = {};
+    for (const h of customHeaders) { if (h.key) map[h.key] = h.value; }
+    return Object.keys(map).length > 0 ? map : undefined;
+  };
+
   const buildHttpOptions = () => {
     if (form.type === 'client-side') return undefined;
     const opts: Record<string, unknown> = {};
@@ -415,6 +425,7 @@ function HomeContent() {
   const handleSubmit = async () => {
     if (form.type === 'flow') {
       if (flowSteps.length === 0) { setError('Add at least one step to run a flow test'); return; }
+      if (flowSteps.length > 20) { setError(`Flow tests support a maximum of 20 steps — remove ${flowSteps.length - 20} step${flowSteps.length - 20 === 1 ? '' : 's'} before running`); return; }
       if (flowSteps.some(s => !s.url)) { setError('Every step must have a URL'); return; }
     } else if (!form.targetUrl && !(form.type === 'backend' && scriptMode === 'custom')) {
       setError('URL is required');
@@ -466,9 +477,10 @@ function HomeContent() {
       }
 
       const httpOpts = buildHttpOptions();
+      const customHeadersOpt = buildCustomHeaders();
       const options = form.type === 'backend'
-        ? { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}), ...(httpOpts ? { httpOptions: httpOpts } : {}) }
-        : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals };
+        ? { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}), ...(httpOpts ? { httpOptions: httpOpts } : {}), ...(customHeadersOpt ? { headers: customHeadersOpt } : {}) }
+        : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals, ...(customHeadersOpt ? { headers: customHeadersOpt } : {}) };
 
       const isCustomScript = form.type === 'backend' && scriptMode === 'custom' && customScript.trim();
       // In custom script mode the URL is optional — extract from the script or fall back to localhost
@@ -546,6 +558,10 @@ function HomeContent() {
                     <button
                       key={t.id}
                       onClick={() => {
+                        if (t.id !== form.type) {
+                          setThresholds(DEFAULT_THRESHOLDS);
+                          setThresholdSuggestionNote(null);
+                        }
                         setForm(f => ({ ...f, type: t.id }));
                         if (t.id !== 'backend') { setScriptMode('ai'); setCustomScript(''); }
                       }}
@@ -862,6 +878,39 @@ function HomeContent() {
                         </div>
                       </div>
                     )}
+
+                    {/* Custom headers — backend/browser only */}
+                    {form.type !== 'flow' && (
+                      <div className="pt-2 border-t border-[#eaeef2]">
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Custom Headers</label>
+                          <button type="button" onClick={() => setCustomHeaders(h => [...h, { key: '', value: '' }])} className="text-xs text-blue-600 hover:underline">+ add</button>
+                        </div>
+                        {customHeaders.map((h, i) => (
+                          <div key={i} className="flex gap-1 mb-1 items-center">
+                            <input
+                              type="text"
+                              placeholder="Header-Name"
+                              value={h.key}
+                              onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                              className="w-40 border border-[#d0d7de] rounded px-2 py-0.5 text-xs font-mono focus:outline-none focus:border-[#0969da]"
+                            />
+                            <span className="text-[#8c959f] text-xs">:</span>
+                            <input
+                              type="text"
+                              placeholder="value"
+                              value={h.value}
+                              onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                              className="flex-1 border border-[#d0d7de] rounded px-2 py-0.5 text-xs font-mono focus:outline-none focus:border-[#0969da]"
+                            />
+                            <button type="button" onClick={() => setCustomHeaders(hs => hs.filter((_, j) => j !== i))} className="text-[#8c959f] hover:text-[#cf222e] text-xs">✕</button>
+                          </div>
+                        ))}
+                        {customHeaders.length === 0 && (
+                          <p className="text-xs text-[#8c959f]">No custom headers. Sent with every request (e.g. API keys, auth tokens).</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -927,24 +976,30 @@ function HomeContent() {
             </div>
 
             {/* Action buttons */}
-            <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] flex gap-2">
-              <button
-                onClick={handleSubmit}
-                disabled={loading}
-                data-run-btn
-                className="flex-1 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {loading ? 'Creating…' : '▶ Run Test'}
-              </button>
-              <button
-                type="button"
-                onClick={handleSavePreset}
-                disabled={savingPreset}
-                className="px-3 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] disabled:opacity-50 transition-colors"
-              >
-                {savingPreset ? 'Saving…' : 'Save preset'}
-              </button>
-            </div>
+            {isViewer ? (
+              <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] text-[12px] text-[#57606a]">
+                Viewers cannot run tests or save presets.
+              </div>
+            ) : (
+              <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] flex gap-2">
+                <button
+                  onClick={handleSubmit}
+                  disabled={loading}
+                  data-run-btn
+                  className="flex-1 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {loading ? 'Creating…' : '▶ Run Test'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSavePreset}
+                  disabled={savingPreset}
+                  className="px-3 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] disabled:opacity-50 transition-colors"
+                >
+                  {savingPreset ? 'Saving…' : 'Save preset'}
+                </button>
+              </div>
+            )}
             {presetNameSuggestion && (
               <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] text-[#57606a] font-mono">✓ Saved as: <strong>{presetNameSuggestion.name}</strong></span>

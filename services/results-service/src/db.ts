@@ -176,12 +176,128 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`CREATE INDEX IF NOT EXISTS idx_test_scripts_project_id ON test_scripts(project_id)`);
     },
   },
+  {
+    version: 6,
+    name: 'users_team_members_sessions',
+    up: async (p) => {
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          email         TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          name          TEXT,
+          created_at    TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS team_members (
+          id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          team_id    UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role       VARCHAR(20) NOT NULL DEFAULT 'member' CHECK (role IN ('admin','member','viewer')),
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(team_id, user_id)
+        )
+      `);
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash  TEXT NOT NULL UNIQUE,
+          team_id     UUID REFERENCES projects(id) ON DELETE SET NULL,
+          created_at  TIMESTAMPTZ DEFAULT NOW(),
+          expires_at  TIMESTAMPTZ NOT NULL,
+          revoked_at  TIMESTAMPTZ
+        )
+      `);
+      await p.query(`CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id)`);
+      await p.query(`CREATE INDEX IF NOT EXISTS sessions_token_hash_idx ON sessions(token_hash)`);
+    },
+  },
+  {
+    version: 7,
+    name: 'team_quotas_and_gemini_usage',
+    up: async (p) => {
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS team_quotas (
+          id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          team_id                    UUID NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+          max_concurrent_tests       INTEGER NOT NULL,
+          max_vus_per_test           INTEGER NOT NULL,
+          max_test_duration_seconds  INTEGER NOT NULL,
+          max_scheduled_tests        INTEGER NOT NULL,
+          max_gemini_calls_per_day   INTEGER NOT NULL,
+          created_at                 TIMESTAMPTZ DEFAULT NOW(),
+          updated_at                 TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS gemini_usage (
+          team_id    UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          usage_date DATE NOT NULL DEFAULT CURRENT_DATE,
+          call_count INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (team_id, usage_date)
+        )
+      `);
+    },
+  },
+  {
+    version: 8,
+    name: 'organizations_and_team_api_keys',
+    up: async (p) => {
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS organizations (
+          id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name       TEXT NOT NULL UNIQUE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS org_members (
+          id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          org_id     UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role       VARCHAR(20) NOT NULL DEFAULT 'member' CHECK (role IN ('owner','admin','member')),
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(org_id, user_id)
+        )
+      `);
+      await p.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS org_id UUID REFERENCES organizations(id) ON DELETE SET NULL`);
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS team_api_keys (
+          id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          team_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          name         TEXT NOT NULL,
+          key_hash     TEXT NOT NULL UNIQUE,
+          created_at   TIMESTAMPTZ DEFAULT NOW(),
+          last_used_at TIMESTAMPTZ,
+          revoked_at   TIMESTAMPTZ
+        )
+      `);
+      await p.query(`CREATE INDEX IF NOT EXISTS team_api_keys_hash_idx ON team_api_keys(key_hash)`);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────
 
+// The postgres docker image restarts its server once after initdb completes;
+// a connection made during that window is reset. Retry the first query so
+// Testcontainers-based tests don't fail on that transient restart.
+const queryWithRetry = async (p: Pool, sql: string, retries = 5, delayMs = 1000): Promise<void> => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await p.query(sql);
+      return;
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+};
+
 export const createSchema = async (p: Pool): Promise<void> => {
-  await p.query(`
+  await queryWithRetry(p, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version    INTEGER PRIMARY KEY,
       name       TEXT NOT NULL,

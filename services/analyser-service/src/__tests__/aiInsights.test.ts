@@ -4,13 +4,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockGenerateContent = vi.fn();
 
-vi.mock('@google/generative-ai', () => ({
-  GoogleGenerativeAI: vi.fn().mockImplementation(() => ({
-    getGenerativeModel: vi.fn().mockReturnValue({
-      generateContent: mockGenerateContent,
-    }),
-  })),
-}));
+vi.mock('@google/generative-ai', () => {
+  class FakeGAI {
+    getGenerativeModel() {
+      return { generateContent: mockGenerateContent };
+    }
+  }
+  return { GoogleGenerativeAI: FakeGAI };
+});
 
 // Import after mock is registered
 import { generateAiInsights } from '../aiInsights';
@@ -230,5 +231,86 @@ describe('generateAiInsights — prompt includes key context', () => {
 
     const prompt = mockGenerateContent.mock.calls[0][0] as string;
     expect(prompt).toContain('None');
+  });
+});
+
+// ─── Performance — large flow payloads ────────────────────────────────────────
+
+describe('performance', () => {
+  // Build a synthetic flow result with a large stepMetrics[] array and a large
+  // statusCodes map, simulating a worst-case multi-step flow test.
+  const manyStepsMetrics: BackendMetrics = {
+    ...baseMetrics,
+    statusCodes: Array.from({ length: 50 }, (_, i) => [String(200 + i), 100 - i] as const)
+      .reduce((acc, [code, count]) => ({ ...acc, [code]: count }), {} as Record<string, number>),
+    stepMetrics: Array.from({ length: 50 }, (_, i) => ({
+      name: `Step ${i + 1}: action-${i}`,
+      avgResponseTime: 100 + i * 7,
+      p95ResponseTime: 200 + ((i * 37) % 1000), // varied, non-monotonic p95 for sort verification
+      requestsTotal: 1000 - i,
+      requestsFailed: i,
+    })),
+  };
+
+  it('builds the prompt for a 50-step flow within a generous time budget', async () => {
+    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+
+    const start = performance.now();
+    await generateAiInsights(makeCtx({ metrics: manyStepsMetrics }));
+    const elapsed = performance.now() - start;
+
+    // Prompt construction (buildPayload + formatMetrics + buildPrompt) is pure
+    // synchronous string work; even with 50 steps this should be near-instant.
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it('caps stepMetrics in the prompt to the top 5 by p95ResponseTime', async () => {
+    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+
+    await generateAiInsights(makeCtx({ metrics: manyStepsMetrics }));
+
+    const prompt = mockGenerateContent.mock.calls[0][0] as string;
+
+    // Compute expected top-5 steps by p95ResponseTime (descending), matching
+    // the sort+slice(0, 5) implemented in buildPayload's topStepsByP95.
+    const top5 = [...manyStepsMetrics.stepMetrics!]
+      .sort((a, b) => b.p95ResponseTime - a.p95ResponseTime)
+      .slice(0, 5);
+
+    const stepsLine = prompt.split('\n').find(line => line.startsWith('Top steps by p95:'));
+    expect(stepsLine).toBeDefined();
+
+    for (const step of top5) {
+      expect(stepsLine).toContain(step.name);
+    }
+
+    // A step that should NOT be in the top 5 must not appear in the steps line
+    const bottomStep = [...manyStepsMetrics.stepMetrics!]
+      .sort((a, b) => a.p95ResponseTime - b.p95ResponseTime)[0];
+    if (!top5.includes(bottomStep)) {
+      expect(stepsLine).not.toContain(bottomStep.name);
+    }
+
+    // Exactly 5 steps are listed (each step entry is comma-separated)
+    const entryCount = stepsLine!.replace('Top steps by p95: ', '').split(', ').length;
+    expect(entryCount).toBe(5);
+  });
+
+  it('includes the error breakdown line for a large statusCodes/error map without ballooning prompt size', async () => {
+    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+
+    const metricsWithErrors: BackendMetrics = {
+      ...manyStepsMetrics,
+      errorBreakdown: { success: 900, clientError: 50, serverError: 30, timeout: 15, networkError: 5 },
+    };
+
+    await generateAiInsights(makeCtx({ metrics: metricsWithErrors }));
+
+    const prompt = mockGenerateContent.mock.calls[0][0] as string;
+    expect(prompt).toContain('Error breakdown: 30 server (5xx), 50 client (4xx), 15 timeouts, 5 network');
+
+    // Even with 50 steps + error breakdown, the prompt stays well within a
+    // reasonable token budget (~4 chars/token; 20000 chars ≈ 5000 tokens).
+    expect(prompt.length).toBeLessThan(20000);
   });
 });

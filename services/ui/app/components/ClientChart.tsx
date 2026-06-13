@@ -34,7 +34,7 @@ const vitalThresholds = {
   tbt:  { good: 200,  poor: 600  },
 };
 
-const getVitalStatus = (key: string, value: number): 'good' | 'needs-improvement' | 'poor' => {
+export const getVitalStatus = (key: string, value: number): 'good' | 'needs-improvement' | 'poor' => {
   const t = vitalThresholds[key as keyof typeof vitalThresholds];
   if (!t) return value <= 0.1 ? 'good' : value <= 0.25 ? 'needs-improvement' : 'poor';
   if (value <= t.good) return 'good';
@@ -77,10 +77,10 @@ const InfoRow = ({ label, value }: { label: string; value: string | number }) =>
   </div>
 );
 
-const lhColor = (score: number) =>
+export const lhColor = (score: number) =>
   score >= 90 ? '#1f883d' : score >= 50 ? '#9a6700' : '#cf222e';
 
-const lhCls = (score: number) =>
+export const lhCls = (score: number) =>
   score >= 90 ? 'text-[#1a7f37] bg-[#dafbe1]' : score >= 50 ? 'text-[#9a6700] bg-[#fff8c5]' : 'text-[#cf222e] bg-[#ffebe9]';
 
 const ScoreGauge = ({ score, label }: { score: number; label: string }) => {

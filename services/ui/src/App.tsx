@@ -18,6 +18,8 @@ const ComparePage      = lazy(() => import('@/app/results/compare/page'));
 const PresetsPage      = lazy(() => import('@/app/presets/page'));
 const SchedulesPage    = lazy(() => import('@/app/schedules/page'));
 const WebhooksPage     = lazy(() => import('@/app/webhooks/page'));
+const TeamPage         = lazy(() => import('@/app/team/page'));
+const OrgPage          = lazy(() => import('@/app/org/page'));
 const LoginPage        = lazy(() => import('@/app/login/page'));
 
 function AuthGate() {
@@ -65,6 +67,8 @@ export default function App() {
                   <Route path="/presets"         element={<PresetsPage />} />
                   <Route path="/schedules"       element={<SchedulesPage />} />
                   <Route path="/webhooks"        element={<WebhooksPage />} />
+                  <Route path="/team"            element={<TeamPage />} />
+                  <Route path="/org"             element={<OrgPage />} />
                 </Route>
               </Route>
             </Routes>

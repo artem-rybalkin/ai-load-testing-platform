@@ -1,6 +1,6 @@
-import type { ExtractSource, ExtractRule, FlowStep } from '@alt/shared';
+import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole } from '@alt/shared';
 
-export type { ExtractSource, ExtractRule, FlowStep };
+export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole };
 
 // Base paths — all routed through Vite proxy (same-origin, cookies work)
 const API_URL     = '/api';
@@ -520,20 +520,173 @@ export const suggestThresholds = async (url: string, type = 'backend'): Promise<
   return res.json();
 };
 
-export interface AuthUser { projectId: string; username: string; projectName: string }
+const authJson = async (res: Response): Promise<SessionUser> => {
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+};
 
-export const login = (username: string, projectName: string): Promise<AuthUser> =>
+export const register = (email: string, password: string, teamName: string, name?: string): Promise<SessionUser> =>
+  f(`${RESULTS_URL}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, teamName, name }),
+  }).then(authJson);
+
+export const login = (email: string, password: string): Promise<SessionUser> =>
   f(`${RESULTS_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, projectName }),
-  }).then(r => r.json());
+    body: JSON.stringify({ email, password }),
+  }).then(authJson);
 
 export const logout = (): Promise<void> =>
   f(`${RESULTS_URL}/auth/logout`, { method: 'POST' }).then(() => undefined);
 
-export const getMe = (): Promise<AuthUser> =>
+export const getMe = (): Promise<SessionUser> =>
   f(`${RESULTS_URL}/auth/me`).then(r => {
     if (!r.ok) throw new Error('Not authenticated');
     return r.json();
   });
+
+export const switchTeam = (teamId: string): Promise<SessionUser> =>
+  f(`${RESULTS_URL}/auth/switch-team`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teamId }),
+  }).then(authJson);
+
+export interface TeamMemberRow { userId: string; email: string; name: string | null; role: TeamRole }
+
+export const getTeamMembers = (teamId: string): Promise<TeamMemberRow[]> =>
+  f(`${RESULTS_URL}/teams/${teamId}/members`).then(r => r.json());
+
+export const addTeamMember = (teamId: string, email: string, role: TeamRole = 'member'): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, role }),
+  }).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+
+export const updateTeamMemberRole = (teamId: string, userId: string, role: TeamRole): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/members/${userId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  }).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+
+export const removeTeamMember = (teamId: string, userId: string): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/members/${userId}`, { method: 'DELETE' }).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+
+export const getTeamQuota = (teamId: string): Promise<{ quota: TeamQuota; usage: TeamUsage }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/quotas`).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+
+export const updateTeamQuota = (teamId: string, quota: Partial<TeamQuota>): Promise<{ quota: TeamQuota }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/quotas`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(quota),
+  }).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+
+// ── Organizations ────────────────────────────────────────────────────────────
+
+export interface OrgMemberRow { userId: string; email: string; name: string | null; role: OrgRole }
+export interface OrgTeamSummary { id: string; name: string; quota: TeamQuota; usage: TeamUsage }
+export interface OrgDetail {
+  org: { id: string; name: string; createdAt: string };
+  members: OrgMemberRow[];
+  teams: OrgTeamSummary[];
+  role: OrgRole;
+}
+
+const orgJson = <T>() => async (r: Response): Promise<T> => {
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${r.status}`);
+  }
+  return r.json();
+};
+
+export const createOrg = (name: string): Promise<{ id: string; name: string; role: OrgRole }> =>
+  f(`${RESULTS_URL}/orgs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then(orgJson<{ id: string; name: string; role: OrgRole }>());
+
+export const getOrg = (orgId: string): Promise<OrgDetail> =>
+  f(`${RESULTS_URL}/orgs/${orgId}`).then(orgJson<OrgDetail>());
+
+export const addOrgMember = (orgId: string, email: string, role: OrgRole = 'member'): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/orgs/${orgId}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, role }),
+  }).then(orgJson<{ success: boolean }>());
+
+export const updateOrgMemberRole = (orgId: string, userId: string, role: OrgRole): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/orgs/${orgId}/members/${userId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  }).then(orgJson<{ success: boolean }>());
+
+export const removeOrgMember = (orgId: string, userId: string): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/orgs/${orgId}/members/${userId}`, { method: 'DELETE' }).then(orgJson<{ success: boolean }>());
+
+export const createOrgTeam = (orgId: string, name: string): Promise<{ id: string; name: string; role: TeamRole }> =>
+  f(`${RESULTS_URL}/orgs/${orgId}/teams`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then(orgJson<{ id: string; name: string; role: TeamRole }>());
+
+// ── Per-team API keys ──────────────────────────────────────────────────────────
+
+export interface TeamApiKeyRow { id: string; name: string; createdAt: string; lastUsedAt: string | null; revoked: boolean }
+export interface TeamApiKeyCreated { id: string; name: string; key: string; createdAt: string }
+
+export const getTeamApiKeys = (teamId: string): Promise<TeamApiKeyRow[]> =>
+  f(`${RESULTS_URL}/teams/${teamId}/api-keys`).then(orgJson<TeamApiKeyRow[]>());
+
+export const createTeamApiKey = (teamId: string, name: string): Promise<TeamApiKeyCreated> =>
+  f(`${RESULTS_URL}/teams/${teamId}/api-keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then(orgJson<TeamApiKeyCreated>());
+
+export const revokeTeamApiKey = (teamId: string, keyId: string): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/api-keys/${keyId}`, { method: 'DELETE' }).then(orgJson<{ success: boolean }>());

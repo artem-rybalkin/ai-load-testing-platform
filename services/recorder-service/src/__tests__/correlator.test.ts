@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { detectCorrelations, suggestStepNames, suggestIgnorePatterns } from '../correlator';
+import { detectCorrelations, suggestStepNames, suggestIgnorePatterns, detectDuplicateSteps } from '../correlator';
 import type { RecordedRequest, FlowStep } from '@alt/shared';
 
 // ─── Mock Gemini (same pattern as generator.test.ts) ─────────────────────────
@@ -301,6 +301,149 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
   });
 });
 
+// ─── {{varName}} substitution in consuming steps ──────────────────────────────
+
+describe('detectCorrelations — {{varName}} substitution', () => {
+  it('replaces the literal jsonpath value with {{varName}} in a consuming header', async () => {
+    const requests = [
+      makeRequest({ responseBody: '{"access_token":"tok123","user_id":42}' }),
+      makeRequest({ url: 'https://api.example.com/profile', responseBody: undefined }),
+    ];
+    const steps = [
+      makeStep('Login', 'https://api.example.com/login'),
+      { ...makeStep('Get profile', 'https://api.example.com/profile'), headers: { Authorization: 'Bearer tok123' } },
+    ];
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: {
+        text: () => JSON.stringify({
+          correlations: [{ sourceStepIndex: 0, variableName: 'access_token', source: 'jsonpath', expression: '$.access_token', usedInStepIndices: [1] }],
+        }),
+      },
+    });
+
+    const result = await detectCorrelations(requests, steps);
+    expect(result[0].extract).toEqual({ access_token: { source: 'jsonpath', expression: '$.access_token' } });
+    expect(result[1].headers!.Authorization).toBe('Bearer {{access_token}}');
+  });
+
+  it('replaces the literal value with {{varName}} in a consuming body', async () => {
+    const requests = [
+      makeRequest({ responseBody: '{"session_id":"sess-abc-456"}' }),
+      makeRequest({ url: 'https://api.example.com/checkout', responseBody: undefined }),
+    ];
+    const steps = [
+      makeStep('Login', 'https://api.example.com/login'),
+      { ...makeStep('Checkout', 'https://api.example.com/checkout'), body: '{"sessionId":"sess-abc-456","item":"sku1"}' },
+    ];
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: {
+        text: () => JSON.stringify({
+          correlations: [{ sourceStepIndex: 0, variableName: 'session_id', source: 'jsonpath', expression: '$.session_id', usedInStepIndices: [1] }],
+        }),
+      },
+    });
+
+    const result = await detectCorrelations(requests, steps);
+    expect(result[1].body).toBe('{"sessionId":"{{session_id}}","item":"sku1"}');
+  });
+
+  it('does not substitute when the extracted value cannot be resolved', async () => {
+    const requests = [
+      makeRequest({ responseBody: '{"other_field":"value"}' }),
+      makeRequest({ url: 'https://api.example.com/profile', responseBody: undefined }),
+    ];
+    const steps = [
+      makeStep('Login', 'https://api.example.com/login'),
+      { ...makeStep('Get profile', 'https://api.example.com/profile'), headers: { Authorization: 'Bearer tok123' } },
+    ];
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: {
+        text: () => JSON.stringify({
+          correlations: [{ sourceStepIndex: 0, variableName: 'access_token', source: 'jsonpath', expression: '$.access_token', usedInStepIndices: [1] }],
+        }),
+      },
+    });
+
+    const result = await detectCorrelations(requests, steps);
+    expect(result[1].headers!.Authorization).toBe('Bearer tok123');
+  });
+
+  it('does not substitute values shorter than 3 characters', async () => {
+    const requests = [
+      makeRequest({ responseBody: '{"id":42}' }),
+      makeRequest({ url: 'https://api.example.com/items/42', responseBody: undefined }),
+    ];
+    const steps = [
+      makeStep('Create item', 'https://api.example.com/items'),
+      { ...makeStep('Get item', 'https://api.example.com/items/42'), headers: { 'X-Item-Id': '42' } },
+    ];
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: {
+        text: () => JSON.stringify({
+          correlations: [{ sourceStepIndex: 0, variableName: 'item_id', source: 'jsonpath', expression: '$.id', usedInStepIndices: [1] }],
+        }),
+      },
+    });
+
+    const result = await detectCorrelations(requests, steps);
+    expect(result[1].headers!['X-Item-Id']).toBe('42');
+  });
+
+  it('re-adds a stripped Authorization header to the consuming step when the recorded request used it', async () => {
+    // toFlowSteps() strips Authorization from step.headers, but the raw RecordedRequest
+    // still carries it — the correlator should restore it as {{varName}}.
+    const requests = [
+      makeRequest({ responseBody: '{"access_token":"tok123","user_id":42}' }),
+      makeRequest({
+        url: 'https://api.example.com/bag/count',
+        headers: { Authorization: 'Bearer tok123' },
+        responseBody: undefined,
+      }),
+    ];
+    const steps = [
+      makeStep('Login', 'https://api.example.com/login'),
+      makeStep('Get bag count', 'https://api.example.com/bag/count'), // headers: {} — stripped by toFlowSteps
+    ];
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: {
+        text: () => JSON.stringify({
+          correlations: [{ sourceStepIndex: 0, variableName: 'access_token', source: 'jsonpath', expression: '$.access_token', usedInStepIndices: [1] }],
+        }),
+      },
+    });
+
+    const result = await detectCorrelations(requests, steps);
+    expect(result[1].headers!.Authorization).toBe('Bearer {{access_token}}');
+  });
+
+  it('extracts a cookie value and substitutes it in a later header', async () => {
+    const requests = [
+      makeRequest({ responseHeaders: { 'set-cookie': 'session=abc123def; Path=/; HttpOnly' }, responseBody: undefined }),
+      makeRequest({ url: 'https://api.example.com/profile', responseBody: undefined }),
+    ];
+    const steps = [
+      makeStep('Login', 'https://api.example.com/login'),
+      { ...makeStep('Get profile', 'https://api.example.com/profile'), headers: { Cookie: 'session=abc123def' } },
+    ];
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: {
+        text: () => JSON.stringify({
+          correlations: [{ sourceStepIndex: 0, variableName: 'session', source: 'cookie', expression: 'session', usedInStepIndices: [1] }],
+        }),
+      },
+    });
+
+    const result = await detectCorrelations(requests, steps);
+    expect(result[1].headers!.Cookie).toBe('session={{session}}');
+  });
+});
+
 // ─── suggestStepNames ─────────────────────────────────────────────────────────
 
 describe('suggestStepNames', () => {
@@ -386,5 +529,135 @@ describe('suggestIgnorePatterns', () => {
   it('returns empty array when requests list is empty', async () => {
     const result = await suggestIgnorePatterns([]);
     expect(result).toEqual([]);
+  });
+});
+
+// ─── performance ───────────────────────────────────────────────────────────────
+
+describe('performance', () => {
+  it('applies 10 correlations over a large (50KB) response body within budget', async () => {
+    // Build a 50KB JSON response body containing 10 distinct extractable values.
+    const fields: Record<string, string> = {};
+    for (let i = 0; i < 10; i++) {
+      // Each value is >= 3 chars so substitution applies (substituteValue skips < 3 chars).
+      fields[`field_${i}`] = `value-${i}-${'x'.repeat(20)}`;
+    }
+    // Pad the body to ~50KB with a large filler field.
+    fields.filler = 'p'.repeat(50_000);
+    const responseBody = JSON.stringify(fields);
+
+    const requests = [
+      makeRequest({ url: 'https://api.example.com/login', responseBody }),
+      {
+        ...makeRequest({ url: 'https://api.example.com/consume', responseBody: undefined }),
+      },
+    ];
+
+    // Consuming step references all 10 extracted values in its headers/body so
+    // substituteValue runs for each correlation.
+    const headers: Record<string, string> = {};
+    for (let i = 0; i < 10; i++) {
+      headers[`X-Field-${i}`] = fields[`field_${i}`];
+    }
+    const steps = [
+      makeStep('Login', 'https://api.example.com/login'),
+      { ...makeStep('Consume', 'https://api.example.com/consume'), headers, body: JSON.stringify(headers) },
+    ];
+
+    const correlations = Array.from({ length: 10 }, (_, i) => ({
+      sourceStepIndex: 0,
+      variableName: `field_${i}`,
+      source: 'jsonpath' as const,
+      expression: `$.field_${i}`,
+      usedInStepIndices: [1],
+    }));
+
+    const mock = await getMock();
+    mock.mockResolvedValueOnce({
+      response: { text: () => JSON.stringify({ correlations }) },
+    });
+
+    const start = performance.now();
+    const result = await detectCorrelations(requests, steps);
+    const elapsed = performance.now() - start;
+
+    // All 10 extract rules should be applied to the source step.
+    expect(Object.keys(result[0].extract ?? {})).toHaveLength(10);
+    expect(elapsed).toBeLessThan(100);
+  });
+});
+
+// ─── detectDuplicateSteps ──────────────────────────────────────────────────────
+
+describe('detectDuplicateSteps', () => {
+  it('returns no suggestions when there are no duplicate endpoints', () => {
+    const steps = [
+      makeStep('Login', 'https://api.example.com/login'),
+      makeStep('Get profile', 'https://api.example.com/profile'),
+    ];
+    expect(detectDuplicateSteps(steps)).toEqual([]);
+  });
+
+  it('returns no suggestions for a single step', () => {
+    const steps = [makeStep('Login', 'https://api.example.com/login')];
+    expect(detectDuplicateSteps(steps)).toEqual([]);
+  });
+
+  it('returns an empty array for an empty steps list', () => {
+    expect(detectDuplicateSteps([])).toEqual([]);
+  });
+
+  it('detects two calls to the same endpoint with a varying query param', () => {
+    const steps = [
+      makeStep('Get item 1', 'https://api.example.com/items?id=1'),
+      makeStep('Get item 2', 'https://api.example.com/items?id=2'),
+    ];
+    const result = detectDuplicateSteps(steps);
+    expect(result).toHaveLength(1);
+    expect(result[0].indices).toEqual([0, 1]);
+    expect(result[0].commonPath).toBe('https://api.example.com/items');
+    expect(result[0].paramKey).toBe('id');
+    expect(result[0].suggestion).toContain('Steps 1, 2');
+    expect(result[0].suggestion).toContain('id');
+  });
+
+  it('does not flag duplicates when method differs even if path is the same', () => {
+    const steps = [
+      { ...makeStep('Get item', 'https://api.example.com/items/1'), method: 'GET' as const },
+      { ...makeStep('Delete item', 'https://api.example.com/items/1'), method: 'DELETE' as const },
+    ];
+    expect(detectDuplicateSteps(steps)).toEqual([]);
+  });
+
+  it('groups by exact pathname when query params are identical (no varying key)', () => {
+    const steps = [
+      makeStep('Search A', 'https://api.example.com/search?q=foo'),
+      makeStep('Search B', 'https://api.example.com/search?q=foo'),
+    ];
+    const result = detectDuplicateSteps(steps);
+    expect(result).toHaveLength(1);
+    expect(result[0].paramKey).toBeUndefined();
+    expect(result[0].suggestion).not.toContain('with different');
+  });
+
+  it('handles three or more steps hitting the same endpoint', () => {
+    const steps = [
+      makeStep('Get item 1', 'https://api.example.com/items?id=1'),
+      makeStep('Get item 2', 'https://api.example.com/items?id=2'),
+      makeStep('Get item 3', 'https://api.example.com/items?id=3'),
+    ];
+    const result = detectDuplicateSteps(steps);
+    expect(result).toHaveLength(1);
+    expect(result[0].indices).toEqual([0, 1, 2]);
+    expect(result[0].suggestion).toContain('Steps 1, 2, 3');
+  });
+
+  it('skips steps with invalid URLs without throwing', () => {
+    const steps = [
+      makeStep('Bad URL', 'not-a-valid-url'),
+      makeStep('Get profile', 'https://api.example.com/profile'),
+    ];
+    expect(() => detectDuplicateSteps(steps)).not.toThrow();
+    expect(detectDuplicateSteps(steps)).toEqual([]);
   });
 });

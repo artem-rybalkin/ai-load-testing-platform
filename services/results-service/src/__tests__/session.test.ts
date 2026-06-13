@@ -1,76 +1,118 @@
-import { describe, it, expect } from 'vitest';
-import { signSession, verifySession, SessionPayload } from '../session';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { Pool } from 'pg';
+import { createSchema } from '../db';
+import { createSession, getSession, revokeSession, switchSessionTeam } from '../session';
 
-const SECRET = 'test-secret-key';
+let container: StartedPostgreSqlContainer;
+let pool: Pool;
 
-const payload: SessionPayload = {
-  projectId: 'proj-uuid-123',
-  username: 'alice',
-  projectName: 'my-project',
-};
+let userId: string;
+let teamAId: string;
+let teamBId: string;
 
-describe('signSession', () => {
-  it('produces a string with two dot-separated parts', () => {
-    const token = signSession(payload, SECRET);
-    const parts = token.split('.');
-    expect(parts.length).toBe(2);
-    expect(parts[0].length).toBeGreaterThan(0);
-    expect(parts[1].length).toBeGreaterThan(0);
+beforeAll(async () => {
+  container = await new PostgreSqlContainer('postgres:16-alpine').start();
+  pool = new Pool({ connectionString: container.getConnectionUri() });
+  await createSchema(pool);
+}, 60_000);
+
+afterAll(async () => {
+  await pool.end();
+  await container.stop();
+});
+
+beforeEach(async () => {
+  await pool.query('TRUNCATE sessions, team_members, users, projects CASCADE');
+
+  const userResult = await pool.query<{ id: string }>(
+    `INSERT INTO users (email, password_hash, name) VALUES ('alice@example.com', 'hash', 'Alice') RETURNING id`
+  );
+  userId = userResult.rows[0].id;
+
+  const teamA = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-a') RETURNING id`);
+  teamAId = teamA.rows[0].id;
+
+  const teamB = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-b') RETURNING id`);
+  teamBId = teamB.rows[0].id;
+
+  await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamAId, userId]);
+  await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamBId, userId]);
+});
+
+describe('createSession / getSession', () => {
+  it('creates a session and returns a raw token', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    expect(typeof token).toBe('string');
+    expect(token.length).toBeGreaterThan(0);
   });
 
-  it('encodes the payload in the first part (base64url)', () => {
-    const token = signSession(payload, SECRET);
-    const dataPart = token.split('.')[0];
-    const decoded = JSON.parse(Buffer.from(dataPart, 'base64url').toString());
-    expect(decoded).toEqual(payload);
+  it('looks up a valid session by token', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    const session = await getSession(pool, token);
+    expect(session).not.toBeNull();
+    expect(session?.userId).toBe(userId);
+    expect(session?.teamId).toBe(teamAId);
+    expect(session?.expiresAt).toBeInstanceOf(Date);
   });
 
-  it('produces different tokens for different secrets', () => {
-    const t1 = signSession(payload, 'secret-a');
-    const t2 = signSession(payload, 'secret-b');
-    expect(t1).not.toBe(t2);
+  it('stores only a hash of the token, not the raw token', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    const { rows } = await pool.query('SELECT token_hash FROM sessions WHERE user_id = $1', [userId]);
+    expect(rows[0].token_hash).not.toBe(token);
+    expect(rows[0].token_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('supports a null teamId', async () => {
+    const token = await createSession(pool, userId, null);
+    const session = await getSession(pool, token);
+    expect(session?.teamId).toBeNull();
+  });
+
+  it('returns null for an unknown token', async () => {
+    const session = await getSession(pool, 'not-a-real-token');
+    expect(session).toBeNull();
+  });
+
+  it('returns null when token is undefined', async () => {
+    const session = await getSession(pool, undefined);
+    expect(session).toBeNull();
+  });
+
+  it('returns null for an expired session', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    await pool.query(
+      `UPDATE sessions SET expires_at = NOW() - INTERVAL '1 day' WHERE user_id = $1`,
+      [userId]
+    );
+    const session = await getSession(pool, token);
+    expect(session).toBeNull();
   });
 });
 
-describe('verifySession', () => {
-  it('returns the payload for a valid signed token', () => {
-    const token = signSession(payload, SECRET);
-    const result = verifySession(token, SECRET);
-    expect(result).toEqual(payload);
+describe('revokeSession', () => {
+  it('makes a previously valid session invalid', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    expect(await getSession(pool, token)).not.toBeNull();
+
+    await revokeSession(pool, token);
+    expect(await getSession(pool, token)).toBeNull();
   });
 
-  it('returns null when cookie is undefined', () => {
-    expect(verifySession(undefined, SECRET)).toBeNull();
+  it('is a no-op for an undefined token', async () => {
+    await expect(revokeSession(pool, undefined)).resolves.toBeUndefined();
+  });
+});
+
+describe('switchSessionTeam', () => {
+  it('updates the current team for a session', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    await switchSessionTeam(pool, token, teamBId);
+    const session = await getSession(pool, token);
+    expect(session?.teamId).toBe(teamBId);
   });
 
-  it('returns null when cookie is an empty string', () => {
-    expect(verifySession('', SECRET)).toBeNull();
-  });
-
-  it('returns null when there is no dot separator', () => {
-    expect(verifySession('nodothere', SECRET)).toBeNull();
-  });
-
-  it('returns null when the signature is tampered', () => {
-    const token = signSession(payload, SECRET);
-    const tampered = token.slice(0, -4) + 'xxxx';
-    expect(verifySession(tampered, SECRET)).toBeNull();
-  });
-
-  it('returns null when verified with a different secret', () => {
-    const token = signSession(payload, SECRET);
-    expect(verifySession(token, 'different-secret')).toBeNull();
-  });
-
-  it('returns null when the data portion is invalid base64url', () => {
-    const fakeToken = '!!!invalid!!!.somesignature';
-    expect(verifySession(fakeToken, SECRET)).toBeNull();
-  });
-
-  it('returns null when the signature length does not match expected', () => {
-    const token = signSession(payload, SECRET);
-    const [data] = token.split('.');
-    const shortSig = token + '.extra'; // makes the sig too long
-    expect(verifySession(`${data}.short`, SECRET)).toBeNull();
+  it('is a no-op for an undefined token', async () => {
+    await expect(switchSessionTeam(pool, undefined, teamBId)).resolves.toBeUndefined();
   });
 });

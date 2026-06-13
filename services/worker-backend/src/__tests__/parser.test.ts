@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseK6Output, aggregateWindow, parseK6Errors, parseK6GroupMetrics } from '../parser';
+import { parseK6Output, aggregateWindow, parseK6Errors, parseK6GroupMetrics, parseK6JsonOutput, LIVE_WINDOW_SEC } from '../parser';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -151,6 +151,75 @@ http_req_duration..........: avg=200ms min=100ms med=180ms max=400ms p(90)=300ms
     expect(result.requestsFailed).toBe(Math.round(1000000 * 0.01 / 100));
     expect(result.rps).toBeCloseTo(3333.33, 1);
   });
+
+  it('returns zero percentiles when the http_req_duration line has no avg=/p()= values', () => {
+    const malformed = `
+http_reqs...................: 42     1.5/s
+http_req_failed................: 0.00% 0 out of 42
+http_req_duration..........: min=100ms max=500ms
+    `;
+
+    const result = parseK6Output(malformed);
+
+    expect(result.requestsTotal).toBe(42);
+    expect(result.avgResponseTime).toBe(0);
+    expect(result.p50ResponseTime).toBe(0);
+    expect(result.p95ResponseTime).toBe(0);
+    expect(result.p99ResponseTime).toBe(0);
+  });
+
+  it('returns zero p50 when neither p(50)= nor med= is present', () => {
+    const noMed = `
+http_reqs...................: 10     1/s
+http_req_failed................: 0.00% 0 out of 10
+http_req_duration..........: avg=200ms min=100ms max=500ms p(90)=350ms p(95)=400ms p(99)=450ms
+    `;
+
+    const result = parseK6Output(noMed);
+
+    expect(result.avgResponseTime).toBe(200);
+    expect(result.p50ResponseTime).toBe(0);
+    expect(result.p95ResponseTime).toBe(400);
+    expect(result.p99ResponseTime).toBe(450);
+  });
+
+  it('falls back to med= for p50 when p(50)= is absent', () => {
+    const withMed = `
+http_reqs...................: 10     1/s
+http_req_failed................: 0.00% 0 out of 10
+http_req_duration..........: avg=200ms min=100ms med=180ms max=500ms p(90)=350ms p(95)=400ms p(99)=450ms
+    `;
+
+    const result = parseK6Output(withMed);
+
+    expect(result.p50ResponseTime).toBe(180);
+  });
+
+  it('does not crash and returns zero rps/requestsTotal when http_reqs line is entirely missing', () => {
+    const noReqsLine = `
+http_req_duration..........: avg=200ms min=100ms med=180ms max=500ms p(90)=350ms p(95)=400ms p(99)=450ms
+    `;
+
+    const result = parseK6Output(noReqsLine);
+
+    expect(result.requestsTotal).toBe(0);
+    expect(result.rps).toBe(0);
+    // avg/percentiles still parsed from http_req_duration line even with no http_reqs
+    expect(result.avgResponseTime).toBe(200);
+  });
+
+  it('does not produce NaN when given garbage/non-numeric input', () => {
+    const garbage = 'completely unrelated text with no metrics whatsoever\n!!! @@@ ###';
+
+    const result = parseK6Output(garbage);
+
+    expect(Number.isNaN(result.requestsTotal)).toBe(false);
+    expect(Number.isNaN(result.avgResponseTime)).toBe(false);
+    expect(Number.isNaN(result.p95ResponseTime)).toBe(false);
+    expect(Number.isNaN(result.rps)).toBe(false);
+    expect(result.requestsTotal).toBe(0);
+    expect(result.avgResponseTime).toBe(0);
+  });
 });
 
 // ─── aggregateWindow ──────────────────────────────────────────────────────────
@@ -247,6 +316,73 @@ describe('aggregateWindow', () => {
     expect(result).not.toBeNull();
     expect(result!.vus).toBe(15);
     expect(result!.avgResponseTime).toBe(0);
+  });
+
+  // ─── per-step stepMetrics branch ────────────────────────────────────────────
+
+  const makeGroupJsonPoint = (metric: string, value: number, group: string) =>
+    JSON.stringify({ type: 'Point', metric, data: { value, time: new Date().toISOString(), tags: { group: `::${group}` } } });
+
+  it('computes stepMetrics for multiple groups with avgResponseTime, rps and errorRate', () => {
+    const lines = [
+      // Login: 2 durations, 2 reqs, 0 failures
+      makeGroupJsonPoint('http_req_duration', 100, 'Login'),
+      makeGroupJsonPoint('http_req_duration', 200, 'Login'),
+      makeGroupJsonPoint('http_reqs', 1, 'Login'),
+      makeGroupJsonPoint('http_reqs', 1, 'Login'),
+      makeGroupJsonPoint('http_req_failed', 0, 'Login'),
+      makeGroupJsonPoint('http_req_failed', 0, 'Login'),
+      // Checkout: 2 durations, 4 reqs, 1 failure (avg failed value = 0.5)
+      makeGroupJsonPoint('http_req_duration', 300, 'Checkout'),
+      makeGroupJsonPoint('http_req_duration', 500, 'Checkout'),
+      makeGroupJsonPoint('http_reqs', 1, 'Checkout'),
+      makeGroupJsonPoint('http_reqs', 1, 'Checkout'),
+      makeGroupJsonPoint('http_reqs', 1, 'Checkout'),
+      makeGroupJsonPoint('http_reqs', 1, 'Checkout'),
+      makeGroupJsonPoint('http_req_failed', 1, 'Checkout'),
+      makeGroupJsonPoint('http_req_failed', 0, 'Checkout'),
+    ];
+
+    const result = aggregateWindow(lines);
+
+    expect(result).not.toBeNull();
+    expect(result!.stepMetrics).toBeDefined();
+    const byName = Object.fromEntries(result!.stepMetrics!.map(s => [s.name, s]));
+
+    expect(byName['Login']).toBeDefined();
+    expect(byName['Login'].avgResponseTime).toBe(150); // avg(100, 200)
+    expect(byName['Login'].rps).toBeCloseTo(2 / LIVE_WINDOW_SEC, 2);
+    expect(byName['Login'].errorRate).toBe(0);
+
+    expect(byName['Checkout']).toBeDefined();
+    expect(byName['Checkout'].avgResponseTime).toBe(400); // avg(300, 500)
+    expect(byName['Checkout'].rps).toBeCloseTo(4 / LIVE_WINDOW_SEC, 2);
+    expect(byName['Checkout'].errorRate).toBeCloseTo(50, 1); // avg(1, 0) * 100
+  });
+
+  it('falls back to duration count for rps and 0 errorRate when http_req_failed points are absent for a group', () => {
+    const lines = [
+      makeGroupJsonPoint('http_req_duration', 100, 'Login'),
+      makeGroupJsonPoint('http_req_duration', 200, 'Login'),
+    ];
+
+    const result = aggregateWindow(lines);
+
+    expect(result!.stepMetrics).toEqual([
+      { name: 'Login', avgResponseTime: 150, rps: parseFloat((2 / LIVE_WINDOW_SEC).toFixed(2)), errorRate: 0 },
+    ]);
+  });
+
+  it('omits stepMetrics entirely when no group-tagged points exist', () => {
+    const lines = [
+      makeJsonPoint('vus', 5),
+      makeJsonPoint('http_req_duration', 100),
+      makeJsonPoint('http_reqs', 1),
+    ];
+
+    const result = aggregateWindow(lines);
+
+    expect(result!.stepMetrics).toBeUndefined();
   });
 });
 
@@ -501,5 +637,125 @@ describe('parseK6GroupMetrics', () => {
     const result = parseK6GroupMetrics(lines);
     expect(result[0].avgResponseTime).toBe(999);
     expect(result[0].p95ResponseTime).toBe(999);
+  });
+});
+
+// ─── performance ───────────────────────────────────────────────────────────
+//
+// Regression guards (not strict benchmarks): synthetic k6 JSON-lines output
+// spanning multiple step groups, sized at 1,000 and 10,000 lines, to ensure
+// the single-pass parsers and live aggregation stay well within budget even
+// for long/high-VU runs that emit large numbers of points.
+
+describe('performance', () => {
+  const STEP_GROUPS = ['Login', 'Browse', 'AddToCart', 'Checkout', 'Logout', 'Search', 'Profile', 'Wishlist'];
+
+  /** Generates `count` k6 JSON-lines, cycling through http_reqs/http_req_duration/http_req_failed
+   *  metrics and distributing points across STEP_GROUPS. */
+  const makeSyntheticK6Lines = (count: number): string[] => {
+    const lines: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const group = STEP_GROUPS[i % STEP_GROUPS.length];
+      const time = new Date().toISOString();
+      switch (i % 3) {
+        case 0:
+          lines.push(JSON.stringify({
+            type: 'Point', metric: 'http_reqs',
+            data: { value: 1, time, tags: { group: `::${group}`, status: i % 20 === 0 ? '500' : '200' } },
+          }));
+          break;
+        case 1:
+          lines.push(JSON.stringify({
+            type: 'Point', metric: 'http_req_duration',
+            data: { value: 50 + (i % 450), time, tags: { group: `::${group}` } },
+          }));
+          break;
+        default:
+          lines.push(JSON.stringify({
+            type: 'Point', metric: 'http_req_failed',
+            data: { value: i % 25 === 0 ? 1 : 0, time, tags: { group: `::${group}`, error_code: i % 25 === 0 ? '1020' : '' } },
+          }));
+      }
+    }
+    return lines;
+  };
+
+  it('parseK6JsonOutput handles 1,000 lines within budget', () => {
+    const lines = makeSyntheticK6Lines(1000);
+    const content = lines.join('\n');
+
+    const start = performance.now();
+    const result = parseK6JsonOutput(content);
+    const elapsed = performance.now() - start;
+
+    expect(result.stepMetrics.length).toBe(STEP_GROUPS.length);
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it('parseK6JsonOutput handles 10,000 lines within budget', () => {
+    const lines = makeSyntheticK6Lines(10000);
+    const content = lines.join('\n');
+
+    const start = performance.now();
+    const result = parseK6JsonOutput(content);
+    const elapsed = performance.now() - start;
+
+    expect(result.stepMetrics.length).toBe(STEP_GROUPS.length);
+    expect(Object.keys(result.statusCodes).length).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it('parseK6Errors handles 10,000 lines within budget', () => {
+    const lines = makeSyntheticK6Lines(10000);
+    const content = lines.join('\n');
+
+    const start = performance.now();
+    const { statusCodes, errorBreakdown } = parseK6Errors(content);
+    const elapsed = performance.now() - start;
+
+    expect(Object.keys(statusCodes).length).toBeGreaterThan(0);
+    expect(errorBreakdown.success + errorBreakdown.serverError).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it('parseK6GroupMetrics handles 10,000 lines within budget', () => {
+    const lines = makeSyntheticK6Lines(10000);
+    const content = lines.join('\n');
+
+    const start = performance.now();
+    const stepMetrics = parseK6GroupMetrics(content);
+    const elapsed = performance.now() - start;
+
+    expect(stepMetrics).toHaveLength(STEP_GROUPS.length);
+    for (const step of stepMetrics) {
+      expect(step.avgResponseTime).toBeGreaterThan(0);
+      expect(Number.isNaN(step.p95ResponseTime)).toBe(false);
+    }
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it('aggregateWindow handles a 2,000-line live window (5-10 groups) within budget', () => {
+    const lines = makeSyntheticK6Lines(2000);
+
+    const start = performance.now();
+    const result = aggregateWindow(lines);
+    const elapsed = performance.now() - start;
+
+    expect(result).not.toBeNull();
+    expect(result!.stepMetrics?.length).toBe(STEP_GROUPS.length);
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it('parseK6Output (text summary) stays fast regardless of test size', () => {
+    // k6 CLI summary output is bounded/fixed-size regardless of request volume,
+    // so this is mainly a sanity check that the regex-based parser is cheap.
+    const output = makeK6Output({ total: 5_000_000, rps: 99999.99, failPct: 2.5 });
+
+    const start = performance.now();
+    const result = parseK6Output(output);
+    const elapsed = performance.now() - start;
+
+    expect(result.requestsTotal).toBe(5_000_000);
+    expect(elapsed).toBeLessThan(20);
   });
 });

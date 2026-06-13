@@ -1,31 +1,52 @@
-import { createHmac } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
+import { Pool } from 'pg';
 
-export interface SessionPayload {
-  projectId: string;
-  username: string;
-  projectName: string;
+export type TeamRole = 'admin' | 'member' | 'viewer';
+
+export interface SessionRecord {
+  userId: string;
+  teamId: string | null;
+  expiresAt: Date;
 }
 
-const encode = (p: SessionPayload) => Buffer.from(JSON.stringify(p)).toString('base64url');
-const decode = (s: string): SessionPayload => JSON.parse(Buffer.from(s, 'base64url').toString());
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-export const signSession = (payload: SessionPayload, secret: string): string => {
-  const data = encode(payload);
-  const sig  = createHmac('sha256', secret).update(data).digest('hex');
-  return `${data}.${sig}`;
+const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
+
+/** Hashes a raw team API key for storage/lookup in team_api_keys.key_hash. */
+export const hashApiKey = (key: string): string => createHash('sha256').update(key).digest('hex');
+
+/** Creates a new session for a user, returns the raw token to set in the cookie. */
+export const createSession = async (pool: Pool, userId: string, teamId: string | null): Promise<string> => {
+  const token = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  await pool.query(
+    `INSERT INTO sessions (user_id, token_hash, team_id, expires_at) VALUES ($1, $2, $3, $4)`,
+    [userId, hashToken(token), teamId, expiresAt]
+  );
+  return token;
 };
 
-export const verifySession = (cookie: string | undefined, secret: string): SessionPayload | null => {
-  if (!cookie) return null;
-  const dot = cookie.lastIndexOf('.');
-  if (dot === -1) return null;
-  const data = cookie.slice(0, dot);
-  const sig  = cookie.slice(dot + 1);
-  const expected = createHmac('sha256', secret).update(data).digest('hex');
-  // Constant-time comparison
-  if (sig.length !== expected.length) return null;
-  let diff = 0;
-  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
-  if (diff !== 0) return null;
-  try { return decode(data); } catch { return null; }
+/** Looks up a non-revoked, non-expired session by its raw cookie token. */
+export const getSession = async (pool: Pool, token: string | undefined): Promise<SessionRecord | null> => {
+  if (!token) return null;
+  const { rows } = await pool.query<{ user_id: string; team_id: string | null; expires_at: Date }>(
+    `SELECT user_id, team_id, expires_at FROM sessions
+     WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()`,
+    [hashToken(token)]
+  );
+  if (rows.length === 0) return null;
+  return { userId: rows[0].user_id, teamId: rows[0].team_id, expiresAt: rows[0].expires_at };
+};
+
+/** Marks a session as revoked (logout). */
+export const revokeSession = async (pool: Pool, token: string | undefined): Promise<void> => {
+  if (!token) return;
+  await pool.query(`UPDATE sessions SET revoked_at = NOW() WHERE token_hash = $1`, [hashToken(token)]);
+};
+
+/** Updates the "current team" for a session (team switching). */
+export const switchSessionTeam = async (pool: Pool, token: string | undefined, teamId: string): Promise<void> => {
+  if (!token) return;
+  await pool.query(`UPDATE sessions SET team_id = $1 WHERE token_hash = $2`, [teamId, hashToken(token)]);
 };
