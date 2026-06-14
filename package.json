@@ -52,5 +52,9 @@
     "@opentelemetry/sdk-node": "^0.218.0",
     "amqplib": "^1.0.3",
     "pino": "^10.3.1"
+  },
+  "overrides": {
+    "@opentelemetry/core": "^2.0.0",
+    "@opentelemetry/api": "^1.9.1"
   }
 }
