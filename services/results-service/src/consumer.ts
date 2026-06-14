@@ -2,7 +2,7 @@ import amqplib from 'amqplib';
 import { createHmac } from 'crypto';
 import { Pool } from 'pg';
 
-import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult } from '@alt/shared';
+import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult, connectWithBackoff } from '@alt/shared';
 import { pool } from './db';
 import { analyzeResult } from './analyzer';
 import { log } from './logger';
@@ -281,24 +281,14 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
 export const startConsumer = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
-  const maxRetries = 20;
-  const delay = 10000;
 
-  let connection;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      log.info({ attempt, maxRetries }, 'Connecting to RabbitMQ');
-      connection = await amqplib.connect(url);
-      consumerConnected = true;
-      break;
-    } catch (err) {
-      log.error({ attempt, err: (err as Error).message }, 'RabbitMQ connection failed');
-      if (attempt === maxRetries) throw err;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
+  const connection = await connectWithBackoff(() => amqplib.connect(url), {
+    onRetry: (err, attempt, nextDelayMs) =>
+      log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ connection failed — retrying'),
+  });
+  consumerConnected = true;
 
-  const channel = await connection!.createChannel();
+  const channel = await connection.createChannel();
   await channel.assertQueue(QUEUE, { durable: true });
   await channel.assertQueue(DLQ,   { durable: true });
   channel.prefetch(1);

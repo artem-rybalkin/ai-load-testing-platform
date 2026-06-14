@@ -54,7 +54,9 @@ const registerSchedule = (pool: Pool, schedule: Schedule): void => {
   if (activeTasks.has(schedule.id)) {
     activeTasks.get(schedule.id)!.stop();
   }
-  const task = cron.schedule(schedule.cron, () => triggerSchedule(pool, schedule));
+  const task = cron.schedule(schedule.cron, () => triggerSchedule(pool, schedule), {
+    name: schedule.id,
+  });
   if (!schedule.enabled) task.stop();
   activeTasks.set(schedule.id, task);
   log.info({ scheduleId: schedule.id, name: schedule.name, cron: schedule.cron }, 'Schedule registered');

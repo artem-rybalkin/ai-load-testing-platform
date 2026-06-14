@@ -910,6 +910,8 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 
 **Input validation** (`api-service/src/index.ts`): `targetUrl` validated with `new URL()`, `description` ≤ 500 chars, `steps` ≤ 20.
 
+**PII redaction before sending recorded traffic to Gemini** (`@alt/shared` → `redactPII()`/`detectPII()`): recorder-service's `correlator.ts` calls `redactPII()` on `requestBody`/`responseBody` in `buildSummary()` before building the correlation prompt — masks emails, SSNs, phone numbers, Luhn-valid credit card numbers, and IPv4 addresses as `[REDACTED_*]` placeholders. Correlation-relevant values (tokens, IDs) are left intact.
+
 **Production compose** (`docker-compose.prod.yml`): removes all internal port bindings (Postgres 5432, Redis 6379, RabbitMQ 5672/15672), adds memory/CPU limits per service.
 
 **Deployment checklist:**

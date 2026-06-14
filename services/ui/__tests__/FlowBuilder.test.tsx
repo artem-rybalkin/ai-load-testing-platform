@@ -91,6 +91,7 @@ beforeEach(() => {
   vi.stubGlobal('open', mockWindowOpen);
   vi.stubGlobal('alert', mockAlert);
   mockGetRecording.mockResolvedValue(makeSession());
+  localStorage.clear();
 });
 
 // ─── Initial render ───────────────────────────────────────────────────────────
@@ -526,6 +527,92 @@ describe('FlowBuilder — visibilitychange tab-switch detection', () => {
 
     await new Promise(r => setTimeout(r, 100));
     expect(mockGetRecording).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Resume recording session from localStorage ───────────────────────────────
+
+describe('FlowBuilder — resume recording session from localStorage', () => {
+  const STORAGE_KEY = 'flowRecordingSession';
+
+  it('resumes polling for a session that is still active', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(makeSession({ status: 'active', stepCount: 5 })));
+    mockGetRecording.mockResolvedValue(makeSession({ status: 'active', stepCount: 5 }));
+
+    render(<FlowBuilder {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /stop recording \(5\)/i })).toBeInTheDocument();
+    });
+    expect(screen.getByText(/resumed a recording session/i)).toBeInTheDocument();
+  });
+
+  it('imports steps immediately if the session completed while unmounted', async () => {
+    const steps = [makeFlowStep('login'), makeFlowStep('checkout')];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(makeSession({ status: 'active', stepCount: 2 })));
+    mockGetRecording.mockResolvedValue(makeSession({ status: 'completed', steps, stepCount: 2 }));
+
+    render(<FlowBuilder {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(defaultProps.onChange).toHaveBeenCalledWith(steps);
+    });
+    expect(screen.getByRole('button', { name: /^🔴 record$/i })).toBeInTheDocument();
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('clears stale state when the session has expired (404)', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(makeSession({ status: 'active', stepCount: 1 })));
+    mockGetRecording.mockRejectedValue(new Error('Recorder error: 404'));
+
+    render(<FlowBuilder {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^🔴 record$/i })).toBeInTheDocument();
+    });
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('treats a restored "stopping" status as active so polling can resume', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(makeSession({ status: 'stopping', stepCount: 4 })));
+    mockGetRecording.mockResolvedValue(makeSession({ status: 'active', stepCount: 4 }));
+
+    render(<FlowBuilder {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /stop recording \(4\)/i })).toBeInTheDocument();
+    });
+  });
+
+  it('does not restore a session that was already completed', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(makeSession({ status: 'completed', stepCount: 3 })));
+
+    render(<FlowBuilder {...defaultProps} />);
+
+    expect(screen.getByRole('button', { name: /^🔴 record$/i })).toBeInTheDocument();
+    expect(mockGetRecording).not.toHaveBeenCalled();
+  });
+
+  it('persists the session to localStorage when recording starts, and removes it when stopped', async () => {
+    mockStartRecording.mockResolvedValue(makeSession({ status: 'active', stepCount: 0 }));
+    render(<FlowBuilder {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /record/i }));
+    });
+    await waitFor(() => {
+      expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull();
+    });
+
+    const steps = [makeFlowStep('home')];
+    mockStopRecording.mockResolvedValue(makeSession({ status: 'completed', steps, stepCount: 1 }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /stop recording/i }));
+    });
+
+    await waitFor(() => {
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    });
   });
 });
 

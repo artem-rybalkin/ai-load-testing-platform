@@ -116,20 +116,24 @@ describe('queue module', () => {
       }
     });
 
-    it('throws the last error after exhausting all 20 retries', async () => {
+    it('never gives up — keeps retrying past 20 attempts until RabbitMQ comes back', async () => {
       mockConnect.mockRejectedValue(new Error('Persistent failure'));
 
       vi.useFakeTimers();
       try {
         const promise = connect();
-        // Attach rejection handler immediately to prevent unhandled rejection
-        // before vi.runAllTimersAsync() fires all the retry timers
-        const caught = promise.catch((e: unknown) => e as Error);
-        await vi.runAllTimersAsync();
-        const err = await caught;
-        expect(err).toBeInstanceOf(Error);
-        expect((err as Error).message).toBe('Persistent failure');
-        expect(mockConnect).toHaveBeenCalledTimes(20); // maxRetries constant
+        // Let it fail and retry well past the old 20-attempt bound
+        for (let i = 0; i < 25; i++) {
+          await vi.advanceTimersByTimeAsync(30000);
+        }
+        expect(mockConnect.mock.calls.length).toBeGreaterThan(20);
+        expect(queueMod.isQueueConnected()).toBe(false);
+
+        // Now let it succeed
+        mockConnect.mockResolvedValueOnce({ createChannel: vi.fn().mockResolvedValue(mockChannel), on: vi.fn() });
+        await vi.advanceTimersByTimeAsync(30000);
+        await promise;
+        expect(queueMod.isQueueConnected()).toBe(true);
       } finally {
         vi.useRealTimers();
       }

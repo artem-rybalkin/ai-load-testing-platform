@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { FlowStep, RecordedRequest, ExtractRule, ExtractSource } from '@alt/shared';
+import { FlowStep, RecordedRequest, ExtractRule, ExtractSource, redactPII } from '@alt/shared';
 import { log } from './logger';
 
 // ─── AI-powered correlation detection ─────────────────────────────────────────
@@ -63,7 +63,7 @@ function buildSummary(requests: RecordedRequest[]): string {
         /^authorization$|x-auth|x-csrf|x-token|x-api-key/i.test(k)
       )
     ),
-    requestBody: r.body ? r.body.slice(0, 500) : undefined,
+    requestBody: r.body ? redactPII(r.body.slice(0, 500)) : undefined,
     responseStatus: r.responseStatus,
     // Include response headers that commonly carry tokens
     responseHeaders: Object.fromEntries(
@@ -72,7 +72,7 @@ function buildSummary(requests: RecordedRequest[]): string {
       )
     ),
     // 2000 chars — JWT access_token values are typically 800-1500 chars
-    responseBody: r.responseBody ? r.responseBody.slice(0, 2000) : undefined,
+    responseBody: r.responseBody ? redactPII(r.responseBody.slice(0, 2000)) : undefined,
   }));
   return JSON.stringify(pairs, null, 2);
 }

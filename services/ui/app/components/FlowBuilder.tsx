@@ -101,7 +101,21 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
   const csvRef  = useRef<HTMLInputElement>(null);
 
   // ── Flow Recording state ────────────────────────────────────────────────────
-  const [recording, setRecording] = useState<RecordingSession | null>(null);
+  const RECORDING_STORAGE_KEY = 'flowRecordingSession';
+  // Tracks whether `recording` was restored from localStorage on mount (vs. started fresh)
+  const resumedSessionRef = useRef(false);
+  const [recording, setRecording] = useState<RecordingSession | null>(() => {
+    try {
+      const stored = localStorage.getItem(RECORDING_STORAGE_KEY);
+      if (!stored) return null;
+      const session = JSON.parse(stored) as RecordingSession;
+      if (session.status === 'active' || session.status === 'stopping') {
+        resumedSessionRef.current = true;
+        return session;
+      }
+    } catch { /* ignore */ }
+    return null;
+  });
   const [recordingLaunching, setRecordingLaunching] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [recordingNote, setRecordingNote] = useState<string | null>(null);
@@ -181,6 +195,51 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     }, 1000);
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [recording?.id, recording?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist the active recording session to localStorage so it survives a page
+  // reload or navigation away from "New Test" — FlowBuilder unmounts, but the
+  // recorder-service session keeps running server-side.
+  useEffect(() => {
+    try {
+      if (recording) localStorage.setItem(RECORDING_STORAGE_KEY, JSON.stringify(recording));
+      else localStorage.removeItem(RECORDING_STORAGE_KEY);
+    } catch { /* private browsing or storage full */ }
+  }, [recording]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On mount, if a recording session was restored from localStorage, re-attach the
+  // viewer callback and check its current status — it may have completed while
+  // this component was unmounted.
+  useEffect(() => {
+    if (!resumedSessionRef.current) return;
+    const rec = recordingRef.current;
+    if (!rec) return;
+
+    (window as any).__recordingDone = (result: StopResult) => {
+      applyStopResult(result, recordingRef.current?.stepCount ?? 0);
+      setRecording(null);
+      delete (window as any).__recordingDone;
+    };
+
+    (async () => {
+      try {
+        const data = await getRecording(rec.id);
+        if (data.status === 'completed' || data.status === 'error') {
+          applyStopResult(data as StopResult, rec.stepCount ?? 0);
+          setRecording(null);
+        } else {
+          // Treat a restored 'stopping' status as 'active' so polling resumes
+          setRecording({ ...data, status: data.status === 'stopping' ? 'active' : data.status });
+          setRecordingNote('Resumed a recording session that was already in progress.');
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.includes('404')) {
+          // Session expired from cache (>10 min) — clear stale state
+          setRecording(null);
+        }
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When the user switches back to this tab from the viewer, immediately check
   // for completion — the 1s interval is throttled in background tabs and

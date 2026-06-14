@@ -72,7 +72,7 @@ describe('ResultsSocketProvider', () => {
   it('creates a WebSocket connection on mount', () => {
     render(<ResultsSocketProvider><div /></ResultsSocketProvider>);
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.latest().url).toMatch(/ws:\/\/localhost:3004\/ws/);
+    expect(MockWebSocket.latest().url).toMatch(/ws:\/\/localhost:3000\/data\/ws/);
   });
 
   it('closes the WebSocket and nulls onclose on unmount (no reconnect after intentional close)', () => {

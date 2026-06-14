@@ -170,6 +170,36 @@ describe('detectCorrelations — happy path', () => {
   });
 });
 
+// ─── PII redaction before sending to Gemini ───────────────────────────────────
+
+describe('detectCorrelations — PII redaction', () => {
+  it('redacts emails and credit card numbers from request/response bodies before calling Gemini', async () => {
+    const requests = [
+      makeRequest({
+        url: 'https://api.example.com/checkout',
+        body: '{"email":"jane.doe@example.com","card":"4111111111111111"}',
+        responseBody: '{"access_token":"tok123","contact":"john@example.com"}',
+      }),
+      makeRequest({
+        url: 'https://api.example.com/profile',
+        responseBody: undefined,
+      }),
+    ];
+
+    const mock = await getMock();
+    await detectCorrelations(requests, TWO_STEPS);
+
+    const prompt = mock.mock.calls[0][0] as string;
+    expect(prompt).not.toContain('jane.doe@example.com');
+    expect(prompt).not.toContain('john@example.com');
+    expect(prompt).not.toContain('4111111111111111');
+    expect(prompt).toContain('[REDACTED_EMAIL]');
+    expect(prompt).toContain('[REDACTED_CARD]');
+    // Non-PII data (correlation tokens) remains intact
+    expect(prompt).toContain('tok123');
+  });
+});
+
 // ─── Gemini response parsing ──────────────────────────────────────────────────
 
 describe('detectCorrelations — Gemini response parsing', () => {

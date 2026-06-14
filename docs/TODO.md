@@ -31,14 +31,18 @@ Improvements, suggestions, and large future work items.
 - [x] **AI-13: Step deduplication after recording** — `detectDuplicateSteps()` identifies same-endpoint steps with varying query params; yellow banner in FlowBuilder with merge suggestion
 - [x] **AI-14: Preset name + tag auto-suggestion** — On "Save preset", `POST /ai/preset-name` → Gemini → auto-fills name + shows tag chips; non-fatal fallback to description/URL
 
+### 🆕 New ideas — not yet prioritized
+- [ ] **AI-15: Fallback to another provider (OpenAI/Claude API)** — solves the single-point-of-failure problem on Gemini and looks like a more mature architecture; needs a pluggable provider abstraction so script generation/insights/etc. can retry against OpenAI or Claude when Gemini is rate-limited or unreachable
+- [ ] **AI-16: Better prompt engineering** — add more k6/Puppeteer pattern examples to the system prompts (BACKEND_PROMPT/CLIENT_PROMPT/FLOW_PROMPT) to improve generated-script quality and consistency
+
 ## High Priority (Tech Debt)
 
 - [x] **Rate limiting (Redis — priority #1)** — Wire up Redis; add `@fastify/rate-limit` to api-service and results-service to protect Gemini API and REST endpoints
 - [x] **Recorder-service test coverage** — recorder.test.ts (262 lines), correlator.test.ts (302 lines), api.test.ts (385 lines)
 - [ ] **Playwright → Puppeteer converter** — New converter-service or ai-service endpoint; UI file upload; AI translation from Playwright to Puppeteer syntax
 - [ ] **noVNC auth in production** — Add VNC password (`x11vnc -passwd`) to recorder-service docker-entrypoint.sh; restrict port 6080 binding to localhost in docker-compose.prod.yml
-- [ ] **AMQP reconnect: replace bounded retry with unbounded backoff supervisor (G1 — chaos)** — All 5 queue-connected services (api-service, ai-service, worker-backend, worker-client, results-service) use a one-shot bounded reconnect that exhausts retries and gives up permanently if RabbitMQ restart exceeds the retry window; replace with an unbounded self-re-arming capped-backoff loop (e.g. 1s → 2s → … → 30s cap, no give-up) so the platform self-heals without operator intervention
-- [ ] **FlowBuilder: recording session lost on page reload/navigation** — `recording` state (session id/status) lives only in `FlowBuilder` component state; reloading or navigating away from "New Test" unmounts the component and loses track of an active recorder-service session. The session itself keeps running server-side and the `completedResults` cache holds the result for 10 min, but the UI has no way to reattach — `window.__recordingDone` becomes a stale no-op closure, so "Stop Recording & Import Steps" from the noVNC tab silently drops the captured steps. Fix: persist `recording` (session id + status) to `localStorage`, and on FlowBuilder mount check for an in-progress session id and resume polling/import (`GET /recordings/:id`) automatically
+- [x] **AMQP reconnect: replace bounded retry with unbounded backoff supervisor (G1 — chaos)** — `connectWithBackoff()` added to `@alt/shared` (capped exponential backoff, 1s → 2s → … → 30s cap, never gives up); all 5 queue-connected services (api-service, ai-service, worker-backend, worker-client, results-service) now use it for both the initial connect and reconnect-on-close, so the platform self-heals after a RabbitMQ outage of any length without operator intervention
+- [x] **FlowBuilder: recording session lost on page reload/navigation** — `recording` state (session id/status) is now persisted to `localStorage` (`flowRecordingSession`) on every change; on mount, an in-progress (`active`/`stopping`) session is restored and `GET /recordings/:id` is called to resume polling, import steps if already completed, or clear stale state on 404/expiry
 - [ ] **results-service consumer.ts: missing AMQP close handler + false-positive health (G2 — chaos)** — `consumer.ts` has no `connection.on('close')` handler; during RabbitMQ outage the health endpoint reports `queue:ok` (false positive) and the consumer never reconnects; add close handler with same backoff supervisor and make health check reflect actual channel state
 
 ## Medium Priority (Feature Gaps)
@@ -54,6 +58,13 @@ Improvements, suggestions, and large future work items.
 - [ ] **parseDurationSeconds accepts numeric values (G5 — chaos)** — Passing a numeric `duration` (e.g. `10`) to `parseDurationSeconds` throws a 500; should coerce number to string before parsing or accept both types
 - [x] **GET /results UI pagination** — Load more button using `nextBefore` cursor; appends to existing list; WebSocket updates still work on first page
 - [ ] **Download/upload ignore-pattern lists** — Export the recorder-service "Ignore list" (domains/patterns) as JSON and re-import it before starting a new recording, so users can reuse a curated ignore list across recordings/projects
+
+## Data Privacy Gaps
+
+- [x] **PII detection/redaction before sending recorded traffic to Gemini** — `redactPII()`/`detectPII()` in `@alt/shared`; applied to `requestBody`/`responseBody` in `recorder-service/correlator.ts` before building the correlation prompt (emails, SSNs, phone numbers, Luhn-valid credit card numbers, IPv4 addresses)
+- [ ] **Encryption at rest for PostgreSQL** — `test_results`, `test_scripts`, target URLs, and recorded flow steps are stored in plaintext; investigate column-level encryption (e.g. `pgcrypto`) or full-disk/volume encryption for production deployments
+- [ ] **Data retention / right-to-erasure (GDPR)** — `test_results` and `live_metrics` accumulate indefinitely with no expiry; add a configurable retention period (auto-purge old rows) and an admin endpoint to delete all data for a team/user on request
+- [ ] **Audit log for data access** — No record of who viewed/exported/deleted test results, scripts, or PDF reports; add an `audit_log` table capturing user, action, resource, and timestamp for compliance-sensitive deployments
 
 ## Low Priority (Polish)
 
@@ -79,3 +90,4 @@ Improvements, suggestions, and large future work items.
 
 - [ ] **Mobile application performance testing** — investigate approaches: Appium/WebDriverIO for native apps, cloud device farms (AWS Device Farm, BrowserStack), network throttling profiles, mobile-specific metrics (frame rate, battery, memory on device), Android/iOS instrumentation
 - [ ] **Natural language "one prompt" test creation** — user describes entire test scenario in a single prompt; AI infers type (backend/browser/flow/mobile), extracts URL, steps, load profile, SLOs, env vars, and submits the full test without the user touching the form
+- [ ] **Enterprise version with local LLM model** — investigate self-hosted/on-prem LLM (e.g. Ollama, vLLM, local Llama/Mistral/Qwen) as a drop-in replacement for Gemini for enterprise customers who can't send code/data to external APIs; needs a pluggable model-provider abstraction (`GEMINI_MODEL` → generic `AI_PROVIDER`/`AI_MODEL`), evaluation of script-generation quality vs. Gemini, GPU/resource sizing guidance, and config docs for air-gapped deployments

@@ -10,16 +10,24 @@ const mockStartSession = vi.hoisted(() => vi.fn());
 const mockStopSession  = vi.hoisted(() => vi.fn());
 const mockToFlowSteps  = vi.hoisted(() => vi.fn());
 const mockDetect       = vi.hoisted(() => vi.fn());
+const mockSuggestStepNames     = vi.hoisted(() => vi.fn());
+const mockSuggestIgnorePatterns = vi.hoisted(() => vi.fn());
+const mockDetectDuplicateSteps = vi.hoisted(() => vi.fn());
 
 vi.mock('../recorder', () => ({
   startSession:          mockStartSession,
   stopSession:           mockStopSession,
   toFlowSteps:           mockToFlowSteps,
+  computeThinkTimes:     vi.fn().mockReturnValue([]),
   compileIgnorePatterns: (patterns: string[]) => patterns.map(p => new RegExp(p)),
 }));
 
 vi.mock('../correlator', () => ({
   detectCorrelations: mockDetect,
+  suggestStepNames: mockSuggestStepNames,
+  suggestIgnorePatterns: mockSuggestIgnorePatterns,
+  detectDuplicateSteps: mockDetectDuplicateSteps,
+  correlatorRateLimited: false,
 }));
 
 import { buildApp } from '../index';
@@ -61,6 +69,9 @@ beforeEach(async () => {
   completed = new Map();
   mockToFlowSteps.mockReturnValue([]);
   mockDetect.mockResolvedValue([]);
+  mockSuggestStepNames.mockImplementation(async (steps) => steps);
+  mockSuggestIgnorePatterns.mockResolvedValue([]);
+  mockDetectDuplicateSteps.mockReturnValue([]);
   app = await buildApp(sessions, completed);
 });
 

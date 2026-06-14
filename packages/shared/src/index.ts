@@ -454,3 +454,107 @@ export const analyzeResult = (
   currentMetrics.type === 'backend'
     ? analyzeBackend(currentMetrics as BackendMetrics, previousMetrics as BackendMetrics | null, thresholds)
     : analyzeClient(currentMetrics as ClientMetrics,  previousMetrics as ClientMetrics  | null, thresholds);
+
+// ── PII detection / redaction ──────────────────────────────────────────────
+//
+// Used before sending recorded request/response bodies (or other free-text
+// user data) to Gemini, so personal data captured during a recording session
+// doesn't get forwarded to a third-party AI provider.
+
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/g;
+const PHONE_RE = /\b(?:\+?\d{1,2}[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/g;
+const IPV4_RE = /\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b/g;
+// Candidate card numbers: 13-19 digits, optionally grouped with spaces/dashes
+const CARD_CANDIDATE_RE = /\b(?:\d[ -]?){12,18}\d\b/g;
+
+/** Luhn checksum — used to avoid flagging arbitrary numeric IDs as card numbers. */
+function isValidLuhn(digits: string): boolean {
+  let sum = 0;
+  let alternate = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let n = digits.charCodeAt(i) - 48;
+    if (alternate) {
+      n *= 2;
+      if (n > 9) n -= 9;
+    }
+    sum += n;
+    alternate = !alternate;
+  }
+  return sum % 10 === 0;
+}
+
+export type PiiCategory = 'email' | 'phone' | 'ssn' | 'creditCard' | 'ipAddress';
+
+/** Replace PII matches in `text` with `[REDACTED_<CATEGORY>]` placeholders. */
+export function redactPII(text: string): string {
+  if (!text) return text;
+  let result = text;
+  result = result.replace(EMAIL_RE, '[REDACTED_EMAIL]');
+  result = result.replace(SSN_RE, '[REDACTED_SSN]');
+  result = result.replace(PHONE_RE, '[REDACTED_PHONE]');
+  result = result.replace(CARD_CANDIDATE_RE, (match) => {
+    const digits = match.replace(/[ -]/g, '');
+    return digits.length >= 13 && digits.length <= 19 && isValidLuhn(digits)
+      ? '[REDACTED_CARD]'
+      : match;
+  });
+  result = result.replace(IPV4_RE, '[REDACTED_IP]');
+  return result;
+}
+
+/** Return the set of PII categories detected in `text`, without modifying it. */
+export function detectPII(text: string): PiiCategory[] {
+  if (!text) return [];
+  const found = new Set<PiiCategory>();
+  if (EMAIL_RE.test(text)) found.add('email');
+  if (SSN_RE.test(text)) found.add('ssn');
+  if (PHONE_RE.test(text)) found.add('phone');
+  if (IPV4_RE.test(text)) found.add('ipAddress');
+  for (const match of text.match(CARD_CANDIDATE_RE) ?? []) {
+    const digits = match.replace(/[ -]/g, '');
+    if (digits.length >= 13 && digits.length <= 19 && isValidLuhn(digits)) {
+      found.add('creditCard');
+      break;
+    }
+  }
+  // reset regex lastIndex state from global flags used with .test()
+  EMAIL_RE.lastIndex = 0;
+  SSN_RE.lastIndex = 0;
+  PHONE_RE.lastIndex = 0;
+  IPV4_RE.lastIndex = 0;
+  return Array.from(found);
+}
+
+// ── Unbounded capped-backoff connection supervisor ──────────────────────────
+//
+// Used by all queue-connected services (api-service, ai-service,
+// worker-backend, worker-client, results-service) to connect/reconnect to
+// RabbitMQ. Unlike a bounded retry loop, this never gives up: delays grow
+// exponentially from `initialDelayMs` up to `maxDelayMs`, then hold steady,
+// so the platform self-heals after a RabbitMQ outage of any length without
+// operator intervention.
+
+export interface BackoffOptions {
+  /** Delay before the first retry, in ms. Default 1000. */
+  initialDelayMs?: number;
+  /** Upper bound on retry delay, in ms. Default 30000. */
+  maxDelayMs?: number;
+  /** Called after each failed attempt, before waiting `nextDelayMs`. */
+  onRetry?: (err: Error, attempt: number, nextDelayMs: number) => void;
+}
+
+/** Repeatedly calls `connect()` until it resolves, waiting with capped exponential backoff between attempts. Never gives up. */
+export async function connectWithBackoff<T>(connect: () => Promise<T>, options: BackoffOptions = {}): Promise<T> {
+  const initialDelayMs = options.initialDelayMs ?? 1000;
+  const maxDelayMs = options.maxDelayMs ?? 30000;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await connect();
+    } catch (err) {
+      const nextDelayMs = Math.min(initialDelayMs * 2 ** (attempt - 1), maxDelayMs);
+      options.onRetry?.(err as Error, attempt, nextDelayMs);
+      await new Promise((resolve) => setTimeout(resolve, nextDelayMs));
+    }
+  }
+}

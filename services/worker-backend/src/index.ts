@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import Fastify from 'fastify';
 
-import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint } from '@alt/shared';
+import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint, connectWithBackoff } from '@alt/shared';
 import { parseK6Output, aggregateWindow, parseK6JsonOutput, LIVE_WINDOW_SEC } from './parser';
 import { log } from './logger';
 
@@ -264,44 +264,39 @@ const handleRetry = (
   channel.ack(msg);
 };
 
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnecting = false;
+
+/** Reconnect with capped exponential backoff (1s -> 30s), retrying forever until RabbitMQ is back. */
+const scheduleReconnect = (): void => {
+  if (reconnecting) return;
+  reconnecting = true;
+  connectWithBackoff(start, {
+    onRetry: (err, attempt, nextDelayMs) =>
+      log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ reconnect failed — retrying'),
+  }).then(() => {
+    reconnecting = false;
+  });
+};
 
 const start = async (): Promise<void> => {
   const url        = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
-  const maxRetries = 20;
-  const delay      = 10000;
 
-  let connection;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      log.info({ attempt, maxRetries }, 'Connecting to RabbitMQ');
-      connection = await amqplib.connect(url);
-      break;
-    } catch (err) {
-      log.error({ attempt, err: (err as Error).message }, 'RabbitMQ connection failed');
-      if (attempt === maxRetries) throw err;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
+  const connection = await connectWithBackoff(() => amqplib.connect(url), {
+    onRetry: (err, attempt, nextDelayMs) =>
+      log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ connection failed — retrying'),
+  });
 
-  connection!.on('error', (err) => {
+  connection.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
   });
-  connection!.on('close', () => {
-    log.warn('RabbitMQ connection closed — scheduling reconnect');
+  connection.on('close', () => {
+    log.warn('RabbitMQ connection closed — reconnecting');
     queueConnected = false;
-    if (!reconnectTimer) {
-      reconnectTimer = setTimeout(async () => {
-        reconnectTimer = null;
-        try { await start(); } catch (err) {
-          log.error({ err: (err as Error).message }, 'RabbitMQ reconnect failed');
-        }
-      }, 5000);
-    }
+    scheduleReconnect();
   });
 
-  const channel = await connection!.createChannel();
+  const channel = await connection.createChannel();
   channel.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
     queueConnected = false;
