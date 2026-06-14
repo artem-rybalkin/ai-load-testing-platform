@@ -198,6 +198,26 @@ describe('detectCorrelations — PII redaction', () => {
     // Non-PII data (correlation tokens) remains intact
     expect(prompt).toContain('tok123');
   });
+
+  it('omits binary request/response bodies instead of forwarding raw bytes', async () => {
+    const requests = [
+      makeRequest({
+        url: 'https://api.example.com/upload',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: '\x89PNG\r\n\x1a\n\x00\x00\x00binarydata',
+        responseHeaders: { 'content-type': 'image/png' },
+        responseBody: '\x89PNG\r\n\x1a\n\x00\x00\x00binarydata',
+      }),
+      makeRequest({ url: 'https://api.example.com/profile', responseBody: undefined }),
+    ];
+
+    const mock = await getMock();
+    await detectCorrelations(requests, TWO_STEPS);
+
+    const prompt = mock.mock.calls[0][0] as string;
+    expect(prompt).not.toContain('binarydata');
+    expect(prompt).toContain('[BINARY_BODY_OMITTED]');
+  });
 });
 
 // ─── Gemini response parsing ──────────────────────────────────────────────────

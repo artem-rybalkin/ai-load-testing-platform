@@ -51,29 +51,44 @@ HTTP traffic:
 ${requestSummary}
 `.trim();
 
+/** True if `contentType` indicates a textual body safe to send to Gemini (and to run redactPII over). */
+function isTextContentType(contentType: string | undefined): boolean {
+  if (!contentType) return true; // unknown — assume text (e.g. requests captured without a Content-Type header)
+  return /json|text|xml|x-www-form-urlencoded|javascript/i.test(contentType);
+}
+
 /** Build a compact summary of request/response pairs to send to Gemini */
 function buildSummary(requests: RecordedRequest[]): string {
-  const pairs = requests.slice(0, 20).map((r, i) => ({
-    index: i,
-    method: r.method,
-    url: r.url,
-    // Include auth-related request headers so Gemini can see tokens being USED
-    requestHeaders: Object.fromEntries(
-      Object.entries(r.headers).filter(([k]) =>
-        /^authorization$|x-auth|x-csrf|x-token|x-api-key/i.test(k)
-      )
-    ),
-    requestBody: r.body ? redactPII(r.body.slice(0, 500)) : undefined,
-    responseStatus: r.responseStatus,
-    // Include response headers that commonly carry tokens
-    responseHeaders: Object.fromEntries(
-      Object.entries(r.responseHeaders).filter(([k]) =>
-        /set-cookie|x-auth|authorization|token|location/i.test(k)
-      )
-    ),
-    // 2000 chars — JWT access_token values are typically 800-1500 chars
-    responseBody: r.responseBody ? redactPII(r.responseBody.slice(0, 2000)) : undefined,
-  }));
+  const pairs = requests.slice(0, 20).map((r, i) => {
+    const requestContentType = Object.entries(r.headers).find(([k]) => k.toLowerCase() === 'content-type')?.[1];
+    const responseContentType = Object.entries(r.responseHeaders).find(([k]) => k.toLowerCase() === 'content-type')?.[1];
+
+    return {
+      index: i,
+      method: r.method,
+      url: r.url,
+      // Include auth-related request headers so Gemini can see tokens being USED
+      requestHeaders: Object.fromEntries(
+        Object.entries(r.headers).filter(([k]) =>
+          /^authorization$|x-auth|x-csrf|x-token|x-api-key/i.test(k)
+        )
+      ),
+      requestBody: r.body
+        ? (isTextContentType(requestContentType) ? redactPII(r.body.slice(0, 500)) : '[BINARY_BODY_OMITTED]')
+        : undefined,
+      responseStatus: r.responseStatus,
+      // Include response headers that commonly carry tokens
+      responseHeaders: Object.fromEntries(
+        Object.entries(r.responseHeaders).filter(([k]) =>
+          /set-cookie|x-auth|authorization|token|location/i.test(k)
+        )
+      ),
+      // 2000 chars — JWT access_token values are typically 800-1500 chars
+      responseBody: r.responseBody
+        ? (isTextContentType(responseContentType) ? redactPII(r.responseBody.slice(0, 2000)) : '[BINARY_BODY_OMITTED]')
+        : undefined,
+    };
+  });
   return JSON.stringify(pairs, null, 2);
 }
 

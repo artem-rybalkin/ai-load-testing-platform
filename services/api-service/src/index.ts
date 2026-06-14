@@ -22,14 +22,25 @@ const internalHeaders = (extra?: Record<string, string>): Record<string, string>
   ...extra,
 });
 
-const parseDurationSeconds = (d: string): number => {
-  const m = d.match(/^(\d+)(s|m|h)$/i);
-  if (!m) return 0;
-  const n = parseInt(m[1]);
-  const unit = m[2].toLowerCase();
-  if (unit === 'm') return n * 60;
-  if (unit === 'h') return n * 3600;
-  return n; // seconds
+// Parses k6-style durations, including compound forms like "1h30m" or "1m30s"
+// and decimals like "1.5m". Returns null if the string contains no recognizable
+// duration component — callers must reject these rather than silently treating
+// them as 0s (which would bypass the duration quota check).
+const parseDurationSeconds = (d: string): number | null => {
+  const re = /(\d+(?:\.\d+)?)\s*(h|m|s|ms)/gi;
+  let total = 0;
+  let matched = false;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(d)) !== null) {
+    matched = true;
+    const n = parseFloat(m[1]);
+    const unit = m[2].toLowerCase();
+    if (unit === 'h') total += n * 3600;
+    else if (unit === 'm') total += n * 60;
+    else if (unit === 'ms') total += n / 1000;
+    else total += n;
+  }
+  return matched ? Math.round(total) : null;
 };
 
 /**
@@ -111,6 +122,14 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     if (sessionSecret) {
       const session = await getApiSession(pool, request.cookies?.['alt_session']);
       if (!session) return reply.code(401).send({ error: 'Not authenticated' });
+
+      // A session with no current team (or no longer a member of it) has no
+      // access to project-scoped resources. Unlike results-service, api-service
+      // has no /teams or /orgs routes to except — every route here is project-scoped.
+      if (session.role === null) {
+        return reply.code(403).send({ error: 'No team selected — create or join a team first' });
+      }
+
       request.projectId = session.projectId ?? undefined;
       request.role = session.role;
     } else {
@@ -198,7 +217,14 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       };
 
       const rawDuration = (options as BackendTestOptions & { duration?: string }).duration;
-      const durationSeconds = rawDuration ? parseDurationSeconds(rawDuration) : undefined;
+      let durationSeconds: number | undefined;
+      if (rawDuration) {
+        const parsed = parseDurationSeconds(rawDuration);
+        if (parsed === null) {
+          return reply.code(400).send({ error: 'Invalid duration format — use values like "30s", "5m", "1h30m"' });
+        }
+        durationSeconds = parsed;
+      }
 
       const quotaError = await checkTestQuota(pool, effectiveProjectId, { type, options, durationSeconds });
       if (quotaError) {

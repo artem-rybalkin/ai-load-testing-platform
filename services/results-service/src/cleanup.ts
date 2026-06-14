@@ -11,7 +11,7 @@ export const runStaleCleanup = async (
   pendingMinutes: number
 ): Promise<{ runningFixed: number; pendingFixed: number; liveMetricsDeleted: number }> => {
   const { rows: running } = await pool.query(
-    `UPDATE test_results SET status = 'failed'
+    `UPDATE test_results SET status = 'failed', status_message = 'Test timed out and was marked as failed'
      WHERE status = 'running'
        AND started_at < NOW() - ($1 || ' minutes')::INTERVAL
      RETURNING test_id`,
@@ -19,7 +19,7 @@ export const runStaleCleanup = async (
   );
 
   const { rows: pending } = await pool.query(
-    `UPDATE test_results SET status = 'failed'
+    `UPDATE test_results SET status = 'failed', status_message = 'Test timed out and was marked as failed'
      WHERE status = 'pending'
        AND created_at < NOW() - ($1 || ' minutes')::INTERVAL
      RETURNING test_id`,

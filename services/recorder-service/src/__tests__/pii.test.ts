@@ -28,6 +28,17 @@ describe('redactPII', () => {
     expect(redactPII('client ip 192.168.1.100 connected')).toBe('client ip [REDACTED_IP] connected');
   });
 
+  it('redacts full IPv6 addresses', () => {
+    expect(redactPII('client ip 2001:0db8:0000:0000:0000:ff00:0042:8329 connected'))
+      .toBe('client ip [REDACTED_IP] connected');
+  });
+
+  it('redacts compressed IPv6 addresses', () => {
+    expect(redactPII('client ip 2001:db8::8a2e:370:7334 connected'))
+      .toBe('client ip [REDACTED_IP] connected');
+    expect(redactPII('localhost is ::1')).toBe('localhost is [REDACTED_IP]');
+  });
+
   it('redacts multiple categories in the same string', () => {
     const input = 'email jane@example.com from 10.0.0.1, ssn 123-45-6789';
     expect(redactPII(input)).toBe('email [REDACTED_EMAIL] from [REDACTED_IP], ssn [REDACTED_SSN]');
@@ -50,6 +61,10 @@ describe('detectPII', () => {
 
   it('detects credit card numbers', () => {
     expect(detectPII('4111111111111111')).toContain('creditCard');
+  });
+
+  it('detects IPv6 addresses', () => {
+    expect(detectPII('host fe80::1234:5678')).toContain('ipAddress');
   });
 
   it('returns empty array when no PII present', () => {

@@ -468,6 +468,22 @@ describe('parseK6Errors', () => {
     expect(errorBreakdown.serverError).toBe(2);
   });
 
+  it('categorizes 3xx redirects as success, not as an error or omitted', () => {
+    const json = [
+      makeHttpReqPoint('200'),
+      makeHttpReqPoint('301'),
+      makeHttpReqPoint('302'),
+    ].join('\n');
+
+    const { statusCodes, errorBreakdown } = parseK6Errors(json);
+
+    expect(statusCodes['301']).toBe(1);
+    expect(statusCodes['302']).toBe(1);
+    expect(errorBreakdown.success).toBe(3);
+    expect(errorBreakdown.clientError).toBe(0);
+    expect(errorBreakdown.serverError).toBe(0);
+  });
+
   it('categorizes unknown error_code with no status tag as networkError (catch-all)', () => {
     // error_code present but doesn't match 1010-1019, 1020-1029, 1050, or 1210 —
     // and no status tag — lands in the catch-all networkError branch (line 86 of parser.ts)

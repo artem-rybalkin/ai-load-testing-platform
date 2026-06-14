@@ -65,6 +65,13 @@ describe('runStaleCleanup — running tests', () => {
     const result = await runStaleCleanup(pool, 15, 30);
     expect(result.runningFixed).toBe(2);
   });
+
+  it('sets status_message explaining the timeout', async () => {
+    const id = await insertResult('running', 20, 'started_at');
+    await runStaleCleanup(pool, 15, 30);
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [id]);
+    expect(rows[0].status_message).toMatch(/timed out/i);
+  });
 });
 
 describe('runStaleCleanup — pending tests', () => {
@@ -87,6 +94,13 @@ describe('runStaleCleanup — pending tests', () => {
     await insertResult('pending', 20, 'created_at'); // within threshold
     const result = await runStaleCleanup(pool, 15, 30);
     expect(result.pendingFixed).toBe(1);
+  });
+
+  it('sets status_message explaining the timeout', async () => {
+    const id = await insertResult('pending', 40, 'created_at');
+    await runStaleCleanup(pool, 15, 30);
+    const { rows } = await pool.query('SELECT status_message FROM test_results WHERE test_id = $1', [id]);
+    expect(rows[0].status_message).toMatch(/timed out/i);
   });
 });
 

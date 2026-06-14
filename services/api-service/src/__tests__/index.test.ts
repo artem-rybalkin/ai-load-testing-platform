@@ -477,6 +477,51 @@ describe('POST /tests — session and quota enforcement', () => {
     expect(res.json().error).toContain('concurrent test limit');
     expect(mockPublishTest).not.toHaveBeenCalled();
   });
+
+  it('returns 403 when the session has no current team (role is null)', async () => {
+    mockGetApiSession.mockResolvedValue({ projectId: null, role: null });
+    const res = await sessionApp.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: validBody,
+      cookies: { alt_session: 'sometoken' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+});
+
+// ─── POST /tests — duration validation ────────────────────────────────────────
+
+describe('POST /tests — duration validation', () => {
+  beforeEach(() => {
+    mockCheckTestQuota.mockReset().mockResolvedValue(null);
+  });
+
+  it('rejects an unparseable duration with 400 instead of bypassing quota checks', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...validBody, options: { ...validBody.options, duration: 'forever' } },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('Invalid duration');
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+
+  it('accepts compound durations like "1h30m"', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...validBody, options: { ...validBody.options, duration: '1h30m' } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mockCheckTestQuota).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({ durationSeconds: 5400 })
+    );
+  });
 });
 
 // ─── POST /tests — worker-consumer-count warning message ──────────────────────

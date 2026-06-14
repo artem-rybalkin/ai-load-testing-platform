@@ -9,6 +9,11 @@ import { log } from './logger';
 const PORT = Number(process.env.PORT) || 3007;
 const NOVNC_URL = process.env.NOVNC_URL || `http://localhost:6080/vnc.html?autoconnect=true&resize=scale`;
 
+// Auto-stop long-running or abandoned recording sessions so the headless
+// browser + Gemini correlation don't run indefinitely if the user never clicks Stop.
+const RECORDER_MAX_DURATION_MS = Number(process.env.RECORDER_MAX_DURATION_MS) || 30 * 60 * 1000; // 30 min
+const RECORDER_IDLE_TIMEOUT_MS = Number(process.env.RECORDER_IDLE_TIMEOUT_MS) || 10 * 60 * 1000; // 10 min
+
 // RFC-1918 + link-local + loopback + Docker-internal SSRF blocklist
 const BLOCKED_HOSTNAME_RE = /^(localhost|.*\.local|host\.docker\.internal|.*\.internal|metadata\.google\.internal)$/i;
 const PRIVATE_IPV4_RE = /^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|169\.254\.\d+\.\d+)$/;
@@ -146,19 +151,17 @@ export async function buildApp(
     return reply.code(404).send({ error: 'Session not found' });
   });
 
-  // ── POST /recordings/:id/stop ───────────────────────────────────────────────
-  app.post<{ Params: { id: string } }>('/recordings/:id/stop', async (request, reply) => {
-    const session = _sessions.get(request.params.id);
-    if (!session) return reply.code(404).send({ error: 'Session not found' });
-    if (session.status === 'stopping' || session.status === 'completed') {
-      return reply.code(409).send({ error: 'Session already stopped' });
-    }
-
+  // Stops `session`, runs AI post-processing, and stores the result in `_completed`.
+  // Shared by the manual /stop endpoint and the auto-stop sweep below. Callers must
+  // have already verified session.status was not 'stopping'/'completed' and the
+  // session has been removed from `_sessions` synchronously before calling this,
+  // so a concurrent call can't process the same session twice.
+  const finishSession = async (sessionId: string, session: RecordingSessionInternal) => {
     let capturedRequests;
     try {
       capturedRequests = await stopSession(session);
     } catch (err) {
-      log.error({ err, sessionId: session.id }, 'Error stopping session');
+      log.error({ err, sessionId }, 'Error stopping session');
       capturedRequests = [...session.completed];
     }
 
@@ -171,8 +174,7 @@ export async function buildApp(
     ]);
     const duplicates = detectDuplicateSteps(enrichedSteps);
 
-    _sessions.delete(request.params.id);
-    _completed.set(request.params.id, {
+    _completed.set(sessionId, {
       steps: enrichedSteps,
       at: Date.now(),
       ...(correlatorRateLimited ? { geminiRateLimited: true } : {}),
@@ -180,6 +182,26 @@ export async function buildApp(
       ...(thinkTimes.some(t => t > 500) ? { thinkTimes } : {}),
       ...(duplicates.length > 0 ? { duplicates } : {}),
     });
+
+    log.info({ sessionId, stepCount: enrichedSteps.length, correlatorRateLimited }, 'Recording completed');
+    return { enrichedSteps, suggestedIgnore, thinkTimes, duplicates };
+  };
+
+  // ── POST /recordings/:id/stop ───────────────────────────────────────────────
+  app.post<{ Params: { id: string } }>('/recordings/:id/stop', async (request, reply) => {
+    const session = _sessions.get(request.params.id);
+    if (!session) return reply.code(404).send({ error: 'Session not found' });
+    if (session.status === 'stopping' || session.status === 'completed') {
+      return reply.code(409).send({ error: 'Session already stopped' });
+    }
+
+    // Mark + remove synchronously (before any await) so a concurrent /stop call
+    // or the auto-stop sweep can't also pass the check above and process this
+    // session a second time (which would double the Gemini correlation calls).
+    session.status = 'stopping';
+    _sessions.delete(request.params.id);
+
+    const { enrichedSteps, suggestedIgnore, thinkTimes, duplicates } = await finishSession(request.params.id, session);
 
     const response: RecordingSession & { geminiRateLimited?: boolean; suggestedIgnore?: string[]; thinkTimes?: number[]; duplicates?: typeof duplicates } = {
       id: request.params.id,
@@ -193,9 +215,28 @@ export async function buildApp(
       ...(duplicates.length > 0 ? { duplicates } : {}),
     };
 
-    log.info({ sessionId: request.params.id, stepCount: enrichedSteps.length, correlatorRateLimited }, 'Recording completed');
     return response;
   });
+
+  // ── Auto-stop sweep: end sessions that ran too long or went idle ────────────
+  const autoStopInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [sessionId, session] of _sessions) {
+      if (session.status !== 'active') continue;
+      const age = now - session.startedAt;
+      const idle = now - session.lastActivityAt;
+      if (age < RECORDER_MAX_DURATION_MS && idle < RECORDER_IDLE_TIMEOUT_MS) continue;
+
+      session.status = 'stopping';
+      _sessions.delete(sessionId);
+      const reason = age >= RECORDER_MAX_DURATION_MS ? 'max duration exceeded' : 'idle timeout';
+      log.warn({ sessionId, reason }, 'Auto-stopping recording session');
+      finishSession(sessionId, session).catch((err) => {
+        log.error({ err, sessionId }, 'Error auto-stopping session');
+      });
+    }
+  }, 60 * 1000);
+  app.addHook('onClose', () => clearInterval(autoStopInterval));
 
   // ── GET /viewer/:id — recording control panel (noVNC opens in its own tab) ───
   app.get<{ Params: { id: string } }>('/viewer/:id', async (request, reply) => {

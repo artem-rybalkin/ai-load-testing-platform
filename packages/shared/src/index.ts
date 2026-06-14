@@ -465,6 +465,9 @@ const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/g;
 const PHONE_RE = /\b(?:\+?\d{1,2}[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/g;
 const IPV4_RE = /\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b/g;
+// Matches full 8-group IPv6 addresses and compressed forms containing "::"
+// (e.g. "::1", "2001:db8::1", "fe80::1234:5678").
+const IPV6_RE = /(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?/g;
 // Candidate card numbers: 13-19 digits, optionally grouped with spaces/dashes
 const CARD_CANDIDATE_RE = /\b(?:\d[ -]?){12,18}\d\b/g;
 
@@ -500,6 +503,7 @@ export function redactPII(text: string): string {
       : match;
   });
   result = result.replace(IPV4_RE, '[REDACTED_IP]');
+  result = result.replace(IPV6_RE, '[REDACTED_IP]');
   return result;
 }
 
@@ -511,6 +515,7 @@ export function detectPII(text: string): PiiCategory[] {
   if (SSN_RE.test(text)) found.add('ssn');
   if (PHONE_RE.test(text)) found.add('phone');
   if (IPV4_RE.test(text)) found.add('ipAddress');
+  if (IPV6_RE.test(text)) found.add('ipAddress');
   for (const match of text.match(CARD_CANDIDATE_RE) ?? []) {
     const digits = match.replace(/[ -]/g, '');
     if (digits.length >= 13 && digits.length <= 19 && isValidLuhn(digits)) {
@@ -523,6 +528,7 @@ export function detectPII(text: string): PiiCategory[] {
   SSN_RE.lastIndex = 0;
   PHONE_RE.lastIndex = 0;
   IPV4_RE.lastIndex = 0;
+  IPV6_RE.lastIndex = 0;
   return Array.from(found);
 }
 

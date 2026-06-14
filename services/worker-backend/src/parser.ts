@@ -80,7 +80,8 @@ const parseK6All = (jsonContent: string): {
         if (status) {
           statusCodes[status] = (statusCodes[status] ?? 0) + 1;
           const code = parseInt(status, 10);
-          if (code >= 200 && code < 300) breakdown.success++;
+          // 3xx redirects are normal responses, not errors — count as success
+          if (code >= 200 && code < 400) breakdown.success++;
           else if (code >= 400 && code < 500) breakdown.clientError++;
           else if (code >= 500) breakdown.serverError++;
         }

@@ -30,6 +30,8 @@ export interface RecordingSessionInternal {
   stepCount: number;
   ignorePatterns: RegExp[]; // compiled from user-supplied pattern strings
   onStep: (() => void) | null; // called when a new step is captured
+  startedAt: number;     // epoch ms when the session was created
+  lastActivityAt: number; // epoch ms of the last captured request
 }
 
 // ─── Static assets we always skip ────────────────────────────────────────────
@@ -218,6 +220,7 @@ export async function startSession(
     });
 
     session.stepCount = completed.length; // eslint-disable-line @typescript-eslint/no-use-before-define
+    session.lastActivityAt = Date.now(); // eslint-disable-line @typescript-eslint/no-use-before-define
     onStep();
     log.debug({ url: req.url, status: resp.status }, 'Captured request');
   });
@@ -233,6 +236,8 @@ export async function startSession(
     stepCount: 0,
     ignorePatterns,
     onStep,
+    startedAt: Date.now(),
+    lastActivityAt: Date.now(),
   };
 
   log.info({ sessionId, chromiumPath }, 'Recording session started');

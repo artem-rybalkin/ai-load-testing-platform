@@ -53,6 +53,8 @@ const makeSession = (id: string, overrides: Partial<RecordingSessionInternal> = 
     stepCount: 0,
     ignorePatterns: [],
     onStep: onStep ?? null,
+    startedAt: Date.now(),
+    lastActivityAt: Date.now(),
     ...restOverrides,
   };
 };

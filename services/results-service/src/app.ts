@@ -452,35 +452,73 @@ export const buildApp = async (
     const { role } = request.body ?? {};
     if (!role || !['admin', 'member', 'viewer'].includes(role)) return reply.code(400).send({ error: 'role must be admin, member, or viewer' });
 
-    if (role !== 'admin') {
-      const { rows } = await pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
-        [request.params.id, request.params.userId]
-      );
-      if (parseInt(rows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last admin' });
-    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Lock all membership rows for this team so concurrent role-change/removal
+      // requests serialize and can't both pass the "last admin" check at once.
+      await client.query(`SELECT 1 FROM team_members WHERE team_id = $1 FOR UPDATE`, [request.params.id]);
 
-    const { rowCount } = await pool.query(`UPDATE team_members SET role = $1 WHERE team_id = $2 AND user_id = $3`, [role, request.params.id, request.params.userId]);
-    if (!rowCount) return reply.code(404).send({ error: 'Member not found' });
-    return { success: true };
+      if (role !== 'admin') {
+        const { rows } = await client.query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
+          [request.params.id, request.params.userId]
+        );
+        if (parseInt(rows[0].count, 10) === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'Cannot remove the last admin' });
+        }
+      }
+
+      const { rowCount } = await client.query(`UPDATE team_members SET role = $1 WHERE team_id = $2 AND user_id = $3`, [role, request.params.id, request.params.userId]);
+      if (!rowCount) {
+        await client.query('ROLLBACK');
+        return reply.code(404).send({ error: 'Member not found' });
+      }
+      await client.query('COMMIT');
+      return { success: true };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   app.delete<{ Params: { id: string; userId: string } }>('/teams/:id/members/:userId', async (request, reply) => {
     if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
 
-    const { rows } = await pool.query<{ role: TeamRole }>(`SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
-    if (rows.length === 0) return reply.code(404).send({ error: 'Member not found' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT 1 FROM team_members WHERE team_id = $1 FOR UPDATE`, [request.params.id]);
 
-    if (rows[0].role === 'admin') {
-      const { rows: adminRows } = await pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
-        [request.params.id, request.params.userId]
-      );
-      if (parseInt(adminRows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last admin' });
+      const { rows } = await client.query<{ role: TeamRole }>(`SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+      if (rows.length === 0) {
+        await client.query('ROLLBACK');
+        return reply.code(404).send({ error: 'Member not found' });
+      }
+
+      if (rows[0].role === 'admin') {
+        const { rows: adminRows } = await client.query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
+          [request.params.id, request.params.userId]
+        );
+        if (parseInt(adminRows[0].count, 10) === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'Cannot remove the last admin' });
+        }
+      }
+
+      await client.query(`DELETE FROM team_members WHERE team_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+      await client.query('COMMIT');
+      return { success: true };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
-
-    await pool.query(`DELETE FROM team_members WHERE team_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
-    return { success: true };
   });
 
   // ── Team quotas & usage ──────────────────────────────────────────────────
@@ -608,17 +646,37 @@ export const buildApp = async (
     const { role } = request.body ?? {};
     if (!role || !['owner', 'admin', 'member'].includes(role)) return reply.code(400).send({ error: 'role must be owner, admin, or member' });
 
-    if (role !== 'owner') {
-      const { rows } = await pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
-        [request.params.id, request.params.userId]
-      );
-      if (parseInt(rows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last owner' });
-    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Lock all membership rows for this org so concurrent role-change/removal
+      // requests serialize and can't both pass the "last owner" check at once.
+      await client.query(`SELECT 1 FROM org_members WHERE org_id = $1 FOR UPDATE`, [request.params.id]);
 
-    const { rowCount } = await pool.query(`UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3`, [role, request.params.id, request.params.userId]);
-    if (!rowCount) return reply.code(404).send({ error: 'Member not found' });
-    return { success: true };
+      if (role !== 'owner') {
+        const { rows } = await client.query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
+          [request.params.id, request.params.userId]
+        );
+        if (parseInt(rows[0].count, 10) === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'Cannot remove the last owner' });
+        }
+      }
+
+      const { rowCount } = await client.query(`UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3`, [role, request.params.id, request.params.userId]);
+      if (!rowCount) {
+        await client.query('ROLLBACK');
+        return reply.code(404).send({ error: 'Member not found' });
+      }
+      await client.query('COMMIT');
+      return { success: true };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   app.delete<{ Params: { id: string; userId: string } }>('/orgs/:id/members/:userId', async (request, reply) => {
@@ -627,19 +685,37 @@ export const buildApp = async (
     const callerRole = await getOrgRole(request.params.id, request.user.id);
     if (callerRole !== 'owner' && callerRole !== 'admin') return reply.code(403).send({ error: 'Org owner or admin role required' });
 
-    const { rows } = await pool.query<{ role: OrgRole }>(`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
-    if (rows.length === 0) return reply.code(404).send({ error: 'Member not found' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT 1 FROM org_members WHERE org_id = $1 FOR UPDATE`, [request.params.id]);
 
-    if (rows[0].role === 'owner') {
-      const { rows: ownerRows } = await pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
-        [request.params.id, request.params.userId]
-      );
-      if (parseInt(ownerRows[0].count, 10) === 0) return reply.code(409).send({ error: 'Cannot remove the last owner' });
+      const { rows } = await client.query<{ role: OrgRole }>(`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+      if (rows.length === 0) {
+        await client.query('ROLLBACK');
+        return reply.code(404).send({ error: 'Member not found' });
+      }
+
+      if (rows[0].role === 'owner') {
+        const { rows: ownerRows } = await client.query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
+          [request.params.id, request.params.userId]
+        );
+        if (parseInt(ownerRows[0].count, 10) === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'Cannot remove the last owner' });
+        }
+      }
+
+      await client.query(`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
+      await client.query('COMMIT');
+      return { success: true };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
-
-    await pool.query(`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, [request.params.id, request.params.userId]);
-    return { success: true };
   });
 
   app.post<{ Params: { id: string }; Body: { name: string } }>('/orgs/:id/teams', async (request, reply) => {
