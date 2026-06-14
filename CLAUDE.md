@@ -925,9 +925,10 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 2. Set strong random `API_KEYS` + `API_KEY`
 3. Set `SESSION_SECRET` to a 32+ char random string
 4. Set `INTERNAL_API_KEY` to a 32+ char random string (gates results-service internal callback endpoints)
-5. Set `DOMAIN=yourdomain.com` and add DNS A records for `yourdomain.com`, `api.yourdomain.com`, `data.yourdomain.com`
+5. Set `DOMAIN=yourdomain.com` and add DNS A records for `yourdomain.com`, `api.yourdomain.com`, `data.yourdomain.com`, `recorder.yourdomain.com`
 6. Set `ALLOWED_ORIGIN=https://yourdomain.com`
-7. Run with `docker-compose.prod.yml` — Caddy handles HTTPS automatically
+7. Set `VNC_PASSWORD` to a random string (required by recorder-service's noVNC viewer on port 6080, bound to localhost only in prod)
+8. Run with `docker-compose.prod.yml` — Caddy handles HTTPS automatically
 
 **HTTPS via Caddy** (`Caddyfile` + `docker-compose.prod.yml`):
 - Caddy service listens on ports 80/443; auto-provisions TLS via Let's Encrypt
@@ -956,6 +957,7 @@ API_KEY=key1                  # single key passed to UI as VITE_API_KEY
 SESSION_SECRET=change-me-...  # results-service: HMAC-SHA256 cookie signing; empty = auth disabled
 INTERNAL_API_KEY=change-me-...  # shared secret for service-to-service callbacks to results-service; empty = disabled (dev only)
 ALLOWED_ORIGIN=https://yourdomain.com  # CORS origin; defaults to * in dev
+VNC_PASSWORD=change-me-...    # recorder-service noVNC viewer (x11vnc); empty = no auth (dev only)
 
 # Rate limiting (api-service + results-service; uses REDIS_URL as shared store, falls back to in-memory):
 RATE_LIMIT_MAX=600            # global requests/window per IP (default 600)

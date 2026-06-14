@@ -23,7 +23,14 @@ if [ ! -e /tmp/.X11-unix/X99 ]; then
   echo "Warning: Xvfb did not start — recording browser will run headlessly"
 else
   # ── 2. Start x11vnc VNC server ─────────────────────────────────────────────
-  x11vnc -display :99 -nopw -listen 0.0.0.0 -forever -quiet > /dev/null 2>&1 &
+  # VNC_PASSWORD (if set) requires clients to authenticate before viewing the
+  # recording browser — required for production where 6080 may be reachable
+  # beyond localhost. Falls back to no auth for local dev.
+  if [ -n "$VNC_PASSWORD" ]; then
+    x11vnc -display :99 -passwd "$VNC_PASSWORD" -listen 0.0.0.0 -forever -quiet > /dev/null 2>&1 &
+  else
+    x11vnc -display :99 -nopw -listen 0.0.0.0 -forever -quiet > /dev/null 2>&1 &
+  fi
   sleep 1  # give x11vnc time to bind port 5900 before websockify starts
 
   # ── 3. Start websockify (noVNC WebSocket-to-VNC proxy) ────────────────────

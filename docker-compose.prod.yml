@@ -14,6 +14,7 @@
 #   API_KEY          single key for UI
 #   ALLOWED_ORIGIN   https://example.com
 #   INTERNAL_API_KEY shared secret for service-to-service callbacks (results-service internal endpoints)
+#   VNC_PASSWORD     password for the recorder-service noVNC viewer (port 6080, localhost-only)
 #   ANTHROPIC_API_KEY
 
 services:
@@ -95,6 +96,18 @@ services:
       API_KEYS: ${API_KEYS}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+
+  recorder-service:
+    ports: !reset
+      - "127.0.0.1:6080:6080"   # noVNC viewer — localhost only; use an SSH tunnel to view recordings
+                                 # (REST/WebSocket on 3007 is proxied via Caddy at recorder.${DOMAIN})
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    environment:
+      VNC_PASSWORD: ${VNC_PASSWORD}
 
   ui:
     ports: !reset []    # Caddy proxies ${DOMAIN} → ui:3006

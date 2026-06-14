@@ -23,10 +23,13 @@ const internalHeaders = (extra?: Record<string, string>): Record<string, string>
 });
 
 // Parses k6-style durations, including compound forms like "1h30m" or "1m30s"
-// and decimals like "1.5m". Returns null if the string contains no recognizable
-// duration component — callers must reject these rather than silently treating
-// them as 0s (which would bypass the duration quota check).
-const parseDurationSeconds = (d: string): number | null => {
+// and decimals like "1.5m", or a bare number (interpreted as seconds — JSON
+// callers may send `duration: 30` instead of `"30s"`). Returns null if the
+// value contains no recognizable duration component — callers must reject
+// these rather than silently treating them as 0s (which would bypass the
+// duration quota check).
+const parseDurationSeconds = (d: string | number): number | null => {
+  if (typeof d === 'number') return Number.isFinite(d) ? Math.round(d) : null;
   const re = /(\d+(?:\.\d+)?)\s*(h|m|s|ms)/gi;
   let total = 0;
   let matched = false;
@@ -216,9 +219,9 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         createdAt: new Date().toISOString(),
       };
 
-      const rawDuration = (options as BackendTestOptions & { duration?: string }).duration;
+      const rawDuration = (options as BackendTestOptions & { duration?: string | number }).duration;
       let durationSeconds: number | undefined;
-      if (rawDuration) {
+      if (rawDuration !== undefined && rawDuration !== null && rawDuration !== '') {
         const parsed = parseDurationSeconds(rawDuration);
         if (parsed === null) {
           return reply.code(400).send({ error: 'Invalid duration format — use values like "30s", "5m", "1h30m"' });

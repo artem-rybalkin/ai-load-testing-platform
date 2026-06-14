@@ -522,6 +522,20 @@ describe('POST /tests — duration validation', () => {
       expect.objectContaining({ durationSeconds: 5400 })
     );
   });
+
+  it('accepts a bare numeric duration as seconds', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...validBody, options: { ...validBody.options, duration: 45 } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mockCheckTestQuota).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({ durationSeconds: 45 })
+    );
+  });
 });
 
 // ─── POST /tests — worker-consumer-count warning message ──────────────────────

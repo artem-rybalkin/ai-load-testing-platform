@@ -14,7 +14,13 @@ done
 
 if [ -e /tmp/.X11-unix/X99 ]; then
   # Use & instead of -bg — daemon fork is unreliable in Docker containers
-  x11vnc -display :99 -nopw -listen 0.0.0.0 -forever -quiet > /dev/null 2>&1 &
+  # VNC_PASSWORD (if set) requires clients to authenticate before viewing the
+  # recording browser. Falls back to no auth for local dev.
+  if [ -n "$VNC_PASSWORD" ]; then
+    x11vnc -display :99 -passwd "$VNC_PASSWORD" -listen 0.0.0.0 -forever -quiet > /dev/null 2>&1 &
+  else
+    x11vnc -display :99 -nopw -listen 0.0.0.0 -forever -quiet > /dev/null 2>&1 &
+  fi
   sleep 1  # give x11vnc time to bind port 5900 before websockify starts
   for d in /usr/share/webapps/novnc /usr/share/novnc; do
     if [ -d "$d" ]; then

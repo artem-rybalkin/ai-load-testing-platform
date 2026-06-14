@@ -278,6 +278,20 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
   broadcast({ type: 'tests:changed' });
 };
 
+let reconnecting = false;
+
+/** Reconnect with capped exponential backoff (1s -> 30s), retrying forever until RabbitMQ is back. */
+const scheduleReconnect = (): void => {
+  if (reconnecting) return;
+  reconnecting = true;
+  connectWithBackoff(startConsumer, {
+    onRetry: (err, attempt, nextDelayMs) =>
+      log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ reconnect failed — retrying'),
+  }).then(() => {
+    reconnecting = false;
+  });
+};
+
 export const startConsumer = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
@@ -286,13 +300,27 @@ export const startConsumer = async (): Promise<void> => {
     onRetry: (err, attempt, nextDelayMs) =>
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ connection failed — retrying'),
   });
-  consumerConnected = true;
+
+  connection.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+  });
+  connection.on('close', () => {
+    log.warn('RabbitMQ connection closed — reconnecting');
+    consumerConnected = false;
+    scheduleReconnect();
+  });
 
   const channel = await connection.createChannel();
+  channel.on('error', (err) => {
+    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    consumerConnected = false;
+  });
+
   await channel.assertQueue(QUEUE, { durable: true });
   await channel.assertQueue(DLQ,   { durable: true });
   channel.prefetch(1);
 
+  consumerConnected = true;
   log.info({ queue: QUEUE }, 'Results-service consumer listening');
 
   channel.consume(QUEUE, async (msg) => {
