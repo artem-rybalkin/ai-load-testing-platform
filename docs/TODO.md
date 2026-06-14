@@ -6,7 +6,7 @@ Improvements, suggestions, and large future work items.
 
 - [ ] Manually test log integration
 - [ ] Manually test script recording
-- [ ] Manually test correlation
+- [x] Manually test correlation
 - [ ] Manually test client-side testing
 
 ## AI Enhancement Roadmap
@@ -44,7 +44,7 @@ Improvements, suggestions, and large future work items.
 - [x] **AMQP reconnect: replace bounded retry with unbounded backoff supervisor (G1 — chaos)** — `connectWithBackoff()` added to `@alt/shared` (capped exponential backoff, 1s → 2s → … → 30s cap, never gives up); all 5 queue-connected services (api-service, ai-service, worker-backend, worker-client, results-service) now use it for both the initial connect and reconnect-on-close, so the platform self-heals after a RabbitMQ outage of any length without operator intervention
 - [x] **FlowBuilder: recording session lost on page reload/navigation** — `recording` state (session id/status) is now persisted to `localStorage` (`flowRecordingSession`) on every change; on mount, an in-progress (`active`/`stopping`) session is restored and `GET /recordings/:id` is called to resume polling, import steps if already completed, or clear stale state on 404/expiry
 - [x] **results-service consumer.ts: missing AMQP close handler + false-positive health (G2 — chaos)** — `consumer.ts` now registers `connection.on('close'/'error')` and `channel.on('error')` handlers that flip `consumerConnected = false` and reconnect via the same `connectWithBackoff()` supervisor used by the other 4 services; `/health` and `/system/health` now reflect the real channel state during a RabbitMQ outage
-- [ ] **e2e templates.spec.ts: preset dropdown not visible after save+reload** — `e2e/templates.spec.ts` ("saves a template and loads it back via the dropdown") fails on CI: `page.locator('select').first()` is not visible after `page.reload()` following "Save preset". The preset `<select>` only renders when `presets.length > 0` (`services/ui/app/page.tsx`); `handleSavePreset` awaits `suggestPresetName()` (Gemini `/ai/preset-name`) before `createPreset()`/`getPresets()` — likely not finished within the test's 1500ms wait before reload. Needs live debugging (docker compose up) to confirm root cause; fix is likely either waiting on the actual `createPreset` network response in the spec, or reordering/decoupling the AI name-suggestion call from the save flow.
+- [x] **e2e templates.spec.ts: preset dropdown not visible after save+reload** — root cause: `page.getByRole('button', { name: /save.*preset/i }).click()` resolved coordinates that, during the description-driven re-render, landed on the "Advanced settings" toggle directly above the "Save preset" button — opening that section instead of clicking save, so `handleSavePreset` never ran and no `/presets` POST ever fired. Fixed by using `.dispatchEvent('click')` instead of coordinate-based `.click()`. Also relaxed the post-reload dropdown assertion to match AI-14's generated preset name (e.g. "HTTPBin Backend Baseline Load (backend)") case-insensitively. Also bounded `suggestPresetName()` in `handleSavePreset` (`services/ui/app/page.tsx`) with a 5s `Promise.race` timeout so a slow/unreachable Gemini call can't block the save.
 
 ## Medium Priority (Feature Gaps)
 
@@ -77,9 +77,9 @@ Improvements, suggestions, and large future work items.
 
 ## Architecture Improvements
 
-- [ ] **Redis pub/sub for WebSocket** — Replace in-process Set<WebSocket> to support horizontal scaling of results-service
+- [x] **Redis pub/sub for WebSocket** — `ws.ts` publishes every `broadcast()` event to a `ws:broadcast` Redis channel (when `REDIS_URL` set) and a duplicated subscriber connection forwards events from other replicas to its local `Set<WebSocket>`; an `INSTANCE_ID` tag prevents double-delivery on the originating replica; falls back to local-only broadcast when Redis is unconfigured
 - [x] **Database read replica** — `readPool` in db.ts (falls back to primary when `READ_DATABASE_URL` unset); all heavy GET endpoints use `rPool`; `docker-compose.replica.yml` overlay for PostgreSQL streaming replication
-- [ ] **RabbitMQ persistence** — Enable durable queues and message persistence for production reliability
+- [x] **RabbitMQ persistence** — Audited all 5 queue-connected services: every queue (`ai-requests`, `backend-tests`, `client-tests`, `test-results`, and all `.dlq` queues) is asserted with `durable: true`, every `sendToQueue`/`publish` call uses `{ persistent: true }`, and `rabbitmq_data` is a named Docker volume (`docker-compose.yml`) so messages survive broker restarts. Only the `cancel-fanout` signal is non-persistent, which is correct — it targets ephemeral per-replica exclusive/auto-delete queues
 - [x] **OpenTelemetry tracing** — `tracing.ts` in all 7 services; auto-instruments Fastify/pg/amqplib/fetch/k6; `test.id` span attribute; exports to Tempo via `OTEL_EXPORTER_OTLP_ENDPOINT`; disabled with `OTEL_SDK_DISABLED=true`
 - [x] **worker-client TTFB accuracy** — Now uses `performance.getEntriesByType('navigation')[0].responseStart - requestStart` via `page.evaluate()` — excludes DNS/TCP/TLS/settle time
 

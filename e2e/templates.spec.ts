@@ -13,18 +13,32 @@ test.describe('Templates', () => {
     await page.fill('input[type="text"][placeholder*="example"]', 'https://httpbin.org/get');
     await page.fill('input[placeholder*="test"]', 'Load test 5 VUs 30s');
 
-    // Save as preset (renamed from "template" in Phase 20)
-    await page.getByRole('button', { name: /save.*preset/i }).click();
-
-    // Should not navigate away — just save silently
-    await page.waitForTimeout(1500);
+    // Save as preset (renamed from "template" in Phase 20).
+    // handleSavePreset awaits an AI name-suggestion call (Gemini, can take
+    // several seconds with retries) before POSTing /presets, so wait for the
+    // actual creation response rather than a fixed timeout.
+    // Use dispatchEvent('click') instead of .click(): coordinate-based clicks
+    // can land on the "Advanced settings" toggle directly above this button
+    // (its bounding box briefly overlaps during the description-driven
+    // re-render), which expands that section instead of triggering save.
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (resp) => resp.url().includes('/presets') && resp.request().method() === 'POST',
+        { timeout: 30_000 },
+      ),
+      page.getByRole('button', { name: /save.*preset/i }).dispatchEvent('click'),
+    ]);
+    expect(response.ok()).toBe(true);
 
     // Reload the page and verify template appears in the dropdown
     await page.reload();
     await expect(page.locator('select').first()).toBeVisible({ timeout: 5_000 });
 
+    // AI-14 generates a descriptive preset name (e.g. "HTTPBin Backend Baseline
+    // Load (backend)") rather than reusing the raw description/URL verbatim,
+    // so match case-insensitively against either.
     const options = await page.locator('select').first().locator('option').allTextContents();
-    const hasTemplate = options.some(opt => opt.includes('Load test') || opt.includes('httpbin'));
+    const hasTemplate = options.some(opt => /load test|httpbin/i.test(opt));
     expect(hasTemplate).toBe(true);
   });
 

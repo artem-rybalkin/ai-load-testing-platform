@@ -205,6 +205,124 @@ describe('ws module', () => {
     });
   });
 
+  // ── Redis pub/sub (horizontal scaling) ────────────────────────────────────────
+
+  describe('Redis pub/sub broadcast', () => {
+    let subscriberMock: { on: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> };
+    let publishMock: ReturnType<typeof vi.fn>;
+    let messageHandler: (channel: string, message: string) => void;
+
+    beforeEach(async () => {
+      vi.resetModules();
+
+      subscriberMock = {
+        on: vi.fn((event: string, cb: (channel: string, message: string) => void) => {
+          if (event === 'message') messageHandler = cb;
+        }),
+        subscribe: vi.fn().mockResolvedValue(undefined),
+      };
+      publishMock = vi.fn().mockResolvedValue(1);
+
+      vi.doMock('../redis', () => ({
+        redisClient: {
+          duplicate: () => subscriberMock,
+          publish: publishMock,
+        },
+      }));
+
+      vi.doMock('ws', () => {
+        class MockWebSocket {
+          static OPEN    = WS_OPEN;
+          static CLOSING = WS_CLOSING;
+        }
+        class MockWebSocketServer {
+          handleUpgrade = mockHandleUpgrade;
+        }
+        return { WebSocketServer: MockWebSocketServer, WebSocket: MockWebSocket };
+      });
+
+      mockHandleUpgrade = vi.fn(
+        (_req: unknown, _socket: unknown, _head: unknown, cb: (ws: MockWS) => void) => {
+          lastUpgradeCallback = cb;
+        },
+      );
+
+      wsMod      = await import('../ws') as typeof WsTypes;
+      mockServer = new EventEmitter();
+      wsMod.setupWebSocketServer(mockServer as never);
+    });
+
+    it('subscribes to the ws:broadcast channel on a duplicated connection', () => {
+      expect(subscriberMock.subscribe).toHaveBeenCalledWith('ws:broadcast');
+    });
+
+    it('publishes broadcast events to Redis in addition to local delivery', () => {
+      const ws = makeMockWS(WS_OPEN);
+      connectClient(ws);
+
+      wsMod.broadcast({ type: 'tests:changed' });
+
+      // Local delivery still happens
+      expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'tests:changed' }));
+
+      // And the event is published for other replicas
+      expect(publishMock).toHaveBeenCalledOnce();
+      const [channel, payload] = publishMock.mock.calls[0];
+      expect(channel).toBe('ws:broadcast');
+      const parsed = JSON.parse(payload);
+      expect(parsed.event).toEqual({ type: 'tests:changed' });
+      expect(typeof parsed.origin).toBe('string');
+    });
+
+    it('forwards events received from other replicas to local clients', () => {
+      const ws = makeMockWS(WS_OPEN);
+      connectClient(ws);
+
+      messageHandler('ws:broadcast', JSON.stringify({
+        origin: 'other-replica-id',
+        event:  { type: 'tests:changed' },
+      }));
+
+      expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'tests:changed' }));
+    });
+
+    it('does not re-deliver an event originating from this replica (avoids double-send)', () => {
+      const ws = makeMockWS(WS_OPEN);
+      connectClient(ws);
+
+      // Trigger a local broadcast to learn this replica's origin id
+      wsMod.broadcast({ type: 'tests:changed' });
+      const ownOrigin = JSON.parse(publishMock.mock.calls[0][1]).origin;
+      ws.send.mockClear();
+
+      // Simulate Redis echoing the same message back to this replica
+      messageHandler('ws:broadcast', JSON.stringify({
+        origin: ownOrigin,
+        event:  { type: 'tests:changed' },
+      }));
+
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('ignores messages on unrelated Redis channels', () => {
+      const ws = makeMockWS(WS_OPEN);
+      connectClient(ws);
+
+      messageHandler('some-other-channel', JSON.stringify({
+        origin: 'other-replica-id',
+        event:  { type: 'tests:changed' },
+      }));
+
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('does not throw on malformed pub/sub payloads', () => {
+      connectClient(makeMockWS(WS_OPEN));
+
+      expect(() => messageHandler('ws:broadcast', 'not-json')).not.toThrow();
+    });
+  });
+
   // ── setupWebSocketServer() ──────────────────────────────────────────────────
 
   describe('setupWebSocketServer', () => {

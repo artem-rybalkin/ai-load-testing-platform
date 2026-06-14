@@ -315,14 +315,18 @@ function HomeContent() {
     setSavingPreset(true);
     setPresetNameSuggestion(null);
     try {
-      // AI-14: get a name suggestion before saving
+      // AI-14: get a name suggestion before saving — bounded by a short timeout so a
+      // slow/unreachable Gemini call can't block the save (falls back to description/URL)
       let presetName = form.description || form.targetUrl || 'Unnamed test';
       try {
-        const suggestion = await suggestPresetName({
-          url: form.targetUrl, type: form.type,
-          vus: form.vus, duration: form.duration, profile: form.profile,
-          stepCount: form.type === 'flow' ? flowSteps.length : undefined,
-        });
+        const suggestion = await Promise.race([
+          suggestPresetName({
+            url: form.targetUrl, type: form.type,
+            vus: form.vus, duration: form.duration, profile: form.profile,
+            stepCount: form.type === 'flow' ? flowSteps.length : undefined,
+          }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+        ]);
         setPresetNameSuggestion(suggestion);
         presetName = suggestion.name;
       } catch { /* non-fatal, use fallback name */ }
