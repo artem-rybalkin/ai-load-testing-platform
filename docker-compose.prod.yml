@@ -13,6 +13,7 @@
 #   API_KEYS         comma-separated API keys
 #   API_KEY          single key for UI
 #   ALLOWED_ORIGIN   https://example.com
+#   INTERNAL_API_KEY shared secret for service-to-service callbacks (results-service internal endpoints)
 #   ANTHROPIC_API_KEY
 
 services:
@@ -48,6 +49,8 @@ services:
         limits:
           memory: 1G
           cpus: '1.0'
+    environment:
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
 
   worker-client:
     ports: !reset []
@@ -56,6 +59,8 @@ services:
         limits:
           memory: 1G
           cpus: '1.0'
+    environment:
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
 
   ai-service:
     ports: !reset []
@@ -64,6 +69,8 @@ services:
         limits:
           memory: 512M
           cpus: '0.5'
+    environment:
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
 
   results-service:
     ports: !reset []    # Caddy proxies data.${DOMAIN} → results-service:3004
@@ -75,6 +82,7 @@ services:
     environment:
       API_KEYS: ${API_KEYS}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
 
   api-service:
     ports: !reset []    # Caddy proxies api.${DOMAIN} → api-service:3000
@@ -86,6 +94,7 @@ services:
     environment:
       API_KEYS: ${API_KEYS}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
 
   ui:
     ports: !reset []    # Caddy proxies ${DOMAIN} → ui:3006

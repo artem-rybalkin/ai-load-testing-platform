@@ -16,6 +16,12 @@ declare module 'fastify' {
   interface FastifyRequest { projectId: string | undefined; role: TeamRole | null; }
 }
 
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
+  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
+  ...extra,
+});
+
 const parseDurationSeconds = (d: string): number => {
   const m = d.match(/^(\d+)(s|m|h)$/i);
   if (!m) return 0;
@@ -205,7 +211,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         `${process.env.RESULTS_URL || 'http://results-service:3004'}/results/pending`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: internalHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ testId: test.id, type: test.type, targetUrl: test.targetUrl, durationSeconds, steps: test.steps, testData: test.testData, projectId: test.projectId }),
           signal: AbortSignal.timeout(5000),
         }
@@ -216,7 +222,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       const postMessage = (message: string) =>
         fetch(`${resultsUrl}/results/${test.id}/message`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: internalHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ message }),
         }).catch(() => {});
 
@@ -286,7 +292,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       const { testId } = request.params;
       const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
 
-      const res = await fetch(`${resultsUrl}/results/${testId}/cancel`, { method: 'POST' });
+      const res = await fetch(`${resultsUrl}/results/${testId}/cancel`, { method: 'POST', headers: internalHeaders() });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         return reply.code(res.status).send(body);

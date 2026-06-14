@@ -1043,3 +1043,76 @@ describe('GET /system/ai-status', () => {
     expect(res.json().quotaExceeded).toBe(false);
   });
 });
+
+// ─── INTERNAL_API_KEY gating on internal callback endpoints ──────────────────
+
+describe('INTERNAL_API_KEY gating', () => {
+  let gatedApp: FastifyInstance;
+  const INTERNAL_KEY = 'test-internal-secret';
+
+  beforeAll(async () => {
+    process.env.INTERNAL_API_KEY = INTERNAL_KEY;
+    gatedApp = await buildApp(pool);
+  });
+
+  afterAll(async () => {
+    delete process.env.INTERNAL_API_KEY;
+    await gatedApp.close();
+  });
+
+  it('rejects POST /results/pending without X-Internal-Key', async () => {
+    const res = await gatedApp.inject({
+      method: 'POST',
+      url: '/results/pending',
+      payload: { testId: crypto.randomUUID(), type: 'backend', targetUrl: 'http://example.com' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects POST /results/pending with a wrong X-Internal-Key', async () => {
+    const res = await gatedApp.inject({
+      method: 'POST',
+      url: '/results/pending',
+      headers: { 'x-internal-key': 'wrong-key' },
+      payload: { testId: crypto.randomUUID(), type: 'backend', targetUrl: 'http://example.com' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('accepts POST /results/pending with the correct X-Internal-Key', async () => {
+    const res = await gatedApp.inject({
+      method: 'POST',
+      url: '/results/pending',
+      headers: { 'x-internal-key': INTERNAL_KEY },
+      payload: { testId: crypto.randomUUID(), type: 'backend', targetUrl: 'http://example.com' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects POST /results/:testId/running without X-Internal-Key', async () => {
+    const testId = await insertResult({ status: 'pending' });
+    const res = await gatedApp.inject({ method: 'POST', url: `/results/${testId}/running` });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects POST /results/:testId/live without X-Internal-Key', async () => {
+    const testId = await insertResult({ status: 'running' });
+    const res = await gatedApp.inject({
+      method: 'POST',
+      url: `/results/${testId}/live`,
+      payload: { vus: 1, rps: 1, avgResponseTime: 1, errorRate: 0 },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('does not gate GET /results/:testId/live (project-scoped UI read)', async () => {
+    const testId = await insertResult({ status: 'running' });
+    const res = await gatedApp.inject({ method: 'GET', url: `/results/${testId}/live` });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('does not gate /health', async () => {
+    const res = await gatedApp.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(200);
+  });
+});

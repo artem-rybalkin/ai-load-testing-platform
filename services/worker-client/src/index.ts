@@ -41,6 +41,11 @@ const DLQ                = `${QUEUE}.dlq`;
 const MAX_TEST_DURATION_MS = parseInt(process.env.PUPPETEER_MAX_DURATION_MS ?? '300000'); // 5 min
 const NAV_TIMEOUT_MS = parseInt(process.env.PUPPETEER_NAV_TIMEOUT_MS ?? '60000'); // 1 min
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '2');
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
+  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
+  ...extra,
+});
 
 import { Browser } from 'puppeteer';
 const runningBrowsers  = new Map<string, Browser>();
@@ -86,7 +91,7 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
   const postMessage = (message: string) =>
     fetch(`${resultsUrl}/results/${test.id}/message`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ message }),
     }).catch((err: Error) => testLog.debug({ err: err.message }, 'postMessage delivery failed'));
 
@@ -357,7 +362,7 @@ const start = async (): Promise<void> => {
 
     try {
       const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
-      fetch(`${resultsUrl}/results/${test.id}/running`, { method: 'POST' }).catch(() => {});
+      fetch(`${resultsUrl}/results/${test.id}/running`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
 
       const metrics = await runClientTest(test);
 
@@ -386,7 +391,7 @@ const start = async (): Promise<void> => {
       const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
       if (retryCount >= MAX_RETRIES) {
         const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
-        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST' }).catch(() => {});
+        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
       }
       handleRetry(channel, msg, QUEUE, DLQ, test.id);
     }

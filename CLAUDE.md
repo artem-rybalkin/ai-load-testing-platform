@@ -872,6 +872,12 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 - Returns `401` on missing/invalid key; `/health` and internal `/results/pending` are exempt
 - Empty `API_KEYS` disables auth entirely — safe for local dev, required for cloud
 
+**Internal Callback Authentication** (`results-service/src/app.ts`):
+- Server-to-server callbacks from api-service/ai-service/workers (`POST /results/pending`, `POST /results/:testId/{running,fail,message,cancel,live}`) carry no user session/API key — they're classified as `internalPaths`/`isInternalCallback(url, method)` in the `onRequest` hook
+- `INTERNAL_API_KEY` env var gates these routes: when set, the hook requires header `X-Internal-Key: <INTERNAL_API_KEY>` and returns `401` if missing/mismatched; empty (default) disables the check — dev-only, same convention as `API_KEYS`/`SESSION_SECRET`
+- `GET /results/:testId/live` is NOT an internal callback (read by the UI, project-scoped) — only the worker's `POST` to `/live` is gated
+- Callers (api-service, ai-service, worker-backend, worker-client) send `X-Internal-Key` via a shared `internalHeaders()` helper that reads `INTERNAL_API_KEY` and no-ops when empty
+
 **User Accounts & Org/Team/RBAC** (`results-service/src/session.ts`, `results-service/src/app.ts`):
 - `users` table: email + `bcrypt.hash(password, 10)` via `bcryptjs`. `POST /auth/register` creates a user, a new team (`projects` row), an `admin` `team_members` row, and a session in one transaction. `POST /auth/login` verifies via `bcrypt.compare`.
 - `sessions` table: DB-backed, revocable, opaque tokens — `createSession(pool, userId, teamId)` generates `crypto.randomBytes(32).toString('hex')`, stores `sha256(token)` as `token_hash` with 30-day `expires_at`. The raw token is the `alt_session` cookie value (HttpOnly, SameSite=Strict); only the hash is persisted. `POST /auth/logout` sets `revoked_at`, immediately invalidating the cookie.
@@ -918,9 +924,10 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 1. Rotate `GEMINI_API_KEY` (never commit `.env`)
 2. Set strong random `API_KEYS` + `API_KEY`
 3. Set `SESSION_SECRET` to a 32+ char random string
-4. Set `DOMAIN=yourdomain.com` and add DNS A records for `yourdomain.com`, `api.yourdomain.com`, `data.yourdomain.com`
-5. Set `ALLOWED_ORIGIN=https://yourdomain.com`
-6. Run with `docker-compose.prod.yml` — Caddy handles HTTPS automatically
+4. Set `INTERNAL_API_KEY` to a 32+ char random string (gates results-service internal callback endpoints)
+5. Set `DOMAIN=yourdomain.com` and add DNS A records for `yourdomain.com`, `api.yourdomain.com`, `data.yourdomain.com`
+6. Set `ALLOWED_ORIGIN=https://yourdomain.com`
+7. Run with `docker-compose.prod.yml` — Caddy handles HTTPS automatically
 
 **HTTPS via Caddy** (`Caddyfile` + `docker-compose.prod.yml`):
 - Caddy service listens on ports 80/443; auto-provisions TLS via Let's Encrypt
@@ -947,6 +954,7 @@ DOMAIN=yourdomain.com         # used by Caddy for TLS + UI env var rewrites
 API_KEYS=key1,key2            # comma-separated; empty string = auth disabled (dev only)
 API_KEY=key1                  # single key passed to UI as VITE_API_KEY
 SESSION_SECRET=change-me-...  # results-service: HMAC-SHA256 cookie signing; empty = auth disabled
+INTERNAL_API_KEY=change-me-...  # shared secret for service-to-service callbacks to results-service; empty = disabled (dev only)
 ALLOWED_ORIGIN=https://yourdomain.com  # CORS origin; defaults to * in dev
 
 # Rate limiting (api-service + results-service; uses REDIS_URL as shared store, falls back to in-memory):

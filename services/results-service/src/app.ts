@@ -83,17 +83,24 @@ export const buildApp = async (
 
   const sessionSecret = process.env.SESSION_SECRET || '';
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+  const internalApiKey = process.env.INTERNAL_API_KEY || '';
 
-  // Internal endpoints called by backend services (no cookie) — always exempt
-  const internalPaths = new Set(['/health', '/system/ai-status', '/results/pending', '/ws']);
+  // Endpoints that bypass all HTTP auth entirely (health checks, UI websocket)
+  const publicPaths = new Set(['/health', '/system/ai-status', '/ws']);
+
+  // Server-to-server callbacks from api-service/workers/ai-service (no cookie).
+  // Gated by INTERNAL_API_KEY (X-Internal-Key header) when configured; empty =
+  // disabled, same convention as API_KEYS, for local dev.
+  const internalPaths = new Set(['/results/pending']);
   const internalSuffixes = ['/running', '/fail', '/message', '/live', '/cancel'];
-  const isInternal = (url: string, method: string) => {
+  const isInternalCallback = (url: string, method: string) => {
     if (internalPaths.has(url)) return true;
     // GET /results/:testId/live is read by the UI and must be project-scoped;
     // only the worker's POST (pushing live metric points) is server-to-server.
     if (url.endsWith('/live') && method === 'GET') return false;
     return internalSuffixes.some(s => url.endsWith(s));
   };
+  const isInternal = (url: string, method: string) => publicPaths.has(url) || isInternalCallback(url, method);
 
   await app.register(rateLimit, {
     global: true,
@@ -116,7 +123,14 @@ export const buildApp = async (
   app.addHook('onRequest', async (request, reply) => {
     const url = request.url.split('?')[0];
     if (url.startsWith('/auth/')) return;
-    if (isInternal(url, request.method)) return;
+    if (publicPaths.has(url)) return;
+
+    if (isInternalCallback(url, request.method)) {
+      if (internalApiKey && request.headers['x-internal-key'] !== internalApiKey) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+      }
+      return;
+    }
 
     const apiKeyHeader = request.headers['x-api-key'] as string | undefined;
 

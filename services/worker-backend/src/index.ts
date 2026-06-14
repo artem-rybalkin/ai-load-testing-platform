@@ -31,6 +31,11 @@ const RESULTS_QUEUE    = 'test-results';
 const DLQ              = `${QUEUE}.dlq`;
 const MAX_RETRIES   = 3;
 const RESULTS_URL   = process.env.RESULTS_URL || 'http://results-service:3004';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
+  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
+  ...extra,
+});
 const LIVE_INTERVAL_MS     = LIVE_WINDOW_SEC * 1000;
 const MAX_TEST_DURATION_MS = parseInt(process.env.K6_MAX_DURATION_MS ?? '600000'); // 10 min
 const GRACE_PERIOD_MS      = 30000;
@@ -73,7 +78,7 @@ const postLiveMetric = async (testId: string, point: LiveMetricPoint): Promise<v
   try {
     await fetch(`${RESULTS_URL}/results/${testId}/live`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(point)
     });
   } catch { /* best-effort */ }
@@ -228,17 +233,17 @@ const runK6Test = async (
 // it'd never receive the push notification and would be stuck showing the
 // last status it fetched (e.g. "pending") until manually reloaded.
 const notifyRunning = async (testId: string): Promise<void> => {
-  try { await fetch(`${RESULTS_URL}/results/${testId}/running`, { method: 'POST' }); }
+  try { await fetch(`${RESULTS_URL}/results/${testId}/running`, { method: 'POST', headers: internalHeaders() }); }
   catch { /* best-effort */ }
 };
 
 const notifyFailed = async (testId: string): Promise<void> => {
-  try { await fetch(`${RESULTS_URL}/results/${testId}/fail`, { method: 'POST' }); }
+  try { await fetch(`${RESULTS_URL}/results/${testId}/fail`, { method: 'POST', headers: internalHeaders() }); }
   catch { /* best-effort */ }
 };
 
 const notifyCancelled = async (testId: string): Promise<void> => {
-  try { await fetch(`${RESULTS_URL}/results/${testId}/cancel`, { method: 'POST' }); }
+  try { await fetch(`${RESULTS_URL}/results/${testId}/cancel`, { method: 'POST', headers: internalHeaders() }); }
   catch { /* best-effort */ }
 };
 

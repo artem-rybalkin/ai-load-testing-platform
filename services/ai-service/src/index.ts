@@ -12,6 +12,11 @@ const CLIENT_QUEUE       = 'client-tests';
 const DLQ                = `${CONSUME_QUEUE}.dlq`;
 const MAX_RETRIES        = 3;
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '3');
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
+  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
+  ...extra,
+});
 
 let queueConnected = false;
 let reconnecting = false;
@@ -130,7 +135,7 @@ const startConsumer = async (): Promise<void> => {
     const postMessage = (message: string) =>
       fetch(`${resultsUrl}/results/${test.id}/message`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: internalHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ message }),
       }).catch((err: Error) => log.debug({ testId: test.id, err: err.message }, 'postMessage delivery failed'));
 
@@ -184,7 +189,7 @@ const startConsumer = async (): Promise<void> => {
         await postMessage('Script generation failed after 3 attempts — test could not start');
         log.error({ testId: test.id }, 'Max retries exceeded, routing to DLQ');
         channel.sendToQueue(DLQ, msg.content, { persistent: true });
-        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST' }).catch(() => {});
+        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
       }
       channel.ack(msg);
     }
