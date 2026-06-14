@@ -56,9 +56,10 @@ test.describe('Flow Builder', () => {
     await page.getByRole('button', { name: /\+ add step/i }).click();
 
     // Scope to the step card itself — "+ add" also matches the env-vars and
-    // data-table sections' own "+ add"/"+ add row" buttons elsewhere on the page.
+    // data-table sections' own "+ add"/"+ add row" buttons elsewhere on the page,
+    // and the per-step "Add request header" button shares the same "+ add" text.
     const stepCard = page.locator('div.border.border-gray-200.rounded-xl').filter({ has: page.locator('input[placeholder="Step name (e.g. Login)"]') });
-    await stepCard.getByRole('button', { name: '+ add' }).click();
+    await stepCard.getByRole('button', { name: 'Add extract rule' }).click();
     await expect(page.locator('input[placeholder="varName"]')).toBeVisible();
 
     await page.locator('input[placeholder="varName"]').fill('authToken');

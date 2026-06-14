@@ -16,7 +16,9 @@ test.describe.serial('Result detail — completed test actions', () => {
 
     const urlInput = page.locator('input[placeholder*="example"]');
     await urlInput.click();
-    await urlInput.fill('http://localhost:3000/health');
+    // Must be reachable from inside the worker-backend container (not "localhost",
+    // which resolves to the worker itself, not api-service) so the test completes.
+    await urlInput.fill('http://api-service:3000/health');
     await urlInput.press('Tab');
 
     const descInput = page.locator('input[placeholder*="test"]');
@@ -106,6 +108,6 @@ test.describe.serial('Result detail — completed test actions', () => {
 
     // Form should be pre-filled with the original target URL
     const urlInput = page.locator('input[placeholder*="example"]');
-    await expect(urlInput).toHaveValue(/localhost:3000\/health/, { timeout: 10_000 });
+    await expect(urlInput).toHaveValue(/api-service:3000\/health/, { timeout: 10_000 });
   });
 });

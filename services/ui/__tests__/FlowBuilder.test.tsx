@@ -126,8 +126,7 @@ describe('FlowBuilder — request headers editor', () => {
 
   it('adds a new empty header row when "+ add" is clicked', () => {
     render(<FlowBuilder {...defaultProps} steps={[makeFlowStep('Get profile')]} />);
-    // "Request headers" section's "+ add" is the first of several "+ add" buttons on the page
-    fireEvent.click(screen.getAllByRole('button', { name: /^\+ add$/i })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Add request header' }));
     const [step] = defaultProps.onChange.mock.calls[0][0];
     expect(step.headers).toEqual({ '': '' });
   });

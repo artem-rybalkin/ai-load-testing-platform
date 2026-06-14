@@ -758,7 +758,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
             <div>
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs text-gray-500 font-medium">Request headers</span>
-                <button type="button" onClick={() => addHeader(i)} className="text-xs text-blue-600 hover:underline">+ add</button>
+                <button type="button" onClick={() => addHeader(i)} aria-label="Add request header" className="text-xs text-blue-600 hover:underline">+ add</button>
               </div>
               {Object.entries(step.headers ?? {}).map(([key, value], hi) => (
                 <div key={hi} className="flex gap-1 mb-1 items-center">
@@ -789,7 +789,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
             <div>
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs text-gray-500 font-medium">Extract variables from response</span>
-                <button type="button" onClick={() => addExtract(i)} className="text-xs text-blue-600 hover:underline">+ add</button>
+                <button type="button" onClick={() => addExtract(i)} aria-label="Add extract rule" className="text-xs text-blue-600 hover:underline">+ add</button>
               </div>
               {Object.entries(step.extract ?? {}).map(([key, rule]) => (
                 <div key={key} className="flex gap-1 mb-1 items-center">

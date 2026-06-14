@@ -13,7 +13,9 @@ async function createAndWaitForResult(page: Page): Promise<string> {
   const res = await page.request.post(`${API_URL}/tests`, {
     data: {
       type: 'backend',
-      targetUrl: 'http://localhost:3000/health',
+      // Must be reachable from inside the worker-backend container (not "localhost",
+      // which resolves to the worker itself, not api-service) so the test completes.
+      targetUrl: 'http://api-service:3000/health',
       description: 'compare E2E test',
       options: { vus: 1, duration: '10s' },
     },
