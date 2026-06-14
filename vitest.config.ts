@@ -16,6 +16,7 @@ export default defineConfig({
     env: {
       DATABASE_URL: 'postgresql://placeholder:placeholder@localhost:5432/placeholder',
       RABBITMQ_URL: 'amqp://placeholder:placeholder@localhost:5672',
+      API_KEYS: '',
     },
     include: [
       'services/*/src/__tests__/**/*.test.ts',
