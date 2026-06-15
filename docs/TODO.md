@@ -42,7 +42,7 @@ Improvements, suggestions, and large future work items.
 - [x] **Rate limiting (Redis — priority #1)** — Wire up Redis; add `@fastify/rate-limit` to api-service and results-service to protect Gemini API and REST endpoints
 - [x] **Recorder-service test coverage** — recorder.test.ts (262 lines), correlator.test.ts (302 lines), api.test.ts (385 lines)
 - [ ] **Playwright → Puppeteer converter** — New converter-service or ai-service endpoint; UI file upload; AI translation from Playwright to Puppeteer syntax
-- [ ] **Lint cleanup — remaining `no-unused-vars` errors (15)** — found while auditing lint output; mostly trivial (unused imports/catch-block bindings), left as-is to avoid unrelated scope creep on other features:
+- [x] **Lint cleanup — remaining `no-unused-vars` errors (15)** — found while auditing lint output; mostly trivial (unused imports/catch-block bindings), left as-is to avoid unrelated scope creep on other features:
   - `ai-service/src/__tests__/generator.test.ts:1` — unused `beforeEach` import
   - `recorder-service/src/__tests__/api.test.ts:1` — unused `afterAll` import
   - `recorder-service/src/recorder.ts:16` — unused `CapturedResponse` type
