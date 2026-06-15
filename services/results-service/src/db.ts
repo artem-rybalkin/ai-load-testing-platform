@@ -277,6 +277,24 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`CREATE INDEX IF NOT EXISTS team_api_keys_hash_idx ON team_api_keys(key_hash)`);
     },
   },
+  {
+    version: 9,
+    name: 'audit_log',
+    up: async (p) => {
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          team_id       UUID REFERENCES projects(id) ON DELETE CASCADE,
+          user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+          action        VARCHAR(30) NOT NULL,
+          resource_type VARCHAR(30) NOT NULL,
+          resource_id   TEXT,
+          created_at    TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await p.query(`CREATE INDEX IF NOT EXISTS audit_log_team_id_idx ON audit_log(team_id, created_at DESC)`);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────

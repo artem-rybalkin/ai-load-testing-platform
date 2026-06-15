@@ -6,7 +6,8 @@ import {
   getTeamMembers, addTeamMember, updateTeamMemberRole, removeTeamMember,
   getTeamQuota, updateTeamQuota,
   getTeamApiKeys, createTeamApiKey, revokeTeamApiKey,
-  TeamMemberRow, TeamRole, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated,
+  getAuditLog,
+  TeamMemberRow, TeamRole, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated, AuditLogEntry,
 } from '@/lib/api';
 
 const ROLES: TeamRole[] = ['admin', 'member', 'viewer'];
@@ -42,6 +43,9 @@ export default function TeamPage() {
   const [creatingKey, setCreatingKey] = useState(false);
   const [newKey, setNewKey] = useState<TeamApiKeyCreated | null>(null);
 
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
+  const [auditError, setAuditError] = useState('');
+
   const load = async () => {
     if (!teamId || teamId === 'dev') return;
     try {
@@ -62,6 +66,12 @@ export default function TeamPage() {
         setApiKeys(await getTeamApiKeys(teamId));
       } catch {
         setApiKeyError('Failed to load API keys');
+      }
+      try {
+        const { entries } = await getAuditLog(teamId);
+        setAuditLog(entries);
+      } catch {
+        setAuditError('Failed to load audit log');
       }
     }
   };
@@ -357,6 +367,34 @@ export default function TeamPage() {
                       Revoke
                     </button>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
+          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
+            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Audit Log</span>
+          </div>
+          {auditError && <p className="px-4 pt-3 text-[#cf222e] text-[12px]">{auditError}</p>}
+          {auditLog.length === 0 ? (
+            <div className="p-8 text-center text-[13px] text-[#57606a]">No audit log entries</div>
+          ) : (
+            <div className="divide-y divide-[#eaeef2]">
+              {auditLog.map(entry => (
+                <div key={entry.id} className="flex items-center justify-between px-4 py-2 hover:bg-[#f6f8fa]">
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-mono text-[#24292f] truncate">
+                      {entry.action} <span className="text-[#8c959f]">{entry.resourceType}</span> {entry.resourceId.slice(0, 8)}
+                    </p>
+                    <p className="text-[11px] text-[#8c959f]">{entry.userEmail ?? 'unknown user'}</p>
+                  </div>
+                  <span className="text-[11px] font-mono text-[#57606a] flex-shrink-0">
+                    {new Date(entry.createdAt).toLocaleString()}
+                  </span>
                 </div>
               ))}
             </div>

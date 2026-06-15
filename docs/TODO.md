@@ -65,7 +65,7 @@ Improvements, suggestions, and large future work items.
 - [x] **PII detection/redaction before sending recorded traffic to Gemini** — `redactPII()`/`detectPII()` in `@alt/shared`; applied to `requestBody`/`responseBody` in `recorder-service/correlator.ts` before building the correlation prompt (emails, SSNs, phone numbers, Luhn-valid credit card numbers, IPv4 addresses)
 - [ ] **Encryption at rest for PostgreSQL** — `test_results`, `test_scripts`, target URLs, and recorded flow steps are stored in plaintext; investigate column-level encryption (e.g. `pgcrypto`) or full-disk/volume encryption for production deployments
 - [ ] **Data retention / right-to-erasure (GDPR)** — `test_results` and `live_metrics` accumulate indefinitely with no expiry; add a configurable retention period (auto-purge old rows) and an admin endpoint to delete all data for a team/user on request
-- [ ] **Audit log for data access** — No record of who viewed/exported/deleted test results, scripts, or PDF reports; add an `audit_log` table capturing user, action, resource, and timestamp for compliance-sensitive deployments
+- [x] **Audit log for data access** — Migration #9 adds `audit_log` (team_id, user_id, action, resource_type, resource_id, created_at); `recordAudit()` (`results-service/src/audit.ts`) logs `export_pdf`/`export_csv` on `/report.pdf`/`/report.csv` and `delete` on `DELETE /scripts/:id`; admin-only `GET /teams/:id/audit-log` returns the most recent entries joined with user email; surfaced in an "Audit Log" section on the Team page
 
 ## Low Priority (Polish)
 

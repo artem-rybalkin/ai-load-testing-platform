@@ -254,6 +254,25 @@ List keys (no key material).
 
 Revoke a key (`revoked_at = NOW()`). Returns `204`.
 
+#### `GET /teams/:id/audit-log`
+
+**Admin only.** Returns the most recent audit log entries for the team (default 100, max 500 via `?limit=`), most recent first.
+
+```bash
+curl http://localhost:3004/teams/<id>/audit-log -b cookies.txt
+```
+
+**Response `200`:**
+```json
+{
+  "entries": [
+    { "id": "...", "action": "export_csv", "resourceType": "test_result", "resourceId": "...", "createdAt": "...", "userEmail": "admin@example.com" }
+  ]
+}
+```
+
+Entries are recorded for `GET /results/:testId/report.pdf` (`export_pdf`), `GET /results/:testId/report.csv` (`export_csv`), and `DELETE /scripts/:id` (`delete`).
+
 ---
 
 ### Organizations

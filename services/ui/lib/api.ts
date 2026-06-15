@@ -620,6 +620,24 @@ export const updateTeamQuota = (teamId: string, quota: Partial<TeamQuota>): Prom
     return r.json();
   });
 
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  createdAt: string;
+  userEmail: string | null;
+}
+
+export const getAuditLog = (teamId: string): Promise<{ entries: AuditLogEntry[] }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/audit-log`).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+
 // ── Organizations ────────────────────────────────────────────────────────────
 
 export interface OrgMemberRow { userId: string; email: string; name: string | null; role: OrgRole }

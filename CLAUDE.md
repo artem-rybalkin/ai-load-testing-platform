@@ -422,6 +422,18 @@ CREATE TABLE team_api_keys (
   revoked_at   TIMESTAMPTZ
 );
 CREATE INDEX team_api_keys_hash_idx ON team_api_keys(key_hash);
+
+-- Audit log for compliance-sensitive data access — migration #9
+CREATE TABLE audit_log (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id       UUID REFERENCES projects(id) ON DELETE CASCADE,
+  user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+  action        VARCHAR(30) NOT NULL,   -- 'view' | 'export_pdf' | 'export_csv' | 'delete'
+  resource_type VARCHAR(30) NOT NULL,   -- 'test_result' | 'script'
+  resource_id   TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX audit_log_team_id_idx ON audit_log(team_id, created_at DESC);
 ```
 
 ## Shared Types (@alt/shared)
@@ -613,6 +625,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `POST   /teams/:id/api-keys` — `{ name }` → generates `crypto.randomBytes(24).toString('hex')`, stores `sha256(key)`; returns `{ id, name, key, createdAt }` — **the raw `key` is shown only once**
 - `GET    /teams/:id/api-keys` — list `[{ id, name, createdAt, lastUsedAt, revoked }]` (no key material)
 - `DELETE /teams/:id/api-keys/:keyId` — sets `revoked_at = NOW()`
+- `GET    /teams/:id/audit-log` — admin only; returns the most recent `audit_log` entries (default 100, max 500 via `?limit=`), joined with user email, most recent first
 
 **Organizations (RBAC — requires SESSION_SECRET)**
 - `POST   /orgs` — `{ name }` → any authenticated user; creates org + `org_members` row with `role='owner'`. `409` if name taken
@@ -898,6 +911,11 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 - Both api-service's and results-service's `onRequest` hooks check `X-API-Key` against `team_api_keys` (when it doesn't match the global `API_KEYS` list) **before** the global-key/session checks; on a hit, sets `request.projectId = team_id`, `request.role = 'admin'`, updates `last_used_at` (fire-and-forget), and returns early — scoping the request to that team without a session cookie. The lookup is wrapped in `try/catch` so a DB error falls through to the global-key/session checks rather than 500ing
 - Scheduler (`results-service/src/scheduler.ts`): `triggerSchedule` calls api-service with the global `API_KEY` plus `projectId: schedule.project_id` in the body; api-service's `POST /tests` only honors this `projectId` override when the caller authenticated via a key in the global `API_KEYS` list
 
+**Audit Log** (`results-service/src/audit.ts`, migration #9):
+- `recordAudit(pool, { teamId, userId, action, resourceType, resourceId })` inserts a row into `audit_log`; failures are caught and logged, never block the response
+- Called (and awaited) from `GET /results/:testId/report.pdf` (`export_pdf`), `GET /results/:testId/report.csv` (`export_csv`), and `DELETE /scripts/:id` (`delete`)
+- `GET /teams/:id/audit-log` (admin only) returns the most recent entries joined with `users.email`; surfaced as an "Audit Log" section on the Team page (admin view only)
+
 **Rate Limiting** (`api-service/src/redis.ts`, `results-service/src/redis.ts` + `app.ts`/`index.ts`):
 - `redisClient` (ioredis) is created from `REDIS_URL` if set, otherwise `undefined` — `@fastify/rate-limit` falls back to its built-in in-memory store (used by most tests, which don't set `REDIS_URL`)
 - `@fastify/rate-limit` registered globally (`global: true`) in both services with `redis: redisClient`, `skipOnError: true` (fails open if Redis is unreachable — rate limiting never blocks the API outage-style)
@@ -1039,7 +1057,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~910 tests across 48 test files (`npm test` reports ~906 tests; some intentionally skipped in non-Docker/full-suite contexts)
+**Total:** ~920 tests across 48 test files (`npm test` reports ~918 tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -1057,7 +1075,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export | 92 |
 | `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 43 |
 | `results-service/src/__tests__/orgs.test.ts` | POST /orgs, GET /orgs/:id, member role mgmt, last-owner protection, POST /orgs/:id/teams, cross-org isolation | 22 |
-| `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection | 27 |
+| `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection, audit log | 31 |
 | `results-service/src/__tests__/quotas.test.ts` | `getTeamQuota`/`upsertTeamQuota` defaults+merge, `checkScheduleQuota`, `checkGeminiQuota`/`incrementGeminiUsage` rollover, `getTeamUsage` | 14 |
 | `results-service/src/__tests__/apiKeys.test.ts` | generate/list/revoke team API keys; auth middleware accepts valid key, rejects revoked/unknown | 9 |
 | `results-service/src/__tests__/session.test.ts` | `createSession`/`getSession`/`revokeSession`/`switchSessionTeam` (token hashing, expiry, revocation) | 11 |
@@ -1076,7 +1094,8 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `ui/__tests__/AuthContext.test.tsx` | AuthProvider loading/user/setUser/switchTeam state, AuthGate redirect/render | 6 |
 | `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, INP/TBT SLO inputs | 14 |
 | `ui/__tests__/LoginPage.test.tsx` | sign-in mode + register mode forms, API calls, setUser+navigate, errors, disabled states | 11 |
-| `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke) | 16 |
+| `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke), Audit Log (admin only) | 19 |
+| `ui/__tests__/FlowBuilder.test.tsx` | request headers editor, recording lifecycle, HAR import, step reordering (↑/↓ + drag-and-drop) | 54 |
 | `ui/__tests__/OrgPage.test.tsx` | org member list, admin add/role-change/remove, teams-in-org list, "+ New team" form | 9 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |
 | `ui/__tests__/WorkerHealth.test.tsx` | worker CPU/mem/active-tests bars, offline state, polling, Gemini quota chip | 17 |

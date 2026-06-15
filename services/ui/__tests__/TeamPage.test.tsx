@@ -13,6 +13,7 @@ const mockUpdateTeamQuota      = vi.hoisted(() => vi.fn());
 const mockGetTeamApiKeys       = vi.hoisted(() => vi.fn());
 const mockCreateTeamApiKey     = vi.hoisted(() => vi.fn());
 const mockRevokeTeamApiKey     = vi.hoisted(() => vi.fn());
+const mockGetAuditLog          = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   getTeamMembers: mockGetTeamMembers,
@@ -24,6 +25,7 @@ vi.mock('@/lib/api', () => ({
   getTeamApiKeys: mockGetTeamApiKeys,
   createTeamApiKey: mockCreateTeamApiKey,
   revokeTeamApiKey: mockRevokeTeamApiKey,
+  getAuditLog: mockGetAuditLog,
 }));
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
@@ -65,6 +67,7 @@ beforeEach(() => {
   mockGetTeamMembers.mockResolvedValue(members);
   mockGetTeamQuota.mockResolvedValue({ quota: defaultQuota, usage: defaultUsage });
   mockGetTeamApiKeys.mockResolvedValue([]);
+  mockGetAuditLog.mockResolvedValue({ entries: [] });
 });
 afterEach(() => cleanup());
 
@@ -258,5 +261,37 @@ describe('TeamPage — API Keys', () => {
 
     await waitFor(() => expect(mockRevokeTeamApiKey).toHaveBeenCalledWith('t1', 'k1'));
     await waitFor(() => expect(mockGetTeamApiKeys).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('TeamPage — Audit Log', () => {
+  beforeEach(() => mockUseAuth.mockReturnValue({ user: adminUser }));
+
+  it('admin sees the Audit Log section with entries', async () => {
+    mockGetAuditLog.mockResolvedValue({
+      entries: [
+        { id: 'a1', action: 'export_csv', resourceType: 'test_result', resourceId: '12345678-aaaa-bbbb-cccc-000000000001', createdAt: '2026-01-05T00:00:00.000Z', userEmail: 'admin@example.com' },
+      ],
+    });
+    render(<TeamPage />);
+
+    expect(await screen.findByText('Audit Log')).toBeInTheDocument();
+    expect(await screen.findByText(/export_csv/)).toBeInTheDocument();
+    expect(screen.getByText(/test_result/)).toBeInTheDocument();
+    expect(screen.getAllByText('admin@example.com').length).toBeGreaterThan(0);
+  });
+
+  it('shows "No audit log entries" when the team has none', async () => {
+    mockGetAuditLog.mockResolvedValue({ entries: [] });
+    render(<TeamPage />);
+    expect(await screen.findByText('No audit log entries')).toBeInTheDocument();
+  });
+
+  it('non-admin members do not see the Audit Log section', async () => {
+    mockUseAuth.mockReturnValue({ user: memberUser });
+    render(<TeamPage />);
+    await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
+    expect(screen.queryByText('Audit Log')).not.toBeInTheDocument();
+    expect(mockGetAuditLog).not.toHaveBeenCalled();
   });
 });

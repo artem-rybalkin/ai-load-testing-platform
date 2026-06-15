@@ -401,6 +401,70 @@ describe('GET/PUT /teams/:id/quotas', () => {
   });
 });
 
+// ─── GET /teams/:id/audit-log ──────────────────────────────────────────────────
+
+describe('GET /teams/:id/audit-log', () => {
+  it('admin can view audit log entries for their team', async () => {
+    const admin = await registerUser('admin-audit1@example.com', 'audit-team1');
+    const adminCookie = sessionCookie(admin);
+    const adminId = admin.json().id as string;
+    const teamId = admin.json().currentTeamId as string;
+
+    await pool.query(
+      `INSERT INTO audit_log (team_id, user_id, action, resource_type, resource_id) VALUES ($1, $2, 'export_pdf', 'test_result', 'test-1')`,
+      [teamId, adminId]
+    );
+
+    const res = await app.inject({ method: 'GET', url: `/teams/${teamId}/audit-log`, headers: { cookie: adminCookie } });
+    expect(res.statusCode).toBe(200);
+    const { entries } = res.json();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ action: 'export_pdf', resourceType: 'test_result', resourceId: 'test-1', userEmail: 'admin-audit1@example.com' });
+  });
+
+  it('returns 403 for a non-admin member', async () => {
+    const admin = await registerUser('admin-audit2@example.com', 'audit-team2');
+    const teamId = admin.json().currentTeamId as string;
+
+    const memberReg = await registerUser('member-audit2@example.com', 'member-audit2-own-team');
+    const memberId = memberReg.json().id as string;
+    await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
+    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+
+    const res = await app.inject({ method: 'GET', url: `/teams/${teamId}/audit-log`, headers: { cookie: sessionCookie(memberReg) } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('returns 403 when requesting audit log for a team the caller is not currently in', async () => {
+    const admin = await registerUser('admin-audit3@example.com', 'audit-team3');
+    const otherTeamId = admin.json().currentTeamId as string;
+
+    const other = await registerUser('other-audit3@example.com', 'other-audit3-team');
+    const res = await app.inject({ method: 'GET', url: `/teams/${otherTeamId}/audit-log`, headers: { cookie: sessionCookie(other) } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('records an audit entry when a CSV report is exported', async () => {
+    const admin = await registerUser('admin-audit4@example.com', 'audit-team4');
+    const adminCookie = sessionCookie(admin);
+    const teamId = admin.json().currentTeamId as string;
+
+    const testId = '00000000-0000-0000-0000-0000000a4000';
+    await pool.query(
+      `INSERT INTO test_results (test_id, project_id, type, target_url, status, metrics)
+       VALUES ($1, $2, 'backend', 'http://example.com', 'completed', $3)`,
+      [testId, teamId, JSON.stringify({ type: 'backend', requestsTotal: 1, requestsFailed: 0, avgResponseTime: 1, p50ResponseTime: 1, p95ResponseTime: 1, p99ResponseTime: 1, rps: 1 })]
+    );
+
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/report.csv`, headers: { cookie: adminCookie } });
+    expect(res.statusCode).toBe(200);
+
+    const logRes = await app.inject({ method: 'GET', url: `/teams/${teamId}/audit-log`, headers: { cookie: adminCookie } });
+    const { entries } = logRes.json();
+    expect(entries).toMatchObject([{ action: 'export_csv', resourceType: 'test_result', resourceId: testId }]);
+  });
+});
+
 // ─── POST /schedules — quota enforcement ───────────────────────────────────────
 
 describe('POST /schedules — quota enforcement', () => {

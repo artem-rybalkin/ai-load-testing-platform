@@ -13,6 +13,7 @@ import { randomBytes } from 'crypto';
 import { createSession, getSession, revokeSession, switchSessionTeam, hashApiKey } from './session';
 import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, incrementGeminiUsage, getTeamUsage } from './quotas';
 import { redisClient } from './redis';
+import { recordAudit } from './audit';
 import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole } from '@alt/shared';
 
 // Augment Fastify request type with session info — must be at module level
@@ -555,6 +556,26 @@ export const buildApp = async (
     return { quota };
   });
 
+  // ── Audit log ──────────────────────────────────────────────────────────────
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>('/teams/:id/audit-log', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+    if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+
+    const limit = Math.min(Math.max(parseInt(request.query.limit ?? '100', 10) || 100, 1), 500);
+    const { rows } = await pool.query(
+      `SELECT a.id, a.action, a.resource_type AS "resourceType", a.resource_id AS "resourceId",
+              a.created_at AS "createdAt", u.email AS "userEmail"
+       FROM audit_log a
+       LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.team_id = $1
+       ORDER BY a.created_at DESC
+       LIMIT $2`,
+      [request.params.id, limit]
+    );
+    return { entries: rows };
+  });
+
   // ── Organizations ─────────────────────────────────────────────────────────
   const getOrgRole = async (orgId: string, userId: string): Promise<OrgRole | null> => {
     const { rows } = await pool.query<{ role: OrgRole }>(
@@ -1086,6 +1107,7 @@ export const buildApp = async (
       const { id } = request.params;
       const projectId = request.projectId ?? null;
       await pool.query('DELETE FROM test_scripts WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)', [id, projectId]);
+      await recordAudit(pool, { teamId: projectId, userId: request.user?.id, action: 'delete', resourceType: 'script', resourceId: id });
       return reply.code(204).send();
     }
   );
@@ -1993,6 +2015,7 @@ Return only the summary text, no JSON, no markdown.`
       doc.end();
 
       await new Promise<void>(resolve => doc.on('end', resolve));
+      await recordAudit(pool, { teamId: projectId, userId: request.user?.id, action: 'export_pdf', resourceType: 'test_result', resourceId: testId });
       const pdf = Buffer.concat(chunks);
       return reply
         .header('Content-Type', 'application/pdf')
@@ -2058,6 +2081,7 @@ Return only the summary text, no JSON, no markdown.`
       }
 
       const csv = lines.join('\n') + '\n';
+      await recordAudit(pool, { teamId: projectId, userId: request.user?.id, action: 'export_csv', resourceType: 'test_result', resourceId: testId });
       return reply
         .header('Content-Type', 'text/csv')
         .header('Content-Disposition', `attachment; filename="report-${testId.slice(0, 8)}.csv"`)
