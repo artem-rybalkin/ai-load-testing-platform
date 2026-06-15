@@ -103,6 +103,27 @@ describe('Home page — form validation', () => {
   });
 });
 
+describe('Home page — script library template', () => {
+  afterEach(() => stableSearchParams.delete('useScriptTemplate'));
+
+  it('loads a built-in template into Custom Script mode when ?useScriptTemplate is set', async () => {
+    stableSearchParams.set('useScriptTemplate', 'rest-api-load');
+    render(<Home />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /custom script/i })).toHaveClass('bg-white'));
+    const textarea = await waitFor(() => screen.getByPlaceholderText(/import http from 'k6\/http'/i) as HTMLTextAreaElement);
+    expect(textarea.value).toContain("import http from 'k6/http'");
+    expect(textarea.value).toContain("const BASE_URL = 'https://example.com'");
+  });
+
+  it('ignores an unknown template id', async () => {
+    stableSearchParams.set('useScriptTemplate', 'does-not-exist');
+    render(<Home />);
+    await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: /ai generate/i })).toHaveClass('bg-white');
+  });
+});
+
 describe('Home page — preset dropdown', () => {
   it('does not show preset dropdown when no presets exist', async () => {
     render(<Home />);

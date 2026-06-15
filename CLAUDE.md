@@ -172,17 +172,19 @@ ai-load-testing-platform/
         │   ├── api.ts        # fetch wrappers for all service endpoints + types (uses import.meta.env.VITE_*)
         │   │                 #   also: login(), register(), logout(), getMe(), switchTeam(),
         │   │                 #   getTeamMembers/addTeamMember/updateTeamMemberRole/removeTeamMember; SessionUser/TeamRole/TeamMemberRow types
-        │   └── AuthContext.tsx  # AuthProvider + useAuth hook; SessionUser; getMe() on mount; switchTeam()
+        │   ├── AuthContext.tsx  # AuthProvider + useAuth hook; SessionUser; getMe() on mount; switchTeam()
+        │   └── scriptTemplates.ts # SCRIPT_TEMPLATES — built-in k6 script templates (id, name, description, tags, script) + findScriptTemplate()
         ├── __tests__/
         │   ├── setup.ts      # expect.extend(jest-dom matchers)
         │   ├── ActiveTests.test.tsx
         │   ├── AnalysisPanel.test.tsx
         │   ├── AuthContext.test.tsx    # AuthProvider + AuthGate + switchTeam unit tests
-        │   ├── home.test.tsx           # form validation + INP/TBT SLO inputs
+        │   ├── home.test.tsx           # form validation + INP/TBT SLO inputs + script library template loading
         │   ├── LoginPage.test.tsx      # sign-in + register mode forms, API call behaviour
         │   ├── TeamPage.test.tsx       # member list, admin add/role-change/remove, non-admin read-only view
         │   │                           #   + Usage & Limits (quota) section + API Keys section (generate/revoke)
         │   ├── OrgPage.test.tsx        # org member list, admin add/role-change/remove, "+ New team" form
+        │   ├── LibraryPage.test.tsx    # Script Library — renders templates, preview toggle, "Use this script" navigation
         │   └── results.test.tsx
         └── app/
             ├── globals.css   # Tailwind 4 CSS-first config; CSS vars for Command Center palette
@@ -204,6 +206,8 @@ ai-load-testing-platform/
             ├── webhooks/page.tsx         # webhook CRUD management
             ├── schedules/page.tsx        # schedule CRUD + manual trigger
             ├── presets/page.tsx          # preset CRUD + load into form
+            ├── library/page.tsx          # Script Library — browse built-in k6 script templates,
+            │                             #   preview, "Use this script" → loads into Custom Script mode on home page
             └── components/
                 ├── Sidebar.tsx       # collapsible icon-rail sidebar (220px ↔ 48px, localStorage); "Team" nav item;
                 │                     #   team-switcher <select> (shown when user.teams.length > 1) calling switchTeam();

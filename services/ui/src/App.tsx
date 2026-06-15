@@ -16,6 +16,7 @@ const ResultsPage      = lazy(() => import('@/app/results/page'));
 const ResultDetailPage = lazy(() => import('@/app/results/testId/page'));
 const ComparePage      = lazy(() => import('@/app/results/compare/page'));
 const PresetsPage      = lazy(() => import('@/app/presets/page'));
+const LibraryPage      = lazy(() => import('@/app/library/page'));
 const SchedulesPage    = lazy(() => import('@/app/schedules/page'));
 const WebhooksPage     = lazy(() => import('@/app/webhooks/page'));
 const TeamPage         = lazy(() => import('@/app/team/page'));
@@ -65,6 +66,7 @@ export default function App() {
                   <Route path="/results/compare" element={<ComparePage />} />
                   <Route path="/results/:testId" element={<ResultDetailPage />} />
                   <Route path="/presets"         element={<PresetsPage />} />
+                  <Route path="/library"         element={<LibraryPage />} />
                   <Route path="/schedules"       element={<SchedulesPage />} />
                   <Route path="/webhooks"        element={<WebhooksPage />} />
                   <Route path="/team"            element={<TeamPage />} />

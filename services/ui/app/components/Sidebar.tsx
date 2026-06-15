@@ -10,6 +10,7 @@ const NAV = [
   { href: '/results',   icon: '≡', label: 'Results'   },
   { href: '/schedules', icon: '⏱', label: 'Schedules' },
   { href: '/presets', icon: '◫', label: 'Presets' },
+  { href: '/library', icon: '▤', label: 'Library' },
   { href: '/webhooks',  icon: '◻', label: 'Webhooks'  },
   { href: '/team',      icon: '◉', label: 'Team'      },
   { href: '/org',       icon: '⬡', label: 'Org'       },

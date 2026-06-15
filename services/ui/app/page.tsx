@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
 import { useAuth } from '@/lib/AuthContext';
+import { findScriptTemplate } from '@/lib/scriptTemplates';
 
 interface EnvVar { key: string; value: string }
 
@@ -254,6 +255,18 @@ function HomeContent() {
         setRerunFrom(result.target_url);
         setShowAdvanced(true);
       }).catch(() => {});
+      return;
+    }
+
+    const useScriptTemplate = searchParams.get('useScriptTemplate');
+    if (useScriptTemplate) {
+      const template = findScriptTemplate(useScriptTemplate);
+      if (template) {
+        setForm(f => ({ ...f, type: 'backend' }));
+        setScriptMode('custom');
+        setCustomScript(template.script);
+        setShowAdvanced(true);
+      }
       return;
     }
 
