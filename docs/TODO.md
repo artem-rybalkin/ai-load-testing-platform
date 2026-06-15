@@ -58,7 +58,7 @@ Improvements, suggestions, and large future work items.
 - [x] **Worker-offline signal on AI-routed path (G4 — chaos)** — `warnIfNoWorker()` is called after `tryPublish()` on every routing branch (custom script, cache miss/AI-routed, direct reuse, description comparison), checking `backend-tests`/`client-tests` consumer count regardless of whether the test was sent via `ai-requests` or directly to the worker queue; covered by `index.test.ts` "POST /tests — no-worker warning message"
 - [x] **parseDurationSeconds accepts numeric values (G5 — chaos)** — `parseDurationSeconds` now accepts `string | number`; a bare number is treated as seconds directly (`Math.round`), so `duration: 10` no longer 500s or bypasses the duration quota check
 - [x] **GET /results UI pagination** — Load more button using `nextBefore` cursor; appends to existing list; WebSocket updates still work on first page
-- [ ] **Download/upload ignore-pattern lists** — Export the recorder-service "Ignore list" (domains/patterns) as JSON and re-import it before starting a new recording, so users can reuse a curated ignore list across recordings/projects
+- [x] **Download/upload ignore-pattern lists** — "↓ Export" / "↑ Import" buttons in FlowBuilder's "🚫 Ignore list" panel; export downloads `ignore-list.json` (JSON array of patterns) via `Blob`+`URL.createObjectURL`; import reads a JSON array of strings and merges it into `ignorePatterns` (de-duplicated via `Set`), alerting on invalid file format
 
 ## Data Privacy Gaps
 

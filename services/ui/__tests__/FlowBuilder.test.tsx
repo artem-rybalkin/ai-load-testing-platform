@@ -86,6 +86,9 @@ const makeHar = (entries: unknown[]) => JSON.stringify({ log: { entries } });
 const getHarInput = (container: HTMLElement) =>
   container.querySelector('input[type="file"][accept*="har"]') as HTMLInputElement;
 
+const getIgnoreFileInput = (container: HTMLElement) =>
+  container.querySelector('input[type="file"][accept=".json,application/json"]') as HTMLInputElement;
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal('open', mockWindowOpen);
@@ -826,6 +829,87 @@ describe('FlowBuilder — Import from HAR', () => {
 
     await waitFor(() => expect(defaultProps.onChange).toHaveBeenCalled());
     expect(input.value).toBe('');
+  });
+});
+
+// ─── Ignore list export/import ─────────────────────────────────────────────────
+
+describe('FlowBuilder — Ignore list export/import', () => {
+  const openIgnorePanel = () => {
+    fireEvent.click(screen.getByRole('button', { name: /ignore/i }));
+  };
+
+  it('Export button is disabled when the ignore list is empty', () => {
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+    openIgnorePanel();
+
+    const exportBtn = screen.getByRole('button', { name: /export/i });
+    expect(exportBtn).toBeDisabled();
+    void container;
+  });
+
+  it('Export button downloads the ignore list as JSON when patterns exist', () => {
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:mock-url');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    render(<FlowBuilder {...defaultProps} />);
+    openIgnorePanel();
+
+    fireEvent.change(screen.getByPlaceholderText(/analytics.google.com/i), { target: { value: 'analytics.google.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+
+    const exportBtn = screen.getByRole('button', { name: /export/i });
+    expect(exportBtn).not.toBeDisabled();
+
+    fireEvent.click(exportBtn);
+
+    expect(createObjectURL).toHaveBeenCalled();
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe('application/json');
+    expect(clickSpy).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+
+    clickSpy.mockRestore();
+  });
+
+  it('imports patterns from a valid JSON array file, merging and de-duplicating', async () => {
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+    openIgnorePanel();
+
+    fireEvent.change(screen.getByPlaceholderText(/analytics.google.com/i), { target: { value: 'analytics.google.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+
+    const file = new File(
+      [JSON.stringify(['analytics.google.com', 'hotjar.com'])],
+      'ignore-list.json',
+      { type: 'application/json' },
+    );
+    const input = getIgnoreFileInput(container);
+
+    await act(async () => { await userEvent.upload(input, file); });
+
+    await waitFor(() => {
+      expect(screen.getByText('hotjar.com')).toBeInTheDocument();
+    });
+    expect(screen.getAllByText('analytics.google.com')).toHaveLength(1);
+    expect(input.value).toBe('');
+  });
+
+  it('alerts and does not change the ignore list when the imported file is not a JSON array of strings', async () => {
+    const { container } = render(<FlowBuilder {...defaultProps} />);
+    openIgnorePanel();
+
+    const file = new File([JSON.stringify({ not: 'an array' })], 'ignore-list.json', { type: 'application/json' });
+    const input = getIgnoreFileInput(container);
+
+    await act(async () => { await userEvent.upload(input, file); });
+
+    await waitFor(() => {
+      expect(mockAlert).toHaveBeenCalledWith(expect.stringMatching(/Invalid ignore list file/i));
+    });
+    expect(screen.queryByText('hotjar.com')).not.toBeInTheDocument();
   });
 });
 

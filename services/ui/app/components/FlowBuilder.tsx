@@ -99,6 +99,7 @@ export const parseHar = (raw: string): FlowStep[] => {
 export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange, testData, onTestDataChange, csvFile, onCsvChange }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const csvRef  = useRef<HTMLInputElement>(null);
+  const ignoreFileRef = useRef<HTMLInputElement>(null);
 
   // ── Flow Recording state ────────────────────────────────────────────────────
   const RECORDING_STORAGE_KEY = 'flowRecordingSession';
@@ -304,6 +305,35 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
       setIgnorePatterns(prev => [...prev, v]);
     }
     setIgnoreInput('');
+  };
+
+  const handleExportIgnoreList = () => {
+    const blob = new Blob([JSON.stringify(ignorePatterns, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ignore-list.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportIgnoreList = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        if (!Array.isArray(parsed) || !parsed.every(p => typeof p === 'string')) {
+          throw new Error('Expected a JSON array of strings');
+        }
+        setIgnorePatterns(prev => [...new Set([...prev, ...parsed])]);
+      } catch {
+        alert('Invalid ignore list file — expected a JSON array of strings');
+      }
+    };
+    reader.readAsText(file);
+    if (ignoreFileRef.current) ignoreFileRef.current.value = '';
   };
 
   const handleStopRecording = async () => {
@@ -544,7 +574,27 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
         <div className="p-3 border border-[#d0d7de] rounded-md bg-[#f6f8fa] text-[12px] space-y-2">
           <div className="flex items-center justify-between">
             <span className="font-semibold text-[#24292f]">🚫 Ignore list — URLs matching these patterns won&apos;t be recorded</span>
-            <button onClick={() => setShowIgnore(false)} className="text-[#57606a] hover:text-[#24292f]">✕</button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExportIgnoreList}
+                disabled={ignorePatterns.length === 0}
+                className="text-[11px] text-[#0969da] hover:underline disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline"
+                title="Download ignore list as JSON"
+              >
+                ↓ Export
+              </button>
+              <button
+                type="button"
+                onClick={() => ignoreFileRef.current?.click()}
+                className="text-[11px] text-[#0969da] hover:underline"
+                title="Import ignore list from JSON"
+              >
+                ↑ Import
+              </button>
+              <input ref={ignoreFileRef} type="file" accept=".json,application/json" className="hidden" onChange={handleImportIgnoreList} />
+              <button onClick={() => setShowIgnore(false)} className="text-[#57606a] hover:text-[#24292f]">✕</button>
+            </div>
           </div>
           <p className="text-[#57606a]">
             Enter a substring (e.g. <code className="bg-[#eaeef2] px-1 rounded">analytics</code>, <code className="bg-[#eaeef2] px-1 rounded">localhost:3007</code>) or a regex wrapped in slashes (e.g. <code className="bg-[#eaeef2] px-1 rounded">/\.(png|gif)$/i</code>).

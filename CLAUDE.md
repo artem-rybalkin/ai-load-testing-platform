@@ -221,7 +221,7 @@ ai-load-testing-platform/
                 ├── TrendChart.tsx    # p95/LCP trend line across runs for same URL
                 └── FlowBuilder.tsx   # multi-step flow editor + HAR import + 🔴 Record button
                                     #   + extract source selector + inline data table + CSV upload
-                                    #   + "Clear all" button + "Ignore list" for recordings
+                                    #   + "Clear all" button + "Ignore list" for recordings (with JSON export/import)
                                     #   + per-step "Request headers" editor (key/value, supports {{varName}})
             # page.tsx also contains: flowRunner state + "Run as" toggle for flow tests
             #   + scriptMode state + "Script source" toggle (AI Generate | Custom Script) for backend tests
