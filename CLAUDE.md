@@ -1190,9 +1190,22 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 ### Playwright E2E (requires `docker compose up`)
 | File | Flow |
 |------|------|
-| `e2e/happy-path.spec.ts` | fill URL → run → poll → completed status |
+| `e2e/auth.setup.ts` | registers/logs in a test user, saves storage state for all other specs (Playwright `setup` project) |
+| `e2e/auth.spec.ts` | unauthenticated redirect to `/login`, register/login/logout, session isolation across accounts |
+| `e2e/happy-path.spec.ts` | fill URL → run → poll → completed/failed status, progress bar, countdown |
 | `e2e/cancel.spec.ts` | soak test → cancel button → cancelled status |
-| `e2e/compare.spec.ts` | create 2 tests via API → select both → compare view |
+| `e2e/compare.spec.ts` | create 2 tests via API (custom k6 script — bypasses AI generation) → select both → compare view |
+| `e2e/result-detail.spec.ts` | create test via custom-script UI mode (bypasses AI generation) → baseline set/clear, PDF report link, script download, "Re-run" pre-fill |
+| `e2e/flow-builder.spec.ts` | add/edit/reorder/remove steps, request body field, extract-variable rules, ignore-list, "Clear all", k6/Puppeteer runner toggle |
+| `e2e/navigation.spec.ts` | each page renders without JS errors, sidebar nav links, no error banners when services are up |
+| `e2e/recorder.spec.ts` | start/stop a recording session, noVNC viewer, ignore-pattern suggestions, `{{varName}}` correlation |
+| `e2e/schedules-webhooks.spec.ts` | schedule create/run/pause/enable/delete + form validation; webhook create/delete |
+| `e2e/templates.spec.ts` | save a script template and reload it via the dropdown; templates list page |
+
+**CI note**: `compare.spec.ts` and `result-detail.spec.ts` seed their backend test via `customScript`
+rather than AI generation — CI runs with a dummy `GEMINI_API_KEY`, so AI-generated scripts always
+fail (`status: 'failed'`), which hides the compare checkboxes and "Re-run" button (both gated on
+`status === 'completed'`) and previously caused 600s test timeouts.
 
 ## Known Issues / Tech Debt
 - **Breaking change (Org/Team/RBAC foundation, migration #6)**: the old `POST /auth/login { username, projectName }` free-text join-any-project flow is replaced by password-based `register`/`login` against real `users` accounts. Any `projects` rows created via the old flow become orphaned teams with no `team_members` — existing sessions are invalidated (new DB-backed session model); users must `POST /auth/register` to create an account + team (or be added to an existing team by its admin via `POST /teams/:id/members`).
