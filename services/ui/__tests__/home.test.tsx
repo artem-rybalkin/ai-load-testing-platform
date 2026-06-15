@@ -27,18 +27,21 @@ vi.mock('@/lib/api', () => ({
   suggestSettings: vi.fn().mockResolvedValue({}),
   translatePlaywright: vi.fn().mockResolvedValue({}),
   suggestPresetName: vi.fn().mockResolvedValue({ name: 'Suggested preset' }),
+  previewThresholds: vi.fn().mockResolvedValue({ available: false }),
 }));
 
-import { createTest, getPresets, getResult } from '@/lib/api';
+import { createTest, getPresets, getResult, previewThresholds } from '@/lib/api';
 const mockCreateTest = vi.mocked(createTest);
 const mockGetPresets = vi.mocked(getPresets);
 const mockGetResult = vi.mocked(getResult);
+const mockPreviewThresholds = vi.mocked(previewThresholds);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockCreateTest.mockResolvedValue({ test: { id: 'new-test-id' } });
   mockGetPresets.mockResolvedValue({ presets: [] });
   mockGetResult.mockResolvedValue({ result: null } as never);
+  mockPreviewThresholds.mockResolvedValue({ available: false });
   // Ensure no rerun param bleeds between tests
   stableSearchParams.delete('rerun');
 });
@@ -336,5 +339,57 @@ describe('Home page — re-run from results list', () => {
     await waitFor(() => screen.getByText(/pre-filled from previous run/i));
     fireEvent.click(screen.getByRole('button', { name: /dismiss re-run notice/i }));
     expect(screen.queryByText(/pre-filled from previous run/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('Home page — threshold preview', () => {
+  it('does not show the preview button until SLO thresholds are open', async () => {
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://preview.test.com' } });
+    expect(screen.queryByRole('button', { name: /preview against last run/i })).not.toBeInTheDocument();
+  });
+
+  it('calls previewThresholds and shows a passing result', async () => {
+    mockPreviewThresholds.mockResolvedValueOnce({
+      available: true,
+      perfStatus: 'passed',
+      thresholdViolations: [],
+      basedOn: { testId: 't1', completedAt: '2026-01-01T00:00:00.000Z' },
+    });
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://preview.test.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
+
+    const previewBtn = screen.getByRole('button', { name: /preview against last run/i });
+    fireEvent.click(previewBtn);
+
+    await waitFor(() => expect(mockPreviewThresholds).toHaveBeenCalledWith('https://preview.test.com', 'backend', expect.any(Object)));
+    expect(await screen.findByText(/would pass/i)).toBeInTheDocument();
+  });
+
+  it('shows threshold violations when the preview fails', async () => {
+    mockPreviewThresholds.mockResolvedValueOnce({
+      available: true,
+      perfStatus: 'failed',
+      thresholdViolations: ['p95 response time 1200ms exceeds threshold 1000ms'],
+      basedOn: { testId: 't1', completedAt: '2026-01-01T00:00:00.000Z' },
+    });
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://preview.test.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
+    fireEvent.click(screen.getByRole('button', { name: /preview against last run/i }));
+
+    expect(await screen.findByText(/would fail/i)).toBeInTheDocument();
+    expect(screen.getByText(/p95 response time 1200ms exceeds threshold 1000ms/i)).toBeInTheDocument();
+  });
+
+  it('shows a message when no completed run is available', async () => {
+    mockPreviewThresholds.mockResolvedValueOnce({ available: false });
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://no-history.test.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
+    fireEvent.click(screen.getByRole('button', { name: /preview against last run/i }));
+
+    expect(await screen.findByText(/no completed run found/i)).toBeInTheDocument();
   });
 });

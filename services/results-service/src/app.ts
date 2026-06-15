@@ -14,7 +14,8 @@ import { createSession, getSession, revokeSession, switchSessionTeam, hashApiKey
 import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, incrementGeminiUsage, getTeamUsage } from './quotas';
 import { redisClient } from './redis';
 import { recordAudit } from './audit';
-import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole } from '@alt/shared';
+import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics } from '@alt/shared';
+import { analyzeResult } from './analyzer';
 
 // Augment Fastify request type with session info — must be at module level
 declare module 'fastify' {
@@ -1630,6 +1631,47 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
+    }
+  );
+
+  // ── Custom threshold preview ────────────────────────────────────────────
+  app.get<{ Querystring: { url: string; type?: string; thresholds: string } }>(
+    '/results/preview-thresholds',
+    async (request, reply) => {
+      const { url, type = 'backend', thresholds: thresholdsRaw } = request.query;
+      if (!url) return reply.code(400).send({ error: 'url is required' });
+      if (!thresholdsRaw) return reply.code(400).send({ error: 'thresholds is required' });
+
+      let thresholds: SLOThresholds;
+      try {
+        thresholds = JSON.parse(thresholdsRaw);
+      } catch {
+        return reply.code(400).send({ error: 'thresholds must be valid JSON' });
+      }
+
+      const projectId = request.projectId ?? null;
+      const { rows } = await pool.query(
+        `SELECT test_id, metrics, completed_at
+         FROM test_results
+         WHERE target_url = $1 AND type = $2 AND status = 'completed' AND metrics IS NOT NULL
+           AND ($3::uuid IS NULL OR project_id = $3::uuid)
+         ORDER BY created_at DESC LIMIT 1`,
+        [url, type, projectId]
+      );
+
+      if (rows.length === 0) {
+        return { available: false };
+      }
+
+      const row = rows[0] as { test_id: string; metrics: BackendMetrics | ClientMetrics; completed_at: string };
+      const { perfStatus, thresholdViolations } = analyzeResult(row.metrics, null, thresholds);
+
+      return {
+        available: true,
+        perfStatus,
+        thresholdViolations,
+        basedOn: { testId: row.test_id, completedAt: row.completed_at },
+      };
     }
   );
 

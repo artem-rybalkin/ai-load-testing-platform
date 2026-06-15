@@ -1,6 +1,6 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
+import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -144,6 +144,9 @@ function HomeContent() {
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
   const [suggestingThresholds, setSuggestingThresholds] = useState(false);
   const [thresholdSuggestionNote, setThresholdSuggestionNote] = useState<string | null>(null);
+  const [previewingThresholds, setPreviewingThresholds] = useState(false);
+  const [thresholdPreview, setThresholdPreview] = useState<ThresholdPreview | null>(null);
+  const [thresholdPreviewError, setThresholdPreviewError] = useState<string | null>(null);
   const [recent, setRecent] = useState<TestResult[]>([]);
   const [active, setActive] = useState<ActiveTest[]>([]);
   const [rerunFrom, setRerunFrom] = useState<string | null>(null);
@@ -423,6 +426,22 @@ function HomeContent() {
       setThresholdSuggestionNote((err as Error).message);
     } finally {
       setSuggestingThresholds(false);
+    }
+  };
+
+  const handlePreviewThresholds = async () => {
+    if (!form.targetUrl) return;
+    setPreviewingThresholds(true);
+    setThresholdPreviewError(null);
+    setThresholdPreview(null);
+    try {
+      const previewType = form.type === 'flow' ? (flowRunner === 'browser' ? 'client-side' : 'flow') : form.type;
+      const result = await previewThresholds(form.targetUrl, previewType, buildThresholds() ?? {});
+      setThresholdPreview(result);
+    } catch (err) {
+      setThresholdPreviewError((err as Error).message);
+    } finally {
+      setPreviewingThresholds(false);
     }
   };
 
@@ -972,6 +991,41 @@ function HomeContent() {
                         />
                       </div>
                     ))}
+                  </div>
+                )}
+                {showThresholds && form.targetUrl && (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={handlePreviewThresholds}
+                      disabled={previewingThresholds}
+                      className="text-[11px] text-[#0969da] hover:underline disabled:opacity-50 font-mono"
+                      title="Check these thresholds against the most recent completed run for this URL"
+                    >
+                      {previewingThresholds ? '⏳ Checking…' : '👁 Preview against last run'}
+                    </button>
+                    {thresholdPreviewError && (
+                      <p className="text-[11px] text-[#cf222e] mt-1 font-mono">{thresholdPreviewError}</p>
+                    )}
+                    {thresholdPreview && !thresholdPreview.available && (
+                      <p className="text-[11px] text-[#57606a] mt-1 font-mono">No completed run found for this URL yet.</p>
+                    )}
+                    {thresholdPreview?.available && (
+                      <div className={`mt-1 p-2 rounded-md border text-[11px] font-mono ${
+                        thresholdPreview.perfStatus === 'failed' ? 'bg-[#fff0f0] border-[#cf222e]/40 text-[#cf222e]'
+                        : thresholdPreview.perfStatus === 'degraded' ? 'bg-[#fff8c5] border-[#9a6700]/40 text-[#9a6700]'
+                        : 'bg-[#dafbe1] border-[#1f883d]/40 text-[#1f883d]'
+                      }`}>
+                        <p className="font-semibold">
+                          {thresholdPreview.perfStatus === 'failed' ? '✗ Would fail' : thresholdPreview.perfStatus === 'degraded' ? '⚠ Degraded' : '✓ Would pass'}
+                        </p>
+                        {thresholdPreview.thresholdViolations && thresholdPreview.thresholdViolations.length > 0 && (
+                          <ul className="list-disc list-inside mt-1">
+                            {thresholdPreview.thresholdViolations.map(v => <li key={v}>{v}</li>)}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

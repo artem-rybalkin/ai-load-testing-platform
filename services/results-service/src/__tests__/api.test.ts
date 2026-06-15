@@ -242,6 +242,75 @@ describe('GET /results/trend', () => {
   });
 });
 
+// ─── GET /results/preview-thresholds ───────────────────────────────────────────
+
+describe('GET /results/preview-thresholds', () => {
+  it('returns available: false when no completed run exists for the URL', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/results/preview-thresholds?url=${encodeURIComponent('http://no-history.com')}&type=backend&thresholds=${encodeURIComponent(JSON.stringify({ p95: 500 }))}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ available: false });
+  });
+
+  it('returns passed when thresholds are not violated by the latest run', async () => {
+    const testId = await insertResult({ targetUrl: 'http://preview-pass.com', type: 'backend' });
+    const res = await app.inject({
+      method: 'GET',
+      url: `/results/preview-thresholds?url=${encodeURIComponent('http://preview-pass.com')}&type=backend&thresholds=${encodeURIComponent(JSON.stringify({ p95: 1000, errorRate: 5 }))}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.perfStatus).toBe('passed');
+    expect(body.thresholdViolations).toEqual([]);
+    expect(body.basedOn.testId).toBe(testId);
+  });
+
+  it('returns failed with violation details when thresholds are exceeded', async () => {
+    await insertResult({
+      targetUrl: 'http://preview-fail.com',
+      type: 'backend',
+      metrics: { type: 'backend', requestsTotal: 100, requestsFailed: 0, avgResponseTime: 200, p50ResponseTime: 180, p95ResponseTime: 400, p99ResponseTime: 500, rps: 10 },
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: `/results/preview-thresholds?url=${encodeURIComponent('http://preview-fail.com')}&type=backend&thresholds=${encodeURIComponent(JSON.stringify({ p95: 100 }))}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.perfStatus).toBe('failed');
+    expect(body.thresholdViolations.length).toBeGreaterThan(0);
+    expect(body.thresholdViolations[0]).toMatch(/p95/);
+  });
+
+  it('returns 400 when url is missing', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/results/preview-thresholds?thresholds=${encodeURIComponent(JSON.stringify({ p95: 100 }))}`,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when thresholds is missing', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/results/preview-thresholds?url=${encodeURIComponent('http://preview-fail.com')}`,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when thresholds is not valid JSON', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/results/preview-thresholds?url=${encodeURIComponent('http://preview-fail.com')}&thresholds=not-json`,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 // ─── Webhooks CRUD ────────────────────────────────────────────────────────────
 
 describe('webhooks', () => {

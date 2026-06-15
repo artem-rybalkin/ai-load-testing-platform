@@ -561,6 +561,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `GET  /results/active`          — tests with status pending/running
 - `GET  /results/compare?a=&b=`   — side-by-side diff of two completed results
 - `GET  /results/trend?url=`      — chronological metric trend for a URL (p95 or LCP)
+- `GET  /results/preview-thresholds?url=&type=&thresholds=<json>` — preview pass/degraded/fail + violation details for a candidate `SLOThresholds` against the latest completed result for that URL+type, via `analyzeResult(metrics, null, thresholds)` (deterministic, no Gemini call)
 - `GET  /results/:testId`         — single result with joined `script` + `script_description` from test_scripts
 - `POST /results/:testId/cancel`  — set status = cancelled in DB
 - `POST /results/:testId/running` — set status = running + started_at = NOW() + status_message = NULL (called by workers on start; clears stale AI message)
@@ -816,6 +817,7 @@ The UI follows a "Command Center" aesthetic: GitHub-style color palette, collaps
   - **Load profile:** spike / soak / capacity / load keywords
   - Advanced settings section auto-opens when any numeric param is detected
 - **SLO thresholds:** collapsible section; backend/flow gets p95/avg/errorRate, browser gets LCP/FCP/TTFB/CLS/INP/TBT
+- **Threshold preview:** "👁 Preview against last run" link (shown when the SLO section is open and a target URL is set) calls `GET /results/preview-thresholds` and shows pass/degraded/fail + violation details for the configured thresholds against the most recent completed result for that URL+type — lets users sanity-check thresholds before running a (potentially long) test
 - **Presets:** save/load includes description, URL, VUs, duration, profile, peakVus, thresholds; dropdown is controlled (always resets to placeholder after selection)
 - **Flow runner selector** — below FlowBuilder, a toggle "Run as ⚡ k6 HTTP / 🌐 Puppeteer Browser" controls `flowRunner` state (`'k6'` | `'browser'`); when `'browser'` is selected `handleSubmit` sends `type: 'client-side'` with `sessions/duration/collectWebVitals` options; auto-set by `applyDescriptionParams` type detection
 - **Custom Headers** — key/value editor in Advanced settings (backend + browser types only, not flow); `customHeaders` state → `options.headers` on submit. ai-service injects these into the generated script: k6 merges them into `params.headers` for every `http.*` call (`BACKEND_PROMPT`), Puppeteer calls `page.setExtraHTTPHeaders(...)` before navigation (`CLIENT_PROMPT`). Flow tests use per-step headers instead (see FlowBuilder below)
@@ -1067,7 +1069,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~930 tests across 48 test files (`npm test` reports ~927 tests; some intentionally skipped in non-Docker/full-suite contexts)
+**Total:** ~940 tests across 48 test files (`npm test` reports ~937 tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -1082,7 +1084,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
 |------|---------|-------|
-| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export | 92 |
+| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export + threshold preview | 98 |
 | `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 43 |
 | `results-service/src/__tests__/orgs.test.ts` | POST /orgs, GET /orgs/:id, member role mgmt, last-owner protection, POST /orgs/:id/teams, cross-org isolation | 22 |
 | `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection, audit log, data erasure | 35 |
@@ -1102,7 +1104,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `ui/__tests__/AnalysisPanel.test.tsx` | threshold violations, diff rows, badges | 9 |
 | `ui/__tests__/ActiveTests.test.tsx` | count display, link, WS-triggered refetch | 6 |
 | `ui/__tests__/AuthContext.test.tsx` | AuthProvider loading/user/setUser/switchTeam state, AuthGate redirect/render | 6 |
-| `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, INP/TBT SLO inputs | 14 |
+| `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, INP/TBT SLO inputs, threshold preview | 18 |
 | `ui/__tests__/LoginPage.test.tsx` | sign-in mode + register mode forms, API calls, setUser+navigate, errors, disabled states | 11 |
 | `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke), Audit Log (admin only), Danger Zone data erasure | 22 |
 | `ui/__tests__/FlowBuilder.test.tsx` | request headers editor, recording lifecycle, HAR import, step reordering (↑/↓ + drag-and-drop) | 54 |

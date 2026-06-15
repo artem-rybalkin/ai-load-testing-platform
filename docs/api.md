@@ -642,6 +642,33 @@ curl "http://localhost:3004/results/trend?url=https://api.example.com&limit=10"
 
 ---
 
+### `GET /results/preview-thresholds?url=<url>&type=<type>&thresholds=<json>`
+
+Previews whether a candidate set of `SLOThresholds` would pass against the most recent completed result for the given `target_url` + `type` (project-scoped) — without running a new test. Deterministic (no Gemini call); uses `analyzeResult(metrics, null, thresholds)` from `@alt/shared`.
+
+```bash
+curl "http://localhost:3004/results/preview-thresholds?url=https://api.example.com&type=backend&thresholds=%7B%22p95%22%3A500%2C%22errorRate%22%3A1%7D"
+```
+
+**Response when no completed run exists yet:**
+```json
+{ "available": false }
+```
+
+**Response when a completed run exists:**
+```json
+{
+  "available": true,
+  "perfStatus": "failed",
+  "thresholdViolations": ["p95 response time 1200ms exceeds threshold 500ms"],
+  "basedOn": { "testId": "550e8400-...", "completedAt": "2024-01-15T10:30:05.000Z" }
+}
+```
+
+`400` if `url` or `thresholds` is missing, or `thresholds` is not valid JSON.
+
+---
+
 ### `GET /results/:testId/live`
 
 All live metric points recorded during a k6 test (5-second windows, chronological). Requires a valid session when `SESSION_SECRET` is set, and is project-scoped — returns only points for tests owned by the caller's project (only `POST /results/:testId/live`, used internally by `worker-backend`, is exempt from auth).

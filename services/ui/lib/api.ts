@@ -1,4 +1,4 @@
-import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole } from '@alt/shared';
+import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, SLOThresholds } from '@alt/shared';
 
 export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole };
 
@@ -511,6 +511,25 @@ export const getTrendNarrative = async (trend: Array<{ created_at: string; metri
 export const suggestThresholds = async (url: string, type = 'backend'): Promise<{ suggestions: ThresholdSuggestion; runsAnalysed: number }> => {
   const res = await f(
     `${RESULTS_URL}/results/suggest-thresholds?url=${encodeURIComponent(url)}&type=${type}`,
+    { cache: 'no-store' }
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+};
+
+export interface ThresholdPreview {
+  available: boolean;
+  perfStatus?: 'passed' | 'degraded' | 'failed';
+  thresholdViolations?: string[];
+  basedOn?: { testId: string; completedAt: string };
+}
+
+export const previewThresholds = async (url: string, type: string, thresholds: SLOThresholds): Promise<ThresholdPreview> => {
+  const res = await f(
+    `${RESULTS_URL}/results/preview-thresholds?url=${encodeURIComponent(url)}&type=${type}&thresholds=${encodeURIComponent(JSON.stringify(thresholds))}`,
     { cache: 'no-store' }
   );
   if (!res.ok) {
