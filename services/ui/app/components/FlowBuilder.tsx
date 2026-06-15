@@ -131,6 +131,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
   });
   const [ignoreInput, setIgnoreInput] = useState('');
   const [showIgnore, setShowIgnore] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Apply a /recordings/:id/stop (or completed /recordings/:id poll) result — shared by
@@ -338,10 +339,11 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
   const addStep = () => onChange([...steps, emptyStep()]);
   const removeStep = (i: number) => onChange(steps.filter((_, idx) => idx !== i));
-  const moveUp = (i: number) => {
-    if (i === 0) return;
+  const moveStep = (from: number, to: number) => {
+    if (to < 0 || to >= steps.length || from === to) return;
     const next = [...steps];
-    [next[i - 1], next[i]] = [next[i], next[i - 1]];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
     onChange(next);
   };
 
@@ -708,8 +710,29 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
       {/* Steps */}
       <div className="space-y-3">
         {steps.map((step, i) => (
-          <div key={i} className="border border-gray-200 rounded-xl p-4 bg-white space-y-3">
+          <div
+            key={i}
+            draggable
+            onDragStart={() => setDragIndex(i)}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => {
+              e.preventDefault();
+              if (dragIndex !== null && dragIndex !== i) moveStep(dragIndex, i);
+              setDragIndex(null);
+            }}
+            onDragEnd={() => setDragIndex(null)}
+            className={`border rounded-xl p-4 bg-white space-y-3 transition-opacity ${
+              dragIndex === i ? 'opacity-40 border-[#0969da]' : 'border-gray-200'
+            }`}
+          >
             <div className="flex items-center gap-2">
+              <span
+                className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 select-none px-0.5"
+                title="Drag to reorder"
+                aria-label={`Drag to reorder step ${i + 1}`}
+              >
+                ⠿
+              </span>
               <span className="text-xs font-semibold text-gray-400 w-6">{i + 1}</span>
               {thinkTimes[i] > 500 && (
                 <span className="text-[10px] font-mono text-[#8c959f]" title="Observed think time before this step">⏱ {(thinkTimes[i] / 1000).toFixed(1)}s</span>
@@ -722,7 +745,10 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               {i > 0 && (
-                <button type="button" onClick={() => moveUp(i)} className="text-gray-400 hover:text-gray-600 text-xs px-1">↑</button>
+                <button type="button" onClick={() => moveStep(i, i - 1)} aria-label={`Move step ${i + 1} up`} className="text-gray-400 hover:text-gray-600 text-xs px-1">↑</button>
+              )}
+              {i < steps.length - 1 && (
+                <button type="button" onClick={() => moveStep(i, i + 1)} aria-label={`Move step ${i + 1} down`} className="text-gray-400 hover:text-gray-600 text-xs px-1">↓</button>
               )}
               <button type="button" onClick={() => removeStep(i)} className="text-red-400 hover:text-red-600 text-xs px-1">✕</button>
             </div>

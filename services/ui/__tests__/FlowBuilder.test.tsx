@@ -151,6 +151,64 @@ describe('FlowBuilder — request headers editor', () => {
   });
 });
 
+// ─── Step reordering ────────────────────────────────────────────────────────────
+
+describe('FlowBuilder — step reordering', () => {
+  const threeSteps = [makeFlowStep('Step A'), makeFlowStep('Step B'), makeFlowStep('Step C')];
+
+  it('shows a down button but no up button on the first step', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    expect(screen.queryByRole('button', { name: 'Move step 1 up' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move step 1 down' })).toBeInTheDocument();
+  });
+
+  it('shows an up button but no down button on the last step', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    expect(screen.getByRole('button', { name: 'Move step 3 up' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Move step 3 down' })).not.toBeInTheDocument();
+  });
+
+  it('moves a step up when the up button is clicked', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Move step 2 up' }));
+    const [reordered] = defaultProps.onChange.mock.calls[0];
+    expect(reordered.map((s: { name: string }) => s.name)).toEqual(['Step B', 'Step A', 'Step C']);
+  });
+
+  it('moves a step down when the down button is clicked', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Move step 2 down' }));
+    const [reordered] = defaultProps.onChange.mock.calls[0];
+    expect(reordered.map((s: { name: string }) => s.name)).toEqual(['Step A', 'Step C', 'Step B']);
+  });
+
+  it('reorders steps via drag and drop onto another step', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    const cards = screen.getAllByTitle('Drag to reorder');
+    const fromCard = cards[0].closest('div[draggable="true"]')!;
+    const toCard = cards[2].closest('div[draggable="true"]')!;
+
+    fireEvent.dragStart(fromCard);
+    fireEvent.dragOver(toCard);
+    fireEvent.drop(toCard);
+
+    const [reordered] = defaultProps.onChange.mock.calls[0];
+    expect(reordered.map((s: { name: string }) => s.name)).toEqual(['Step B', 'Step C', 'Step A']);
+  });
+
+  it('does not call onChange when dropping a step onto itself', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    const cards = screen.getAllByTitle('Drag to reorder');
+    const card = cards[0].closest('div[draggable="true"]')!;
+
+    fireEvent.dragStart(card);
+    fireEvent.dragOver(card);
+    fireEvent.drop(card);
+
+    expect(defaultProps.onChange).not.toHaveBeenCalled();
+  });
+});
+
 // ─── Starting a recording ─────────────────────────────────────────────────────
 
 describe('FlowBuilder — starting a recording', () => {

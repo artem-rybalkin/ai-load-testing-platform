@@ -73,7 +73,7 @@ Improvements, suggestions, and large future work items.
 - [x] **Gemini rate limit UI** — `WorkerHealth.tsx` now polls `GET /teams/:id/quotas` every 60s (mirrors `AIStatus.tsx` polling) and shows a "Gemini X/Y today" chip in the persistent worker strip; turns red when usage hits the daily cap
 - [x] **Test result export** — `GET /results/:testId/report.csv` returns summary metrics + a per-step section for flow tests; "↓ CSV" download button next to "↓ PDF" on the result detail page
 - [ ] **Custom k6 threshold validation** — Preview threshold violations before running test
-- [ ] **Flow step ordering drag-and-drop** — Replace up/down buttons in FlowBuilder
+- [x] **Flow step ordering drag-and-drop** — Each step card in FlowBuilder is now `draggable` with a "⠿" drag handle (`onDragStart`/`onDragOver`/`onDrop`/`onDragEnd`, `moveStep(from, to)` splice-based reorder, highlight on the dragged card); ↑/↓ buttons retained alongside for accessibility/keyboard users
 
 ## Architecture Improvements
 
