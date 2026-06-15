@@ -645,6 +645,18 @@ Returns `application/pdf`. Includes test summary, metrics, and performance analy
 
 ---
 
+### `GET /results/:testId/report.csv`
+
+Download a CSV export of a test's metrics.
+
+```bash
+curl http://localhost:3004/results/550e8400/report.csv -o report.csv
+```
+
+Returns `text/csv` with `metric,value` rows (test summary + backend or client metrics). For flow tests, a blank line is followed by a `step,avgResponseTime,p95ResponseTime,requestsTotal,requestsFailed` section with one row per step. Project-scoped — returns `404` if the test belongs to a different project.
+
+---
+
 ### `POST /results/:testId/baseline`
 
 Mark a completed test as the baseline for future regression comparisons against the same URL + type.

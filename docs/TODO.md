@@ -71,7 +71,7 @@ Improvements, suggestions, and large future work items.
 
 - [x] **recorder-service image size** — Removed redundant `python3 py3-pip` + `pip3 install websockify`: the `novnc` apk package already pulls in `websockify` (and python3) as a transitive dependency, so the explicit pip install was duplicating ~15-20MB of py3-pip/setuptools/packaging. `Dockerfile`/`Dockerfile.dev` simplified to a single `apk add` of `chromium nss freetype harfbuzz ca-certificates ttf-freefont xvfb x11vnc novnc`; verified `docker compose build recorder-service` succeeds and entrypoint's `python3 -m websockify` still works via the apk-provided package
 - [x] **Gemini rate limit UI** — `WorkerHealth.tsx` now polls `GET /teams/:id/quotas` every 60s (mirrors `AIStatus.tsx` polling) and shows a "Gemini X/Y today" chip in the persistent worker strip; turns red when usage hits the daily cap
-- [ ] **Test result export** — CSV export of metrics in addition to PDF
+- [x] **Test result export** — `GET /results/:testId/report.csv` returns summary metrics + a per-step section for flow tests; "↓ CSV" download button next to "↓ PDF" on the result detail page
 - [ ] **Custom k6 threshold validation** — Preview threshold violations before running test
 - [ ] **Flow step ordering drag-and-drop** — Replace up/down buttons in FlowBuilder
 

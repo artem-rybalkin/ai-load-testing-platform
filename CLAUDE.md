@@ -559,6 +559,7 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `POST /results/:testId/baseline` — mark as baseline for regression comparisons
 - `DELETE /results/:testId/baseline` — clear baseline flag
 - `GET  /results/:testId/report.pdf` — download pdfkit PDF report
+- `GET  /results/:testId/report.csv` — download CSV metrics export (summary + per-step rows for flow tests)
 - `GET  /system/health`           — aggregated health of all 5 services (calls each /health in parallel)
 
 **Scripts**
@@ -1038,7 +1039,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~900 tests across 48 test files (`npm test` reports 897 tests; some intentionally skipped in non-Docker/full-suite contexts)
+**Total:** ~910 tests across 48 test files (`npm test` reports ~906 tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -1053,8 +1054,8 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
 |------|---------|-------|
-| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s | 89 |
-| `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 41 |
+| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export | 92 |
+| `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 43 |
 | `results-service/src/__tests__/orgs.test.ts` | POST /orgs, GET /orgs/:id, member role mgmt, last-owner protection, POST /orgs/:id/teams, cross-org isolation | 22 |
 | `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection | 27 |
 | `results-service/src/__tests__/quotas.test.ts` | `getTeamQuota`/`upsertTeamQuota` defaults+merge, `checkScheduleQuota`, `checkGeminiQuota`/`incrementGeminiUsage` rollover, `getTeamUsage` | 14 |
@@ -1078,6 +1079,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke) | 16 |
 | `ui/__tests__/OrgPage.test.tsx` | org member list, admin add/role-change/remove, teams-in-org list, "+ New team" form | 9 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |
+| `ui/__tests__/WorkerHealth.test.tsx` | worker CPU/mem/active-tests bars, offline state, polling, Gemini quota chip | 17 |
 
 ### Playwright E2E (requires `docker compose up`)
 | File | Flow |
