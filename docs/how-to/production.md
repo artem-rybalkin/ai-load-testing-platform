@@ -284,6 +284,59 @@ Or use `--scale` on the command line:
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale worker-backend=3
 ```
 
+### Auto-scaling on queue depth
+
+Fixed replica counts work for predictable load, but `backend-tests`/`client-tests` queue depth is the real signal that more workers are needed — both queues are durable (see Architecture Improvements → RabbitMQ persistence), so a backlog is visible via RabbitMQ's management API even before workers fall behind:
+
+```bash
+# messages "ready" (not yet delivered to a consumer) for the backend queue
+curl -s -u guest:guest http://rabbitmq:15672/api/queues/%2F/backend-tests | jq '.messages_ready'
+```
+
+**Recommended: Kubernetes + KEDA.** [KEDA](https://keda.sh)'s built-in [RabbitMQ scaler](https://keda.sh/docs/latest/scalers/rabbitmq-queue/) polls `messages_ready` per queue and drives a standard HPA — no custom scaling code to write or operate:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-backend-scaler
+spec:
+  scaleTargetRef:
+    name: worker-backend
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  cooldownPeriod: 120   # seconds of low queue depth before scaling back down
+  triggers:
+    - type: rabbitmq
+      metadata:
+        queueName: backend-tests
+        mode: QueueLength
+        value: "5"        # target ~5 queued messages per replica
+        host: amqp://user:password@rabbitmq:5672
+```
+
+Duplicate as a second `ScaledObject` for `worker-client` against the `client-tests` queue. `K6_MAX_DURATION_MS`/`PUPPETEER_MAX_DURATION_MS` bound how long a single message can occupy a replica, which keeps the `QueueLength` target meaningful — a stuck test can't silently inflate the backlog forever.
+
+**Docker Swarm alternative.** Swarm has no built-in queue-based autoscaler; run a small polling loop (cron or a sidecar container) that reads `messages_ready` from the management API and adjusts replica counts:
+
+```bash
+#!/bin/sh
+# poll-and-scale.sh — run every minute via cron
+DEPTH=$(curl -s -u "$RABBITMQ_USER:$RABBITMQ_PASS" \
+  "http://rabbitmq:15672/api/queues/%2F/backend-tests" | jq '.messages_ready')
+CURRENT=$(docker service inspect alt_worker-backend --format '{{.Spec.Mode.Replicated.Replicas}}')
+DESIRED=$(( DEPTH / 5 + 1 ))                 # ~5 messages per replica
+DESIRED=$(( DESIRED > 10 ? 10 : DESIRED ))   # cap at 10
+DESIRED=$(( DESIRED < 1 ? 1 : DESIRED ))     # floor at 1
+if [ "$DESIRED" != "$CURRENT" ]; then
+  docker service scale alt_worker-backend="$DESIRED"
+fi
+```
+
+Same pattern for `worker-client` against `client-tests`. Add hysteresis (e.g. only scale down after N consecutive low-depth polls) to avoid flapping when a burst of tests completes and drains the queue between polls.
+
+Either approach scales `worker-backend` and `worker-client` independently — they consume different queues — and neither requires application code changes; both rely on the existing durable queues and the workers' graceful SIGTERM handling (Test Cancellation / Execution Timeouts in `CLAUDE.md`) to drain in-flight tests before a scale-down removes a replica.
+
 ---
 
 ## Monitoring
