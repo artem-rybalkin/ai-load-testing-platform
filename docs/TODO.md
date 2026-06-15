@@ -40,6 +40,18 @@ Improvements, suggestions, and large future work items.
 - [x] **Rate limiting (Redis — priority #1)** — Wire up Redis; add `@fastify/rate-limit` to api-service and results-service to protect Gemini API and REST endpoints
 - [x] **Recorder-service test coverage** — recorder.test.ts (262 lines), correlator.test.ts (302 lines), api.test.ts (385 lines)
 - [ ] **Playwright → Puppeteer converter** — New converter-service or ai-service endpoint; UI file upload; AI translation from Playwright to Puppeteer syntax
+- [ ] **Lint cleanup — remaining `no-unused-vars` errors (15)** — found while auditing lint output; mostly trivial (unused imports/catch-block bindings), left as-is to avoid unrelated scope creep on other features:
+  - `ai-service/src/__tests__/generator.test.ts:1` — unused `beforeEach` import
+  - `recorder-service/src/__tests__/api.test.ts:1` — unused `afterAll` import
+  - `recorder-service/src/recorder.ts:16` — unused `CapturedResponse` type
+  - `results-service/src/__tests__/api.test.ts:739` — unused `workerService` variable
+  - `results-service/src/app.ts:862` — unused `reply` handler param
+  - `results-service/src/app.ts:958,976,1010,1028,1046,1081,1118,1138` — unused `err` in catch blocks (8 occurrences)
+  - `results-service/src/consumer.ts:91` — unused `_` binding
+  - `worker-backend/src/__tests__/index.test.ts:92` — unused `testId` param
+  - `worker-client/src/retry.ts` — unused binding (reported alongside the above)
+  - Also ~85 `@typescript-eslint/explicit-function-return-type` warnings across worker-backend/worker-client (parser.ts, index.ts, retry.ts, test files) — non-blocking, lower priority
+- [ ] **Flaky `teams.test.ts` under full-suite runs** — `beforeAll` (Testcontainers `PostgreSqlContainer.start()`) hits the 60s hook timeout when the full `npm test` suite runs all 48 Testcontainers-backed files together, cascading into an `afterAll` `TypeError: Cannot read properties of undefined (reading 'close')`. Isolated run (`vitest run services/results-service/src/__tests__/teams.test.ts`) passes 35/35 — root cause is resource contention from too many parallel Postgres containers, not a code defect. Consider lowering Vitest's `maxConcurrency`/`poolOptions` for Testcontainers-backed files, or giving `beforeAll` a longer `hookTimeout`.
 - [x] **noVNC auth in production** — `VNC_PASSWORD` env var passed to `x11vnc -passwd` in docker-entrypoint(.dev).sh (falls back to `-nopw` for local dev); docker-compose.prod.yml binds port 6080 to `127.0.0.1` only
 - [x] **AMQP reconnect: replace bounded retry with unbounded backoff supervisor (G1 — chaos)** — `connectWithBackoff()` added to `@alt/shared` (capped exponential backoff, 1s → 2s → … → 30s cap, never gives up); all 5 queue-connected services (api-service, ai-service, worker-backend, worker-client, results-service) now use it for both the initial connect and reconnect-on-close, so the platform self-heals after a RabbitMQ outage of any length without operator intervention
 - [x] **FlowBuilder: recording session lost on page reload/navigation** — `recording` state (session id/status) is now persisted to `localStorage` (`flowRecordingSession`) on every change; on mount, an in-progress (`active`/`stopping`) session is restored and `GET /recordings/:id` is called to resume polling, import steps if already completed, or clear stale state on 404/expiry

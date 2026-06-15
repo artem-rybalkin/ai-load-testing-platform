@@ -1,7 +1,7 @@
 import './tracing';
 import amqplib from 'amqplib';
 import { spawn, ChildProcess } from 'child_process';
-import { writeFile, unlink, readFile, mkdir, rm, open } from 'fs/promises';
+import { writeFile, readFile, mkdir, rm, open } from 'fs/promises';
 import { Pool } from 'pg';
 import * as os from 'os';
 import * as path from 'path';
@@ -341,7 +341,7 @@ const start = async (): Promise<void> => {
     testLog.info('Received backend test');
 
     // Tag the active OTel span so traces are searchable by testId in Tempo
-    const { trace, context } = await import('@opentelemetry/api');
+    const { trace } = await import('@opentelemetry/api');
     const span = trace.getActiveSpan();
     if (span) { span.setAttribute('test.id', test.id); span.setAttribute('test.url', test.targetUrl); }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import Fastify, { FastifyInstance } from 'fastify';
 import * as os from 'os';
 
