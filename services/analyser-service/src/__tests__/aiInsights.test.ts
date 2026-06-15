@@ -11,7 +11,7 @@ vi.mock('@alt/shared', async (importOriginal) => {
 vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
 
 // Accessor for the shared mock function
-const getMockFn = async () => {
+const getMockFn = async (): Promise<ReturnType<typeof vi.fn>> => {
   const shared = await import('@alt/shared');
   return (shared as unknown as { generateAIText: ReturnType<typeof vi.fn> }).generateAIText;
 };
@@ -41,7 +41,7 @@ const validInsightsPayload = {
   severity: 'warning' as const,
 };
 
-const makeCtx = (overrides: Partial<Parameters<typeof generateAiInsights>[0]> = {}) => ({
+const makeCtx = (overrides: Partial<Parameters<typeof generateAiInsights>[0]> = {}): Parameters<typeof generateAiInsights>[0] => ({
   targetUrl: 'https://api.example.com',
   type: 'backend',
   metrics: baseMetrics,

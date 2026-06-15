@@ -157,7 +157,10 @@ export async function buildApp(
   // have already verified session.status was not 'stopping'/'completed' and the
   // session has been removed from `_sessions` synchronously before calling this,
   // so a concurrent call can't process the same session twice.
-  const finishSession = async (sessionId: string, session: RecordingSessionInternal) => {
+  const finishSession = async (
+    sessionId: string,
+    session: RecordingSessionInternal
+  ): Promise<{ enrichedSteps: FlowStep[]; suggestedIgnore: string[]; thinkTimes: number[]; duplicates: DeduplicationSuggestion[] }> => {
     let capturedRequests;
     try {
       capturedRequests = await stopSession(session);
@@ -357,7 +360,7 @@ export async function buildApp(
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 if (!process.env.VITEST) {
-  (async () => {
+  (async (): Promise<void> => {
     const app = await buildApp(sessions, completedResults);
     try {
       await app.listen({ port: PORT, host: '0.0.0.0' });

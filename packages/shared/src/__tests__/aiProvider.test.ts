@@ -64,7 +64,7 @@ describe('generateAIText', () => {
     process.env.GEMINI_API_KEY = 'g-key';
     vi.doMock('@google/generative-ai', () => ({
       GoogleGenerativeAI: class {
-        getGenerativeModel() {
+        getGenerativeModel(): { generateContent: ReturnType<typeof vi.fn> } {
           return {
             generateContent: vi.fn().mockResolvedValue({ response: { text: () => 'gemini response' } }),
           };
@@ -114,7 +114,7 @@ describe('generateAIText', () => {
     process.env.GEMINI_API_KEY = 'g-key';
     vi.doMock('@google/generative-ai', () => ({
       GoogleGenerativeAI: class {
-        getGenerativeModel() {
+        getGenerativeModel(): { generateContent: ReturnType<typeof vi.fn> } {
           return {
             generateContent: vi.fn().mockRejectedValue(Object.assign(new Error('rate limited'), { status: 429 })),
           };

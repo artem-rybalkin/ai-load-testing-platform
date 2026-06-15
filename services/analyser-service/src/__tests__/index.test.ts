@@ -13,7 +13,7 @@ vi.mock('@alt/shared', async (importOriginal) => {
 // Mock global fetch so getProviderSetting() (results-service lookup) never makes a real network call
 vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
 
-const getMockGenerateAIText = async () => {
+const getMockGenerateAIText = async (): Promise<ReturnType<typeof vi.fn>> => {
   const shared = await import('@alt/shared');
   return (shared as unknown as { generateAIText: ReturnType<typeof vi.fn> }).generateAIText;
 };
@@ -41,7 +41,7 @@ const validInsightsPayload = {
   severity: 'warning' as const,
 };
 
-const analysePayload = (overrides: Record<string, unknown> = {}) => ({
+const analysePayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   testId: 'test-123',
   targetUrl: 'https://api.example.com',
   type: 'backend',

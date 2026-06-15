@@ -34,13 +34,16 @@ vi.mock('fastify', () => ({
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-const makeChannel = () => ({
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
+
+const makeChannel = (): { publish: MockFn; sendToQueue: MockFn; ack: MockFn } => ({
   publish:     vi.fn(),
   sendToQueue: vi.fn(),
   ack:         vi.fn(),
 });
 
-const makeMessage = (retryCount?: number) => ({
+const makeMessage = (retryCount?: number): { content: Buffer; properties: { headers: Record<string, number> } } => ({
   content: Buffer.from('{}'),
   properties: {
     headers: retryCount !== undefined ? { 'x-retry-count': retryCount } : {},
@@ -89,8 +92,8 @@ const handleRetryFn = (
   msg: ReturnType<typeof makeMessage>,
   queue: string,
   dlq: string,
-  testId: string,
-) => {
+  _testId: string,
+): void => {
   const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
   if (retryCount < MAX_RETRIES) {
     channel.publish('', queue, msg.content, {
@@ -121,7 +124,7 @@ const validateScriptFn = (scriptPath: string): Promise<void> =>
     k6.on('error', reject);
   });
 
-const makeFakeK6Process = () => {
+const makeFakeK6Process = (): EventEmitter & { stderr: EventEmitter } => {
   const proc = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
   proc.stderr = new EventEmitter();
   return proc;

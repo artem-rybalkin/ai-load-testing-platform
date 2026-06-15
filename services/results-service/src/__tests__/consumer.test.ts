@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { Pool } from 'pg';
+import { Pool, QueryResult } from 'pg';
 import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { handleResult } from '../consumer';
 import { createSchema } from '../db';
@@ -293,7 +293,7 @@ describe('handleResult — baseline ordering', () => {
 // ─── Webhook firing ───────────────────────────────────────────────────────────
 
 describe('handleResult — webhook firing', () => {
-  const insertWebhook = (events: string[], secret?: string) =>
+  const insertWebhook = (events: string[], secret?: string): Promise<QueryResult> =>
     pool.query(
       `INSERT INTO webhooks (url, events, secret) VALUES ('https://hook.example.com/notify', $1, $2)`,
       [events, secret ?? null]
@@ -379,13 +379,14 @@ describe('handleResult — webhook firing', () => {
 // ─── Webhook payload formats ───────────────────────────────────────────────
 
 describe('handleResult — webhook payload formats', () => {
-  const insertWebhookWithFormat = (events: string[], format: string) =>
+  const insertWebhookWithFormat = (events: string[], format: string): Promise<QueryResult> =>
     pool.query(
       `INSERT INTO webhooks (url, events, format) VALUES ('https://hook.example.com/notify', $1, $2)`,
       [events, format]
     );
 
-  const fireAndGetPayload = async (format: string, perfStatus: 'failed' | 'degraded' = 'failed') => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fireAndGetPayload = async (format: string, perfStatus: 'failed' | 'degraded' = 'failed'): Promise<{ result: TestResult; options: any; body: any }> => {
     await insertWebhookWithFormat([perfStatus], format);
     const result = makeResult(perfStatus === 'failed' ? { metrics: failedMetrics } : {
       targetUrl: 'http://degrade-format.com',
@@ -490,7 +491,7 @@ describe('handleResult — webhook payload formats', () => {
 // ─── fetchExternalMetricsForTest (via handleResult → callAnalyserService) ────
 
 describe('handleResult — fetchExternalMetricsForTest', () => {
-  const insertLogSource = (overrides: Record<string, unknown> = {}) =>
+  const insertLogSource = (overrides: Record<string, unknown> = {}): Promise<QueryResult> =>
     pool.query(
       `INSERT INTO log_sources (name, platform, url_template, metrics_endpoint_template, auth_header)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -503,7 +504,8 @@ describe('handleResult — fetchExternalMetricsForTest', () => {
       ]
     );
 
-  const getAnalyseBody = () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getAnalyseBody = (): any => {
     const call = mockFetch.mock.calls.find(([url]) => String(url).includes('/analyse'));
     return call ? JSON.parse(call[1].body) : null;
   };

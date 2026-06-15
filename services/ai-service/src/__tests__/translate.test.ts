@@ -13,7 +13,7 @@ const mockGenerateContent = vi.hoisted(() => vi.fn());
 
 vi.mock('@google/generative-ai', () => ({
   GoogleGenerativeAI: class {
-    getGenerativeModel() { return { generateContent: mockGenerateContent }; }
+    getGenerativeModel(): { generateContent: typeof mockGenerateContent } { return { generateContent: mockGenerateContent }; }
   },
 }));
 

@@ -112,14 +112,14 @@ export const buildApp = async (
   // disabled, same convention as API_KEYS, for local dev.
   const internalPaths = new Set(['/results/pending']);
   const internalSuffixes = ['/running', '/fail', '/message', '/live', '/cancel'];
-  const isInternalCallback = (url: string, method: string) => {
+  const isInternalCallback = (url: string, method: string): boolean => {
     if (internalPaths.has(url)) return true;
     // GET /results/:testId/live is read by the UI and must be project-scoped;
     // only the worker's POST (pushing live metric points) is server-to-server.
     if (url.endsWith('/live') && method === 'GET') return false;
     return internalSuffixes.some(s => url.endsWith(s));
   };
-  const isInternal = (url: string, method: string) => publicPaths.has(url) || isInternalCallback(url, method);
+  const isInternal = (url: string, method: string): boolean => publicPaths.has(url) || isInternalCallback(url, method);
 
   await app.register(rateLimit, {
     global: true,
@@ -905,7 +905,7 @@ export const buildApp = async (
     });
   });
 
-  app.get('/system/ai-status', async (_request, reply) => {
+  app.get('/system/ai-status', async () => {
     try {
       const { rows } = await pool.query(
         `SELECT status_message, created_at FROM test_results
@@ -1035,7 +1035,7 @@ export const buildApp = async (
           broadcast({ type: 'tests:changed' });
         }
         return { success: true };
-      } catch (err) {
+      } catch {
         return reply.code(500).send({ error: 'Failed to mark test as failed' });
       }
     }
@@ -1053,7 +1053,7 @@ export const buildApp = async (
         broadcast({ type: 'test:status', testId, status: 'running', perfStatus: null });
         broadcast({ type: 'tests:changed' });
         return { success: true };
-      } catch (err) {
+      } catch {
         return reply.code(500).send({ error: 'Failed to mark test as running' });
       }
     }
@@ -1087,7 +1087,7 @@ export const buildApp = async (
               [projectId, limit]
             );
         return { results: rows, nextBefore: rows.length === limit ? rows[rows.length - 1].created_at : null };
-      } catch (err) {
+      } catch {
         return reply.code(500).send({ error: 'Failed to fetch results' });
       }
     }
@@ -1105,7 +1105,7 @@ export const buildApp = async (
           [testId, type, targetUrl, durationSeconds ?? null, steps ? JSON.stringify(steps) : null, testData ? JSON.stringify(testData) : null, projectId ?? null]
         );
         return { success: true };
-      } catch (err) {
+      } catch {
         return reply.code(500).send({ error: 'Failed to create pending result' });
       }
     }
@@ -1123,7 +1123,7 @@ export const buildApp = async (
         [projectId]
       );
       return { active: rows };
-    } catch (err) {
+    } catch {
       return reply.code(500).send({ error: 'Failed to fetch active tests' });
     }
   });
@@ -1158,7 +1158,7 @@ export const buildApp = async (
         [projectId]
       );
       return { scripts: rows };
-    } catch (err) {
+    } catch {
       return reply.code(500).send({ error: 'Failed to fetch scripts' });
     }
   });
@@ -1195,7 +1195,7 @@ export const buildApp = async (
       // Broadcast after the HTTP response is flushed so the worker isn't blocked
       setImmediate(() => broadcast({ type: 'test:live', testId, point: { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } }));
       return reply;
-    } catch (err) {
+    } catch {
       return reply.code(500).send({ error: 'Failed to save live metric' });
     }
   });
@@ -1215,7 +1215,7 @@ export const buildApp = async (
           [testId, projectId]
         );
         return { points: rows };
-      } catch (err) {
+      } catch {
         return reply.code(500).send({ error: 'Failed to fetch live metrics' });
       }
     }
@@ -1382,7 +1382,7 @@ export const buildApp = async (
     const started  = startedAt  ? new Date(startedAt)  : new Date(Date.now() - 3_600_000);
     const completed = completedAt ? new Date(completedAt) : new Date();
 
-    const interpolate = (template: string) =>
+    const interpolate = (template: string): string =>
       template
         .replaceAll('{startedAtMs}',      String(started.getTime()))
         .replaceAll('{completedAtMs}',    String(completed.getTime()))
@@ -2163,7 +2163,7 @@ Return only the summary text, no JSON, no markdown.`
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
       const lines: string[] = ['metric,value'];
-      const add = (k: string, v: unknown) => lines.push(`${csvEscape(k)},${csvEscape(v)}`);
+      const add = (k: string, v: unknown): number => lines.push(`${csvEscape(k)},${csvEscape(v)}`);
 
       add('testId', result.test_id);
       add('url', result.target_url);

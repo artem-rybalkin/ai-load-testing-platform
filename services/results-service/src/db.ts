@@ -23,7 +23,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 1,
     name: 'initial_schema',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS test_scripts (
           id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -129,7 +129,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 2,
     name: 'add_column_extensions',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`ALTER TABLE test_results  ADD COLUMN IF NOT EXISTS is_baseline     BOOLEAN DEFAULT FALSE`);
       await p.query(`ALTER TABLE test_results  ADD COLUMN IF NOT EXISTS duration_seconds INTEGER`);
       await p.query(`ALTER TABLE live_metrics  ADD COLUMN IF NOT EXISTS step_metrics    JSONB`);
@@ -142,7 +142,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 3,
     name: 'log_sources_metrics_endpoint',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`ALTER TABLE log_sources ADD COLUMN IF NOT EXISTS metrics_endpoint_template TEXT`);
       await p.query(`ALTER TABLE log_sources ADD COLUMN IF NOT EXISTS auth_header               TEXT`);
     },
@@ -150,7 +150,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 4,
     name: 'webhooks_format',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       // format: 'generic' (default JSON POST) | 'slack' | 'pagerduty' | 'opsgenie'
       await p.query(`ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS format VARCHAR(20) DEFAULT 'generic'`);
     },
@@ -158,7 +158,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 5,
     name: 'projects_and_project_id',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS projects (
           id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -179,7 +179,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 6,
     name: 'users_team_members_sessions',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS users (
           id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -217,7 +217,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 7,
     name: 'team_quotas_and_gemini_usage',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS team_quotas (
           id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -244,7 +244,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 8,
     name: 'organizations_and_team_api_keys',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS organizations (
           id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -280,7 +280,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 9,
     name: 'audit_log',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS audit_log (
           id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -298,7 +298,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 10,
     name: 'app_settings',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS app_settings (
           key   TEXT PRIMARY KEY,
@@ -314,7 +314,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
   {
     version: 11,
     name: 'team_ai_providers',
-    up: async (p) => {
+    up: async (p): Promise<void> => {
       await p.query(`
         CREATE TABLE IF NOT EXISTS team_ai_providers (
           team_id    UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,

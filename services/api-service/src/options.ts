@@ -10,7 +10,7 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
     ...(httpOptions?.discardResponseBodies ? { discardResponseBodies: true } : {}),
   };
 
-  const obj = (() => {
+  const obj = ((): { stages: { duration: string; target: number }[]; thresholds: Record<string, string[]> } => {
     switch (profile) {
       case 'spike': return {
         stages: [

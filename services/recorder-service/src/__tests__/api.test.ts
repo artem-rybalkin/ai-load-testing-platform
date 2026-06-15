@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { FlowStep } from '@alt/shared';
 import type { RecordingSessionInternal } from '../recorder';
@@ -19,7 +19,7 @@ vi.mock('../recorder', () => ({
   stopSession:           mockStopSession,
   toFlowSteps:           mockToFlowSteps,
   computeThinkTimes:     vi.fn().mockReturnValue([]),
-  compileIgnorePatterns: (patterns: string[]) => patterns.map(p => new RegExp(p)),
+  compileIgnorePatterns: (patterns: string[]): RegExp[] => patterns.map(p => new RegExp(p)),
 }));
 
 vi.mock('../correlator', () => ({

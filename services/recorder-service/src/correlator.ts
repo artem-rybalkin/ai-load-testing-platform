@@ -57,7 +57,7 @@ interface CorrelationResult {
   correlations: CorrelationEntry[];
 }
 
-const CORRELATION_PROMPT = (requestSummary: string) => `
+const CORRELATION_PROMPT = (requestSummary: string): string => `
 You are an expert in HTTP traffic analysis and load testing.
 Analyze the following HTTP request/response pairs from a recorded user session.
 Identify "correlation points": places where a value from a response body or header

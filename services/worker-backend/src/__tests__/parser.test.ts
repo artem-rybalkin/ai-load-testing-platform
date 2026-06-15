@@ -11,7 +11,7 @@ const makeK6Output = ({
   p90 = '400ms',
   p95 = '450ms',
   p99 = '480ms',
-} = {}) => `
+} = {}): string => `
           /\\      Grafana   /‾‾/
      /\\  /  \\     |   (‾) ‾‾|   |‾‾|
     /  \\/    \\    |   |___) |   |  |
@@ -35,16 +35,16 @@ http_req_blocked...........: avg=1ms
 http_req_connecting........: avg=0s
 `;
 
-const makeK6OutputWithUnit = (unit: string, avgVal: number, p95Val: number, p99Val: number) => `
+const makeK6OutputWithUnit = (unit: string, avgVal: number, p95Val: number, p99Val: number): string => `
 http_reqs...................: 10     2/s
 http_req_failed................: 0.00% 0 out of 10
 http_req_duration..........: avg=${avgVal}${unit} min=100${unit} med=200${unit} max=500${unit} p(90)=350${unit} p(95)=${p95Val}${unit} p(99)=${p99Val}${unit}
 `;
 
-const makeJsonPoint = (metric: string, value: number) =>
+const makeJsonPoint = (metric: string, value: number): string =>
   JSON.stringify({ type: 'Point', metric, data: { value, time: new Date().toISOString() } });
 
-const makeMetricLine = (metric: string) =>
+const makeMetricLine = (metric: string): string =>
   JSON.stringify({ type: 'Metric', metric, data: { name: metric, type: 'trend' } });
 
 // ─── parseK6Output ────────────────────────────────────────────────────────────
@@ -320,7 +320,7 @@ describe('aggregateWindow', () => {
 
   // ─── per-step stepMetrics branch ────────────────────────────────────────────
 
-  const makeGroupJsonPoint = (metric: string, value: number, group: string) =>
+  const makeGroupJsonPoint = (metric: string, value: number, group: string): string =>
     JSON.stringify({ type: 'Point', metric, data: { value, time: new Date().toISOString(), tags: { group: `::${group}` } } });
 
   it('computes stepMetrics for multiple groups with avgResponseTime, rps and errorRate', () => {
@@ -389,10 +389,10 @@ describe('aggregateWindow', () => {
 // ─── parseK6Errors ───────────────────────────────────────────────────────────
 
 describe('parseK6Errors', () => {
-  const makeHttpReqPoint = (status: string) =>
+  const makeHttpReqPoint = (status: string): string =>
     JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, time: new Date().toISOString(), tags: { status } } });
 
-  const makeFailedPoint = (errorCode: string) =>
+  const makeFailedPoint = (errorCode: string): string =>
     JSON.stringify({ type: 'Point', metric: 'http_req_failed', data: { value: 1, time: new Date().toISOString(), tags: { error_code: errorCode } } });
 
   it('counts requests by status code', () => {

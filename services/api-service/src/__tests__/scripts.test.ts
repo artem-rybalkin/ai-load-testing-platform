@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import { Pool } from 'pg';
 import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { findExistingScript, stepsToKey, incrementUsedCount } from '../scripts';
-import type { FlowStep } from '@alt/shared';
+import type { FlowStep, BackendTestOptions } from '@alt/shared';
 
 let pool: Pool;
 let dropDb: () => Promise<void>;
@@ -140,7 +140,7 @@ describe('findExistingScript', () => {
     const result = await findExistingScript(
       'http://client-test.com',
       'client-side',
-      { vus: 10, duration: '1m' } as any,
+      { vus: 10, duration: '1m' } as unknown as BackendTestOptions,
       pool
     );
 

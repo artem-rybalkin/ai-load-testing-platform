@@ -155,7 +155,7 @@ const runK6Test = async (
     k6.stdout.on('data', (d: Buffer) => stdoutChunks.push(d));
     k6.stderr.on('data', (d: Buffer) => stderrChunks.push(d));
 
-    const readAndPost = async () => {
+    const readAndPost = async (): Promise<void> => {
       try {
         const fh = await open(jsonPath, 'r');
         try {
@@ -254,7 +254,7 @@ const handleRetry = (
   queue: string,
   dlq: string,
   testId: string
-) => {
+): void => {
   const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
   if (retryCount < MAX_RETRIES) {
     log.warn({ testId, retryCount: retryCount + 1, maxRetries: MAX_RETRIES }, 'Retrying message');
@@ -398,7 +398,7 @@ const start = async (): Promise<void> => {
   });
 };
 
-const startHealthServer = async () => {
+const startHealthServer = async (): Promise<void> => {
   const app = Fastify({ logger: false });
   app.get('/health', async (_req, reply) => {
     const checks: Record<string, string> = {};
@@ -429,7 +429,7 @@ const startHealthServer = async () => {
   log.info({ port }, 'Worker-backend health server listening');
 };
 
-const startWithQueue = async () => {
+const startWithQueue = async (): Promise<void> => {
   await start();
 };
 

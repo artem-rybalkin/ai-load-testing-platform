@@ -225,7 +225,7 @@ describe('ws module', () => {
 
       vi.doMock('../redis', () => ({
         redisClient: {
-          duplicate: () => subscriberMock,
+          duplicate: (): typeof subscriberMock => subscriberMock,
           publish: publishMock,
         },
       }));

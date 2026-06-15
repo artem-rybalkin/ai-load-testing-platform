@@ -25,7 +25,7 @@ const SESSION_SECRET = 'test-session-secret-32-chars-min!';
 const sessionCookie = (res: { headers: Record<string, unknown> }): string =>
   (res.headers['set-cookie'] as string).split(';')[0];
 
-const registerUser = async (email: string, teamName: string, password = 'password123') =>
+const registerUser = async (email: string, teamName: string, password = 'password123'): Promise<Awaited<ReturnType<typeof app.inject>>> =>
   app.inject({
     method: 'POST', url: '/auth/register',
     payload: { email, password, teamName, name: email.split('@')[0] },
@@ -61,12 +61,27 @@ beforeEach(async () => {
 
 describe('GET /system/ai-provider', () => {
   it('returns the default provider setting with no session', async () => {
-    const res = await app.inject({ method: 'GET', url: '/system/ai-provider' });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.provider).toBe('gemini');
-    expect(body.fallbacks).toEqual([]);
-    expect(body.available).toEqual({ gemini: false, openai: false, anthropic: false });
+    const savedKeys = {
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    };
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const res = await app.inject({ method: 'GET', url: '/system/ai-provider' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.provider).toBe('gemini');
+      expect(body.fallbacks).toEqual([]);
+      expect(body.available).toEqual({ gemini: false, openai: false, anthropic: false });
+    } finally {
+      for (const [key, value] of Object.entries(savedKeys)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('reflects available providers based on configured API keys', async () => {

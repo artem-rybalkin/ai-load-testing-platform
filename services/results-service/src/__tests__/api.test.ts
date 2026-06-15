@@ -44,7 +44,7 @@ beforeEach(async () => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const insertResult = async (overrides: Record<string, unknown> = {}) => {
+const insertResult = async (overrides: Record<string, unknown> = {}): Promise<string> => {
   const testId = overrides.testId as string ?? crypto.randomUUID();
   await pool.query(
     `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at)
@@ -734,7 +734,6 @@ describe('GET /system/health', () => {
     });
     const res = await app.inject({ method: 'GET', url: '/system/health' });
     const body = res.json();
-    const workerService = body.services.find((s: { name: string; metrics?: unknown }) => s.metrics);
     // At least one service should have passed through metrics if the mock was used
     // (results depends on which service fetch hit the mock first)
     expect(body.services).toBeDefined();

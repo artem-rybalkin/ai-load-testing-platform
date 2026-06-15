@@ -88,7 +88,7 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
   testLog.info('Launching browser');
 
   const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
-  const postMessage = (message: string) =>
+  const postMessage = (message: string): Promise<Response | void> =>
     fetch(`${resultsUrl}/results/${test.id}/message`, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
@@ -208,7 +208,7 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
           else if (e.initiatorType === 'font' || /\.(woff2?|ttf|otf|eot)/i.test(e.name)) bd.fontSize += kb;
           else if (e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch') bd.xhrSize += kb;
         }
-        const round = (n: number) => Math.round(n * 10) / 10;
+        const round = (n: number): number => Math.round(n * 10) / 10;
         return { jsSize: round(bd.jsSize), cssSize: round(bd.cssSize), imageSize: round(bd.imageSize), fontSize: round(bd.fontSize), xhrSize: round(bd.xhrSize), totalSize: round(bd.totalSize), requestCount: bd.requestCount };
       });
   
@@ -398,7 +398,7 @@ const start = async (): Promise<void> => {
   });
 };
 
-const startHealthServer = async () => {
+const startHealthServer = async (): Promise<void> => {
   const app = Fastify({ logger: false });
   app.get('/health', async (_req, reply) => {
     const checks: Record<string, string> = {};

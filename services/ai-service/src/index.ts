@@ -132,7 +132,7 @@ const startConsumer = async (): Promise<void> => {
     log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Processing script request');
 
     const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
-    const postMessage = (message: string) =>
+    const postMessage = (message: string): Promise<Response | void> =>
       fetch(`${resultsUrl}/results/${test.id}/message`, {
         method: 'POST',
         headers: internalHeaders({ 'Content-Type': 'application/json' }),

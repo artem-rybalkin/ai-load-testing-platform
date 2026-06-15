@@ -39,7 +39,7 @@ let pool: Pool;
 let dropDb: () => Promise<void>;
 let app: FastifyInstance;
 
-const jsonResponse = (obj: unknown) => JSON.stringify(obj);
+const jsonResponse = (obj: unknown): string => JSON.stringify(obj);
 
 beforeAll(async () => {
   process.env.GEMINI_API_KEY = 'test-key';
@@ -61,7 +61,7 @@ beforeEach(async () => {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const insertCompletedResult = async (p95 = 400, avg = 200, rps = 50) => {
+const insertCompletedResult = async (p95 = 400, avg = 200, rps = 50): Promise<string> => {
   const testId = crypto.randomUUID();
   await pool.query(
     `INSERT INTO test_results (test_id, type, target_url, status, perf_status, metrics, created_at, completed_at)

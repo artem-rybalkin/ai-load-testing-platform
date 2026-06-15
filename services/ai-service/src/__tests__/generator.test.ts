@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { generateScript, compareDescriptions } from '../generator';
 import type { TestRequest } from '@alt/shared';
 
@@ -13,7 +13,7 @@ vi.mock('@alt/shared', async (importOriginal) => {
 vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
 
 // Accessor for the shared mock function
-const getMockFn = async () => {
+const getMockFn = async (): Promise<ReturnType<typeof vi.fn>> => {
   const shared = await import('@alt/shared');
   return (shared as unknown as { generateAIText: ReturnType<typeof vi.fn> }).generateAIText;
 };
@@ -31,7 +31,7 @@ const baseFlow = (): TestRequest => ({
   createdAt: new Date().toISOString(),
 });
 
-const getLastPrompt = async () => {
+const getLastPrompt = async (): Promise<string> => {
   const fn = await getMockFn();
   return fn.mock.calls.at(-1)?.[0] as string;
 };

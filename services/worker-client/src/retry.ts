@@ -9,7 +9,7 @@ export const handleRetry = (
   queue: string,
   dlq: string,
   testId: string
-) => {
+): void => {
   const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
   if (retryCount < MAX_RETRIES) {
     log.warn({ testId, retryCount: retryCount + 1, maxRetries: MAX_RETRIES }, 'Retrying message');

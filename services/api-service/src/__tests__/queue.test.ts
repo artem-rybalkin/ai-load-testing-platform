@@ -54,7 +54,7 @@ describe('queue module', () => {
   });
 
   /** Convenience: call connectQueue so the module-private channel is non-null. */
-  const connect = () => queueMod.connectQueue();
+  const connect = (): ReturnType<typeof queueMod.connectQueue> => queueMod.connectQueue();
 
   // ── isQueueConnected ────────────────────────────────────────────────────────
 

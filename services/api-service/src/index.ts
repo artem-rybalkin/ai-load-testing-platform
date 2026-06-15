@@ -65,7 +65,7 @@ const safeTestResponse = ({
   cachedScript: _cs,
   cachedScriptDescription: _csd,
   ...safe
-}: EnrichedTestRequest) => safe;
+}: EnrichedTestRequest): Omit<EnrichedTestRequest, 'envVars' | 'testData' | 'csvData' | 'csvFilename' | 'customScript' | 'generatedScript' | 'cachedScript' | 'cachedScriptDescription'> => safe;
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({ logger: false });
@@ -248,14 +248,14 @@ export const buildApp = async (): Promise<FastifyInstance> => {
 
       const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
 
-      const postMessage = (message: string) =>
+      const postMessage = (message: string): Promise<Response | void> =>
         fetch(`${resultsUrl}/results/${test.id}/message`, {
           method: 'POST',
           headers: internalHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ message }),
         }).catch(() => {});
 
-      const warnIfNoWorker = async () => {
+      const warnIfNoWorker = async (): Promise<void> => {
         const consumers = await getWorkerConsumerCount(type);
         if (consumers === 0) {
           const label = type === 'client-side' ? 'browser (Puppeteer)' : 'backend (k6)';
@@ -263,7 +263,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         }
       };
 
-      const tryPublish = (skipAI: boolean) => {
+      const tryPublish = (skipAI: boolean): void => {
         try {
           publishTest(test, skipAI);
         } catch (err) {

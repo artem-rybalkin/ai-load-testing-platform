@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import { Pool } from 'pg';
+import { Pool, QueryResult } from 'pg';
 import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { createSchema } from '../db';
 
@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 
 /** Retry a query a few times to absorb transient connection resets on a fresh Pool. */
-const queryWithRetry = async (p: Pool, sql: string, retries = 5, delayMs = 500) => {
+const queryWithRetry = async (p: Pool, sql: string, retries = 5, delayMs = 500): Promise<QueryResult> => {
   for (let attempt = 1; ; attempt++) {
     try {
       return await p.query(sql);

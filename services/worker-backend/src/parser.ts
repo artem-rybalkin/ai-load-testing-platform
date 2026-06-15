@@ -186,8 +186,8 @@ export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timesta
 
   if (durations.length === 0 && vusValues.length === 0) return null;
 
-  const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  const max = (arr: number[]) => Math.max(...arr);
+  const avg = (arr: number[]): number => arr.reduce((a, b) => a + b, 0) / arr.length;
+  const max = (arr: number[]): number => Math.max(...arr);
 
   const stepMetrics: LiveStepMetric[] = Object.entries(durationsByGroup).map(([name, d]) => ({
     name,

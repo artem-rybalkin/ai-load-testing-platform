@@ -1,5 +1,5 @@
 import './tracing';
-import Fastify from 'fastify';
+import Fastify, { FastifyInstance } from 'fastify';
 import { BackendMetrics, ClientMetrics, SLOThresholds, AnalysisResult } from '@alt/shared';
 import { analyzeResult } from './analyzer';
 import { generateAiInsights } from './aiInsights';
@@ -26,7 +26,7 @@ interface AnalyseBody {
 
 // ── App factory (exported for testing) ───────────────────────────────────────
 
-export function buildApp() {
+export function buildApp(): FastifyInstance {
   const app = Fastify({ logger: false });
 
   app.get('/health', async (_request, reply) => {

@@ -4,7 +4,7 @@ import { handleRetry } from '../retry';
 
 // ─── Mock channel ─────────────────────────────────────────────────────────────
 
-const makeChannel = () => ({
+const makeChannel = (): amqplib.Channel => ({
   publish:     vi.fn(),
   sendToQueue: vi.fn(),
   ack:         vi.fn(),

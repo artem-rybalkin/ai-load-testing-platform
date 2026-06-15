@@ -15,7 +15,7 @@ vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in te
 // We need puppeteer-core mocked so recorder.ts can be imported transitively
 vi.mock('puppeteer-core', () => ({ default: {} }));
 
-const getMock = async () => {
+const getMock = async (): Promise<ReturnType<typeof vi.fn>> => {
   const shared = await import('@alt/shared');
   return (shared as unknown as { generateAIText: ReturnType<typeof vi.fn> }).generateAIText;
 };

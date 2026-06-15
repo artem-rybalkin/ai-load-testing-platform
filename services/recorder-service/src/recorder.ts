@@ -13,12 +13,6 @@ interface PendingRequest {
   timestamp: number;
 }
 
-interface CapturedResponse {
-  status: number;
-  headers: Record<string, string>;
-  body?: string;
-}
-
 export interface RecordingSessionInternal {
   id: string;
   status: 'active' | 'stopping' | 'completed' | 'error';
@@ -92,7 +86,7 @@ export function toFlowSteps(requests: RecordedRequest[]): FlowStep[] {
     .filter(r => r.responseStatus < 500) // skip hard server errors
     .slice(0, FLOW_STEPS_CAP)
     .map((r, i) => {
-      const parsedUrl = (() => { try { return new URL(r.url); } catch { return null; } })();
+      const parsedUrl = ((): URL | null => { try { return new URL(r.url); } catch { return null; } })();
       const path = parsedUrl ? parsedUrl.pathname : r.url;
       const method = r.method.toUpperCase() as FlowStep['method'];
       const step: FlowStep = {
@@ -220,8 +214,8 @@ export async function startSession(
       timestamp: req.timestamp,
     });
 
-    session.stepCount = completed.length; // eslint-disable-line @typescript-eslint/no-use-before-define
-    session.lastActivityAt = Date.now(); // eslint-disable-line @typescript-eslint/no-use-before-define
+    session.stepCount = completed.length;
+    session.lastActivityAt = Date.now();
     onStep();
     log.debug({ url: req.url, status: resp.status }, 'Captured request');
   });

@@ -30,7 +30,7 @@ const fetchExternalMetricsForTest = async (
     const started   = startedAt   ? new Date(startedAt)   : new Date(Date.now() - 3_600_000);
     const completed = completedAt ? new Date(completedAt) : new Date();
 
-    const interpolate = (t: string) =>
+    const interpolate = (t: string): string =>
       t.replaceAll('{startedAtMs}',  String(started.getTime()))
        .replaceAll('{completedAtMs}', String(completed.getTime()))
        .replaceAll('{startedAtS}',   String(Math.floor(started.getTime() / 1000)))

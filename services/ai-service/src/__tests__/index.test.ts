@@ -27,7 +27,10 @@ vi.mock('../generator', () => ({
 }));
 
 // ── Channel mock ──────────────────────────────────────────────────────────
-const makeChannel = () => ({
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
+
+const makeChannel = (): { sendToQueue: MockFn; ack: MockFn; publish: MockFn } => ({
   sendToQueue: vi.fn(),
   ack:         vi.fn(),
   publish:     vi.fn(),
