@@ -162,6 +162,7 @@ Before going public, verify:
 - [ ] PostgreSQL and RabbitMQ ports are not exposed (prod compose removes them)
 - [ ] Firewall allows only 80, 443, and SSH
 - [ ] Server has automatic security updates enabled
+- [ ] PostgreSQL/RabbitMQ data volumes are on encrypted storage (see "Encryption at rest" below)
 
 ---
 
@@ -184,6 +185,44 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 Docker Compose recreates only services whose images changed. Zero-downtime for stateless services (api-service, ai-service, workers). The results-service applies DB migrations on startup.
+
+---
+
+## Encryption at rest
+
+`test_results`, `test_scripts`, `users`, and recorded flow steps (`steps` JSONB) contain target URLs, generated scripts, request/response bodies, and credentials — all stored as plaintext in the `postgres` data volume. If your deployment has compliance requirements (GDPR, SOC 2, customer contracts), encrypt the underlying storage.
+
+### Recommended: volume / disk-level encryption
+
+Encrypt the entire `postgres_data` Docker volume (and any host disk it lives on) rather than individual columns. This protects all data uniformly with no application changes, no query-pattern restrictions, and no key-management code to maintain.
+
+- **Cloud-managed databases** (RDS, Cloud SQL, Azure Database for PostgreSQL): enable "encryption at rest" when provisioning — it's a checkbox, AES-256, fully transparent. Prefer this if you're not self-hosting Postgres.
+- **Self-hosted on a cloud VM**: most providers offer encrypted block storage by default or as an option (AWS EBS encryption, GCP Persistent Disk CMEK, Azure Disk Encryption). Enable it on the volume backing `/var/lib/docker/volumes`.
+- **Bare-metal / on-prem Linux host**: use LUKS/dm-crypt on the partition that holds the Docker data root:
+  ```bash
+  # one-time setup before `docker compose up` is ever run on this host
+  cryptsetup luksFormat /dev/sdb1
+  cryptsetup luksOpen /dev/sdb1 docker-data
+  mkfs.ext4 /dev/mapper/docker-data
+  mount /dev/mapper/docker-data /var/lib/docker
+  ```
+  The volume must be unlocked (passphrase or keyfile) on boot — plan for unattended unlock (TPM-bound key, cloud KMS-backed keyfile) if the server reboots without an operator present.
+
+### Why not column-level encryption (`pgcrypto`)
+
+`pgcrypto` (`pgp_sym_encrypt`/`pgp_sym_decrypt`) was considered for `test_results.metrics`, `test_scripts.script`, and `test_results.target_url`, but rejected for now:
+
+- **Breaks indexed lookups** — `test_scripts` is looked up by `UNIQUE(target_url, test_type)` and `test_results` is filtered/sorted by `target_url`, `status`, `created_at` for the trend chart and results list. Encrypted columns can't be indexed or compared with `=`/`ORDER BY` without decrypting every row.
+- **Breaks JSONB queries** — `metrics`, `steps`, and `analysis` are JSONB and read with `->`/`->>` operators throughout `results-service`, `analyzer.ts`, and the AI insight prompts. Encrypting the whole JSONB blob means every read path needs an encrypt/decrypt step, and partial-field access (e.g. `metrics->>'p95ResponseTime'`) becomes impossible without decrypting first.
+- **Key management** — `pgcrypto` needs the encryption key reachable by the app at query time, which (without an external KMS/HSM) usually means storing it in the same env-var surface as `DATABASE_URL` — protecting against the same threat model as disk encryption, but with more code and a performance cost on every row.
+
+Volume-level encryption covers the actual threat (a stolen disk, snapshot, or backup file) without any of the above tradeoffs. If a future requirement needs *field-level* encryption (e.g. a specific PII field that must stay encrypted even from DB admins), revisit `pgcrypto` for that single column only — not as a blanket policy.
+
+### Also encrypt
+
+- **Backups** — `pg_dump` output is plaintext; encrypt backup files at rest (`gpg -c backup.sql` or your cloud provider's encrypted snapshot/object-storage option)
+- **RabbitMQ persistence** (`rabbitmq_data` volume) — test payloads and generated scripts transit through queues and are persisted to disk (see Architecture Improvements → RabbitMQ persistence); covered by the same volume encryption
+- **`.env`** — contains `GEMINI_API_KEY`, `SESSION_SECRET`, `INTERNAL_API_KEY`; never committed, but also benefits from disk encryption at rest
 
 ---
 
