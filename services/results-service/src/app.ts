@@ -576,6 +576,45 @@ export const buildApp = async (
     return { entries: rows };
   });
 
+  // ── Right to erasure (GDPR) ───────────────────────────────────────────────
+  app.delete<{ Params: { id: string }; Body: { confirm?: boolean } }>('/teams/:id/data', async (request, reply) => {
+    if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+    if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+    if (request.body?.confirm !== true) return reply.code(400).send({ error: 'Must confirm: { "confirm": true }' });
+
+    const teamId = request.params.id;
+
+    const { rows: schedules } = await pool.query<{ id: string }>(
+      'SELECT id FROM schedules WHERE project_id = $1', [teamId]
+    );
+
+    await pool.query(
+      `DELETE FROM live_metrics WHERE test_id IN (SELECT test_id FROM test_results WHERE project_id = $1)`,
+      [teamId]
+    );
+    const { rowCount: testResultsDeleted } = await pool.query('DELETE FROM test_results WHERE project_id = $1', [teamId]);
+    const { rowCount: scriptsDeleted } = await pool.query('DELETE FROM test_scripts WHERE project_id = $1', [teamId]);
+    await pool.query('DELETE FROM schedules WHERE project_id = $1', [teamId]);
+    await pool.query('DELETE FROM test_presets WHERE project_id = $1', [teamId]);
+    await pool.query('DELETE FROM webhooks WHERE project_id = $1', [teamId]);
+    await pool.query('DELETE FROM log_sources WHERE project_id = $1', [teamId]);
+    await pool.query('DELETE FROM audit_log WHERE team_id = $1', [teamId]);
+
+    for (const s of schedules) removeSchedule(s.id);
+
+    await recordAudit(pool, { teamId, userId: request.user.id, action: 'erase_team_data', resourceType: 'team_data', resourceId: teamId });
+
+    return {
+      success: true,
+      deleted: {
+        testResults: testResultsDeleted ?? 0,
+        scripts: scriptsDeleted ?? 0,
+        schedules: schedules.length,
+      },
+    };
+  });
+
   // ── Organizations ─────────────────────────────────────────────────────────
   const getOrgRole = async (orgId: string, userId: string): Promise<OrgRole | null> => {
     const { rows } = await pool.query<{ role: OrgRole }>(

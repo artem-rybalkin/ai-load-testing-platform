@@ -465,6 +465,78 @@ describe('GET /teams/:id/audit-log', () => {
   });
 });
 
+// ─── DELETE /teams/:id/data (right to erasure) ─────────────────────────────────
+
+describe('DELETE /teams/:id/data', () => {
+  it('admin can erase all team data', async () => {
+    const admin = await registerUser('admin-erase1@example.com', 'erase-team1');
+    const adminCookie = sessionCookie(admin);
+    const teamId = admin.json().currentTeamId as string;
+
+    const testId = '00000000-0000-0000-0000-0000000e1000';
+    await pool.query(
+      `INSERT INTO test_results (test_id, project_id, type, target_url, status, metrics)
+       VALUES ($1, $2, 'backend', 'http://example.com', 'completed', $3)`,
+      [testId, teamId, JSON.stringify({ type: 'backend', requestsTotal: 1, requestsFailed: 0, avgResponseTime: 1, p50ResponseTime: 1, p95ResponseTime: 1, p99ResponseTime: 1, rps: 1 })]
+    );
+    await pool.query(
+      `INSERT INTO live_metrics (test_id, vus, rps, avg_response_time, error_rate) VALUES ($1, 0, 0, 0, 0)`,
+      [testId]
+    );
+    await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script, project_id) VALUES ('http://example.com', 'backend', 'k6 script', $1)`,
+      [teamId]
+    );
+
+    const res = await app.inject({ method: 'DELETE', url: `/teams/${teamId}/data`, payload: { confirm: true }, headers: { cookie: adminCookie } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.success).toBe(true);
+    expect(body.deleted).toMatchObject({ testResults: 1, scripts: 1 });
+
+    const { rows: results } = await pool.query('SELECT * FROM test_results WHERE project_id = $1', [teamId]);
+    expect(results).toHaveLength(0);
+    const { rows: live } = await pool.query('SELECT * FROM live_metrics WHERE test_id = $1', [testId]);
+    expect(live).toHaveLength(0);
+    const { rows: scripts } = await pool.query('SELECT * FROM test_scripts WHERE project_id = $1', [teamId]);
+    expect(scripts).toHaveLength(0);
+  });
+
+  it('returns 400 without confirm: true', async () => {
+    const admin = await registerUser('admin-erase2@example.com', 'erase-team2');
+    const adminCookie = sessionCookie(admin);
+    const teamId = admin.json().currentTeamId as string;
+
+    const res = await app.inject({ method: 'DELETE', url: `/teams/${teamId}/data`, payload: {}, headers: { cookie: adminCookie } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 403 for a non-admin member', async () => {
+    const admin = await registerUser('admin-erase3@example.com', 'erase-team3');
+    const teamId = admin.json().currentTeamId as string;
+
+    const memberReg = await registerUser('member-erase3@example.com', 'member-erase3-own-team');
+    const memberId = memberReg.json().id as string;
+    await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
+    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+
+    const res = await app.inject({ method: 'DELETE', url: `/teams/${teamId}/data`, payload: { confirm: true }, headers: { cookie: sessionCookie(memberReg) } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('records an erasure audit entry that survives the erase (logged after clearing)', async () => {
+    const admin = await registerUser('admin-erase4@example.com', 'erase-team4');
+    const adminCookie = sessionCookie(admin);
+    const teamId = admin.json().currentTeamId as string;
+
+    await app.inject({ method: 'DELETE', url: `/teams/${teamId}/data`, payload: { confirm: true }, headers: { cookie: adminCookie } });
+
+    const logRes = await app.inject({ method: 'GET', url: `/teams/${teamId}/audit-log`, headers: { cookie: adminCookie } });
+    const { entries } = logRes.json();
+    expect(entries).toMatchObject([{ action: 'erase_team_data', resourceType: 'team_data', resourceId: teamId }]);
+  });
+});
+
 // ─── POST /schedules — quota enforcement ───────────────────────────────────────
 
 describe('POST /schedules — quota enforcement', () => {

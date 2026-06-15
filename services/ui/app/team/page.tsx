@@ -6,7 +6,7 @@ import {
   getTeamMembers, addTeamMember, updateTeamMemberRole, removeTeamMember,
   getTeamQuota, updateTeamQuota,
   getTeamApiKeys, createTeamApiKey, revokeTeamApiKey,
-  getAuditLog,
+  getAuditLog, eraseTeamData,
   TeamMemberRow, TeamRole, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated, AuditLogEntry,
 } from '@/lib/api';
 
@@ -45,6 +45,11 @@ export default function TeamPage() {
 
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   const [auditError, setAuditError] = useState('');
+
+  const [eraseConfirming, setEraseConfirming] = useState(false);
+  const [erasing, setErasing] = useState(false);
+  const [eraseError, setEraseError] = useState('');
+  const [eraseResult, setEraseResult] = useState<string | null>(null);
 
   const load = async () => {
     if (!teamId || teamId === 'dev') return;
@@ -162,6 +167,22 @@ export default function TeamPage() {
       await load();
     } catch (err) {
       setApiKeyError(err instanceof Error ? err.message : 'Failed to revoke API key');
+    }
+  };
+
+  const handleEraseData = async () => {
+    if (!eraseConfirming) { setEraseConfirming(true); return; }
+    setErasing(true);
+    setEraseError('');
+    try {
+      const result = await eraseTeamData(teamId);
+      setEraseResult(`Deleted ${result.deleted.testResults} test result(s), ${result.deleted.scripts} script(s), ${result.deleted.schedules} schedule(s).`);
+      setEraseConfirming(false);
+      await load();
+    } catch (err) {
+      setEraseError(err instanceof Error ? err.message : 'Failed to erase team data');
+    } finally {
+      setErasing(false);
     }
   };
 
@@ -399,6 +420,31 @@ export default function TeamPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="bg-white border border-[#cf222e]/40 rounded-md overflow-hidden">
+          <div className="px-4 py-2 bg-[#fff0f0] border-b border-[#cf222e]/40">
+            <span className="text-[11px] font-semibold text-[#cf222e] uppercase tracking-wide">Danger Zone</span>
+          </div>
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-[13px] text-[#24292f] font-medium">Erase all team data</p>
+              <p className="text-[11px] text-[#8c959f]">
+                Permanently deletes all test results, live metrics, scripts, schedules, presets, webhooks, log sources, and audit log entries for this team. This cannot be undone.
+              </p>
+            </div>
+            <button
+              onClick={handleEraseData}
+              disabled={erasing}
+              className="px-4 py-1.5 bg-[#cf222e] hover:bg-[#a40e26] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors flex-shrink-0"
+            >
+              {erasing ? 'Erasing…' : eraseConfirming ? 'Click again to confirm' : 'Erase all data'}
+            </button>
+          </div>
+          {eraseError && <p className="px-4 pb-3 text-[#cf222e] text-[12px]">{eraseError}</p>}
+          {eraseResult && <p className="px-4 pb-3 text-[#1f883d] text-[12px]">{eraseResult}</p>}
         </div>
       )}
     </div>

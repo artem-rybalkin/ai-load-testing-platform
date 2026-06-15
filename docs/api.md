@@ -273,6 +273,27 @@ curl http://localhost:3004/teams/<id>/audit-log -b cookies.txt
 
 Entries are recorded for `GET /results/:testId/report.pdf` (`export_pdf`), `GET /results/:testId/report.csv` (`export_csv`), and `DELETE /scripts/:id` (`delete`).
 
+#### `DELETE /teams/:id/data`
+
+**Admin only.** Permanently erases all data for the team (right to erasure / GDPR). Requires `{ "confirm": true }` in the body, otherwise `400`.
+
+```bash
+curl -X DELETE http://localhost:3004/teams/<id>/data \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true}' \
+  -b cookies.txt
+```
+
+**Response `200`:**
+```json
+{
+  "success": true,
+  "deleted": { "testResults": 12, "scripts": 3, "schedules": 1 }
+}
+```
+
+Deletes `test_results` (and their `live_metrics` rows), `test_scripts`, `schedules` (unregistering any active cron jobs), `test_presets`, `webhooks`, `log_sources`, and `audit_log` for the team. A final `erase_team_data` audit entry is recorded afterward.
+
 ---
 
 ### Organizations

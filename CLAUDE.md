@@ -625,7 +625,10 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `POST   /teams/:id/api-keys` — `{ name }` → generates `crypto.randomBytes(24).toString('hex')`, stores `sha256(key)`; returns `{ id, name, key, createdAt }` — **the raw `key` is shown only once**
 - `GET    /teams/:id/api-keys` — list `[{ id, name, createdAt, lastUsedAt, revoked }]` (no key material)
 - `DELETE /teams/:id/api-keys/:keyId` — sets `revoked_at = NOW()`
-- `GET    /teams/:id/audit-log` — admin only; returns the most recent `audit_log` entries (default 100, max 500 via `?limit=`), joined with user email, most recent first
+
+**Audit Log & Data Erasure (RBAC — requires SESSION_SECRET, admin only)**
+- `GET    /teams/:id/audit-log` — returns the most recent `audit_log` entries (default 100, max 500 via `?limit=`), joined with user email, most recent first
+- `DELETE /teams/:id/data` — body `{ confirm: true }` (else `400`); permanently erases all team data (test_results, live_metrics, test_scripts, schedules, test_presets, webhooks, log_sources, audit_log); returns `{ success, deleted: { testResults, scripts, schedules } }`
 
 **Organizations (RBAC — requires SESSION_SECRET)**
 - `POST   /orgs` — `{ name }` → any authenticated user; creates org + `org_members` row with `role='owner'`. `409` if name taken
@@ -916,6 +919,11 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 - Called (and awaited) from `GET /results/:testId/report.pdf` (`export_pdf`), `GET /results/:testId/report.csv` (`export_csv`), and `DELETE /scripts/:id` (`delete`)
 - `GET /teams/:id/audit-log` (admin only) returns the most recent entries joined with `users.email`; surfaced as an "Audit Log" section on the Team page (admin view only)
 
+**Data Retention & Right to Erasure (GDPR)** (`results-service/src/cleanup.ts`, `app.ts`):
+- `TEST_RESULTS_RETENTION_DAYS` env var (default `0` = disabled) — when set > 0, `runStaleCleanup` deletes `test_results` rows (and their `live_metrics` rows, via `test_id`) older than N days on every 60s cleanup tick; returns `testResultsDeleted` count
+- `DELETE /teams/:id/data` (admin only, body `{ confirm: true }`, else `400`) permanently deletes all team-scoped data: `test_results` + associated `live_metrics`, `test_scripts`, `schedules` (with `removeSchedule()` cron unregistration), `test_presets`, `webhooks`, `log_sources`, and `audit_log`; records a final `erase_team_data`/`team_data` audit entry afterward; returns `{ success, deleted: { testResults, scripts, schedules } }`
+- "Danger Zone" section on the Team page (admin only) — two-click confirmation ("Erase all data" → "Click again to confirm") before calling `eraseTeamData()`
+
 **Rate Limiting** (`api-service/src/redis.ts`, `results-service/src/redis.ts` + `app.ts`/`index.ts`):
 - `redisClient` (ioredis) is created from `REDIS_URL` if set, otherwise `undefined` — `@fastify/rate-limit` falls back to its built-in in-memory store (used by most tests, which don't set `REDIS_URL`)
 - `@fastify/rate-limit` registered globally (`global: true`) in both services with `redis: redisClient`, `skipOnError: true` (fails open if Redis is unreachable — rate limiting never blocks the API outage-style)
@@ -995,6 +1003,8 @@ PUPPETEER_NAV_TIMEOUT_MS=60000    # page.goto() navigation timeout (default 60s;
 # Stale cleanup (results-service):
 STALE_RUNNING_MINUTES=15      # running tests older than this → failed
 STALE_PENDING_MINUTES=30      # pending tests older than this → failed
+LIVE_METRICS_RETENTION_DAYS=30      # live_metrics rows older than this are purged
+TEST_RESULTS_RETENTION_DAYS=0       # GDPR auto-purge of test_results (+ their live_metrics); 0 = disabled
 ```
 
 ## Common Commands
@@ -1057,7 +1067,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~920 tests across 48 test files (`npm test` reports ~918 tests; some intentionally skipped in non-Docker/full-suite contexts)
+**Total:** ~930 tests across 48 test files (`npm test` reports ~927 tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -1075,12 +1085,12 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export | 92 |
 | `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 43 |
 | `results-service/src/__tests__/orgs.test.ts` | POST /orgs, GET /orgs/:id, member role mgmt, last-owner protection, POST /orgs/:id/teams, cross-org isolation | 22 |
-| `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection, audit log | 31 |
+| `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection, audit log, data erasure | 35 |
 | `results-service/src/__tests__/quotas.test.ts` | `getTeamQuota`/`upsertTeamQuota` defaults+merge, `checkScheduleQuota`, `checkGeminiQuota`/`incrementGeminiUsage` rollover, `getTeamUsage` | 14 |
 | `results-service/src/__tests__/apiKeys.test.ts` | generate/list/revoke team API keys; auth middleware accepts valid key, rejects revoked/unknown | 9 |
 | `results-service/src/__tests__/session.test.ts` | `createSession`/`getSession`/`revokeSession`/`switchSessionTeam` (token hashing, expiry, revocation) | 11 |
 | `results-service/src/__tests__/consumer.test.ts` | `handleResult`, webhook firing, baseline ordering | 11 |
-| `results-service/src/__tests__/stale.test.ts` | `runStaleCleanup` | 10 |
+| `results-service/src/__tests__/stale.test.ts` | `runStaleCleanup` incl. test_results retention (GDPR) | 12 |
 | `api-service/src/__tests__/scripts.test.ts` | `findExistingScript` + description field + no auto-increment | 9 |
 | `api-service/src/__tests__/quotas.test.ts` | `getTeamQuota`/`checkTestQuota` (VUs/duration/concurrent limits, `teamId == null` bypass) | 9 |
 | `api-service/src/__tests__/session.test.ts` | `getApiSession` (projectId/role lookup, revoked/expired/unknown tokens) | 7 |
@@ -1094,7 +1104,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `ui/__tests__/AuthContext.test.tsx` | AuthProvider loading/user/setUser/switchTeam state, AuthGate redirect/render | 6 |
 | `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, INP/TBT SLO inputs | 14 |
 | `ui/__tests__/LoginPage.test.tsx` | sign-in mode + register mode forms, API calls, setUser+navigate, errors, disabled states | 11 |
-| `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke), Audit Log (admin only) | 19 |
+| `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke), Audit Log (admin only), Danger Zone data erasure | 22 |
 | `ui/__tests__/FlowBuilder.test.tsx` | request headers editor, recording lifecycle, HAR import, step reordering (↑/↓ + drag-and-drop) | 54 |
 | `ui/__tests__/OrgPage.test.tsx` | org member list, admin add/role-change/remove, teams-in-org list, "+ New team" form | 9 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |

@@ -14,6 +14,7 @@ const mockGetTeamApiKeys       = vi.hoisted(() => vi.fn());
 const mockCreateTeamApiKey     = vi.hoisted(() => vi.fn());
 const mockRevokeTeamApiKey     = vi.hoisted(() => vi.fn());
 const mockGetAuditLog          = vi.hoisted(() => vi.fn());
+const mockEraseTeamData        = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   getTeamMembers: mockGetTeamMembers,
@@ -26,6 +27,7 @@ vi.mock('@/lib/api', () => ({
   createTeamApiKey: mockCreateTeamApiKey,
   revokeTeamApiKey: mockRevokeTeamApiKey,
   getAuditLog: mockGetAuditLog,
+  eraseTeamData: mockEraseTeamData,
 }));
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
@@ -293,5 +295,43 @@ describe('TeamPage — Audit Log', () => {
     await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
     expect(screen.queryByText('Audit Log')).not.toBeInTheDocument();
     expect(mockGetAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe('TeamPage — Danger Zone (data erasure)', () => {
+  it('admin sees the Danger Zone and erases data after confirming twice', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    mockEraseTeamData.mockResolvedValue({ success: true, deleted: { testResults: 3, scripts: 1, schedules: 0 } });
+
+    render(<TeamPage />);
+    expect(await screen.findByText('Danger Zone')).toBeInTheDocument();
+
+    const button = screen.getByRole('button', { name: /erase all data/i });
+    fireEvent.click(button);
+    expect(await screen.findByRole('button', { name: /click again to confirm/i })).toBeInTheDocument();
+    expect(mockEraseTeamData).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /click again to confirm/i }));
+    await waitFor(() => expect(mockEraseTeamData).toHaveBeenCalledWith('t1'));
+    expect(await screen.findByText(/deleted 3 test result/i)).toBeInTheDocument();
+  });
+
+  it('shows an error if erasure fails', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    mockEraseTeamData.mockRejectedValue(new Error('boom'));
+
+    render(<TeamPage />);
+    const button = await screen.findByRole('button', { name: /erase all data/i });
+    fireEvent.click(button);
+    fireEvent.click(await screen.findByRole('button', { name: /click again to confirm/i }));
+
+    expect(await screen.findByText('boom')).toBeInTheDocument();
+  });
+
+  it('non-admin members do not see the Danger Zone', async () => {
+    mockUseAuth.mockReturnValue({ user: memberUser });
+    render(<TeamPage />);
+    await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
+    expect(screen.queryByText('Danger Zone')).not.toBeInTheDocument();
   });
 });

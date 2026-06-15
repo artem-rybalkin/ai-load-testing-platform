@@ -638,6 +638,24 @@ export const getAuditLog = (teamId: string): Promise<{ entries: AuditLogEntry[] 
     return r.json();
   });
 
+export interface EraseTeamDataResult {
+  success: boolean;
+  deleted: { testResults: number; scripts: number; schedules: number };
+}
+
+export const eraseTeamData = (teamId: string): Promise<EraseTeamDataResult> =>
+  f(`${RESULTS_URL}/teams/${teamId}/data`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: true }),
+  }).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+
 // ── Organizations ────────────────────────────────────────────────────────────
 
 export interface OrgMemberRow { userId: string; email: string; name: string | null; role: OrgRole }

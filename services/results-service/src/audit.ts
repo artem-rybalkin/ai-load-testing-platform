@@ -1,8 +1,8 @@
 import { Pool } from 'pg';
 import { log } from './logger';
 
-export type AuditAction = 'view' | 'export_pdf' | 'export_csv' | 'delete';
-export type AuditResourceType = 'test_result' | 'script';
+export type AuditAction = 'view' | 'export_pdf' | 'export_csv' | 'delete' | 'erase_team_data';
+export type AuditResourceType = 'test_result' | 'script' | 'team_data';
 
 export interface AuditEntry {
   teamId?: string | null;

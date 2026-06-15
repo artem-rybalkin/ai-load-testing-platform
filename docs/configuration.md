@@ -67,6 +67,8 @@ Running in results-service — cleans up tests that got stuck.
 |----------|---------|-------------|
 | `STALE_RUNNING_MINUTES` | `15` | Tests with `status = 'running'` older than this → marked `failed` |
 | `STALE_PENDING_MINUTES` | `30` | Tests with `status = 'pending'` older than this → marked `failed` |
+| `LIVE_METRICS_RETENTION_DAYS` | `30` | `live_metrics` rows older than this are purged |
+| `TEST_RESULTS_RETENTION_DAYS` | `0` (disabled) | GDPR auto-purge: `test_results` rows (+ their `live_metrics`) older than this are deleted |
 
 ---
 

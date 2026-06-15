@@ -126,6 +126,7 @@ describe('runStaleCleanup — non-target statuses', () => {
     expect(result.runningFixed).toBe(0);
     expect(result.pendingFixed).toBe(0);
     expect(result.liveMetricsDeleted).toBe(0);
+    expect(result.testResultsDeleted).toBe(0);
   });
 
   it('returns zeroes when DB is empty', async () => {
@@ -133,6 +134,7 @@ describe('runStaleCleanup — non-target statuses', () => {
     expect(result.runningFixed).toBe(0);
     expect(result.pendingFixed).toBe(0);
     expect(result.liveMetricsDeleted).toBe(0);
+    expect(result.testResultsDeleted).toBe(0);
   });
 });
 
@@ -193,6 +195,44 @@ describe('runStaleCleanup — live_metrics retention', () => {
     expect(result.liveMetricsDeleted).toBe(1);
     const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM live_metrics WHERE test_id = $1', [testId]);
     expect(rows[0].cnt).toBe(1); // only the recent row remains
+  });
+});
+
+describe('runStaleCleanup — test_results retention (GDPR)', () => {
+  it('does not delete old test_results when TEST_RESULTS_RETENTION_DAYS is unset (default)', async () => {
+    const id = await insertResult('completed', 0, 'created_at');
+    await pool.query(`UPDATE test_results SET created_at = NOW() - INTERVAL '400 days' WHERE test_id = $1`, [id]);
+
+    const result = await runStaleCleanup(pool, 15, 30);
+
+    expect(result.testResultsDeleted).toBe(0);
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM test_results WHERE test_id = $1', [id]);
+    expect(rows[0].cnt).toBe(1);
+  });
+
+  it('purges test_results (and associated live_metrics) older than TEST_RESULTS_RETENTION_DAYS when set', async () => {
+    vi.stubEnv('TEST_RESULTS_RETENTION_DAYS', '90');
+    vi.resetModules();
+    const { runStaleCleanup: runStaleCleanupWithRetention } = await import('../cleanup');
+
+    const oldId = await insertResult('completed', 0, 'created_at');
+    await pool.query(`UPDATE test_results SET created_at = NOW() - INTERVAL '100 days' WHERE test_id = $1`, [oldId]);
+    await pool.query(
+      `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate) VALUES ($1, NOW(), 0, 0, 0, 0)`,
+      [oldId]
+    );
+    const recentId = await insertResult('completed', 0, 'created_at');
+
+    const result = await runStaleCleanupWithRetention(pool, 15, 30);
+
+    expect(result.testResultsDeleted).toBe(1);
+    const { rows: remaining } = await pool.query('SELECT test_id FROM test_results');
+    expect(remaining.map((r: { test_id: string }) => r.test_id)).toEqual([recentId]);
+    const { rows: liveRows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM live_metrics WHERE test_id = $1', [oldId]);
+    expect(liveRows[0].cnt).toBe(0);
+
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
 });
 
