@@ -415,6 +415,17 @@ describe('Cross-team isolation', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it('GET /results/:testId/report.csv returns 404 for a different team', async () => {
+    const res = await app.inject({ method: 'GET', url: `/results/${testIdA}/report.csv`, headers: { cookie: cookieB } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('GET /results/:testId/report.csv returns 200 for the owning team', async () => {
+    const res = await app.inject({ method: 'GET', url: `/results/${testIdA}/report.csv`, headers: { cookie: cookieA } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/csv');
+  });
+
   it('GET /results/:testId/live returns no points for a different team', async () => {
     const res = await app.inject({ method: 'GET', url: `/results/${testIdA}/live`, headers: { cookie: cookieB } });
     expect(res.statusCode).toBe(200);

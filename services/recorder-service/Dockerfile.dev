@@ -1,7 +1,8 @@
 FROM node:20-alpine
+# `novnc` pulls in the `websockify` apk package (and python3) as a transitive
+# dependency — no separate python3/py3-pip/pip install needed.
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont \
-    xvfb x11vnc novnc python3 py3-pip \
- && pip3 install --break-system-packages websockify
+    xvfb x11vnc novnc
 # Pre-create X11 socket directory with sticky-bit (required when running as non-root)
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true

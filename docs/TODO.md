@@ -69,8 +69,8 @@ Improvements, suggestions, and large future work items.
 
 ## Low Priority (Polish)
 
-- [ ] **recorder-service image size** — Reduce ~60 MB from xvfb + x11vnc + novnc APK packages
-- [ ] **Gemini rate limit UI** — Show remaining daily quota in SystemHealth strip
+- [x] **recorder-service image size** — Removed redundant `python3 py3-pip` + `pip3 install websockify`: the `novnc` apk package already pulls in `websockify` (and python3) as a transitive dependency, so the explicit pip install was duplicating ~15-20MB of py3-pip/setuptools/packaging. `Dockerfile`/`Dockerfile.dev` simplified to a single `apk add` of `chromium nss freetype harfbuzz ca-certificates ttf-freefont xvfb x11vnc novnc`; verified `docker compose build recorder-service` succeeds and entrypoint's `python3 -m websockify` still works via the apk-provided package
+- [x] **Gemini rate limit UI** — `WorkerHealth.tsx` now polls `GET /teams/:id/quotas` every 60s (mirrors `AIStatus.tsx` polling) and shows a "Gemini X/Y today" chip in the persistent worker strip; turns red when usage hits the daily cap
 - [ ] **Test result export** — CSV export of metrics in addition to PDF
 - [ ] **Custom k6 threshold validation** — Preview threshold violations before running test
 - [ ] **Flow step ordering drag-and-drop** — Replace up/down buttons in FlowBuilder

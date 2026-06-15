@@ -7,10 +7,15 @@ afterEach(() => cleanup());
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockGetSystemHealth = vi.hoisted(() => vi.fn());
+const mockGetTeamQuota = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   getSystemHealth: mockGetSystemHealth,
+  getTeamQuota: mockGetTeamQuota,
 }));
+
+const mockUseAuth = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/AuthContext', () => ({ useAuth: mockUseAuth }));
 
 import WorkerHealth from '../app/components/WorkerHealth';
 import { HealthProvider } from '../lib/HealthContext';
@@ -41,6 +46,7 @@ const noWorkers = makeHealth([{ name: 'api-service', status: 'ok', checks: {} }]
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetSystemHealth.mockResolvedValue(noWorkers);
+  mockUseAuth.mockReturnValue({ user: null });
 });
 
 // ─── Hidden states ────────────────────────────────────────────────────────────
@@ -140,6 +146,53 @@ describe('WorkerHealth — status states', () => {
     renderWithHealth(<WorkerHealth />);
     await waitFor(() => screen.getByText(/offline/i));
     expect(screen.queryByText(/mem/i)).not.toBeInTheDocument();
+  });
+});
+
+// ─── Gemini quota chip ────────────────────────────────────────────────────────
+
+describe('WorkerHealth — Gemini quota chip', () => {
+  const userWithTeam = {
+    id: 'u1', email: 'a@example.com', name: 'A',
+    teams: [{ id: 't1', name: 'team-alpha', role: 'admin' }],
+    currentTeamId: 't1', role: 'admin', orgs: [],
+  };
+
+  it('does not render chip when user has no current team', async () => {
+    mockUseAuth.mockReturnValue({ user: null });
+    renderWithHealth(<WorkerHealth />);
+    await act(async () => {});
+    expect(screen.queryByText(/gemini/i)).not.toBeInTheDocument();
+    expect(mockGetTeamQuota).not.toHaveBeenCalled();
+  });
+
+  it('shows usage chip when team quota loads', async () => {
+    mockUseAuth.mockReturnValue({ user: userWithTeam });
+    mockGetTeamQuota.mockResolvedValue({
+      quota: { maxConcurrentTests: 5, maxVusPerTest: 1000, maxTestDurationSeconds: 3600, maxScheduledTests: 10, maxGeminiCallsPerDay: 100 },
+      usage: { concurrentTests: 0, scheduledTests: 0, geminiCallsToday: 42 },
+    });
+    renderWithHealth(<WorkerHealth />);
+    await waitFor(() => expect(screen.getByText(/42\/100 today/)).toBeInTheDocument());
+    expect(mockGetTeamQuota).toHaveBeenCalledWith('t1');
+  });
+
+  it('highlights chip in red when usage hits the daily cap', async () => {
+    mockUseAuth.mockReturnValue({ user: userWithTeam });
+    mockGetTeamQuota.mockResolvedValue({
+      quota: { maxConcurrentTests: 5, maxVusPerTest: 1000, maxTestDurationSeconds: 3600, maxScheduledTests: 10, maxGeminiCallsPerDay: 100 },
+      usage: { concurrentTests: 0, scheduledTests: 0, geminiCallsToday: 100 },
+    });
+    renderWithHealth(<WorkerHealth />);
+    const chip = await waitFor(() => screen.getByText(/100\/100 today/));
+    expect(chip.className).toContain('text-[#cf222e]');
+  });
+
+  it('does not render anything when no team and no workers', async () => {
+    mockUseAuth.mockReturnValue({ user: null });
+    const { container } = renderWithHealth(<WorkerHealth />);
+    await act(async () => {});
+    expect(container.firstChild).toBeNull();
   });
 });
 

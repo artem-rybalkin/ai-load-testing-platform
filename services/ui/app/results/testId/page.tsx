@@ -312,6 +312,14 @@ export default function ResultPage() {
               >
                 ↓ PDF
               </a>
+              <a
+                href={`${import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.csv`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-2.5 py-1 rounded-md text-[12px] font-medium border border-[#d0d7de] text-[#24292f] hover:bg-[#eaeef2] transition-colors"
+              >
+                ↓ CSV
+              </a>
             </>
           )}
         </div>

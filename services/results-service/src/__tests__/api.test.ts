@@ -592,6 +592,43 @@ describe('GET /results/:testId/report.pdf', () => {
   });
 });
 
+// ─── GET /results/:testId/report.csv ─────────────────────────────────────────
+
+describe('GET /results/:testId/report.csv', () => {
+  it('returns a CSV with metric rows for a completed backend test', async () => {
+    const testId = await insertResult({ status: 'completed' });
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/report.csv` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/csv');
+    expect(res.headers['content-disposition']).toContain(`report-${testId.slice(0, 8)}.csv`);
+    const body = res.body;
+    expect(body).toContain('metric,value');
+    expect(body).toContain(`testId,${testId}`);
+    expect(body).toContain('requestsTotal,100');
+    expect(body).toContain('p95ResponseTime,400');
+  });
+
+  it('includes a step metrics section for flow tests', async () => {
+    const testId = await insertResult({
+      status: 'completed',
+      type: 'flow',
+      metrics: {
+        type: 'backend', requestsTotal: 50, requestsFailed: 0, avgResponseTime: 100, p50ResponseTime: 90, p95ResponseTime: 150, p99ResponseTime: 180, rps: 5,
+        stepMetrics: [{ name: 'Step 1: login', avgResponseTime: 120, p95ResponseTime: 160, requestsTotal: 25, requestsFailed: 0 }],
+      },
+    });
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/report.csv` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('step,avgResponseTime,p95ResponseTime,requestsTotal,requestsFailed');
+    expect(res.body).toContain('Step 1: login,120,160,25,0');
+  });
+
+  it('returns 404 for unknown test', async () => {
+    const res = await app.inject({ method: 'GET', url: '/results/00000000-0000-0000-0000-000000000099/report.csv' });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
 // ─── GET /health (t13) ────────────────────────────────────────────────────────
 
 describe('GET /health', () => {

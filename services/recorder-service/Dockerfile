@@ -1,6 +1,9 @@
 FROM node:20-alpine
 
 # ── System deps: Chromium + Xvfb virtual display + noVNC browser viewer ───────
+# `novnc` pulls in the `websockify` apk package (and python3) as a transitive
+# dependency — no separate python3/py3-pip/pip install needed (saves ~15-20MB
+# of py3-pip/setuptools/packaging that pip would otherwise require).
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -10,10 +13,7 @@ RUN apk add --no-cache \
     ttf-freefont \
     xvfb \
     x11vnc \
-    novnc \
-    python3 \
-    py3-pip \
- && pip3 install --break-system-packages websockify
+    novnc
 
 # Pre-create the X11 Unix socket directory with correct sticky-bit permissions
 # (required because Xvfb runs as non-root and cannot create /tmp/.X11-unix itself)

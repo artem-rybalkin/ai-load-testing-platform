@@ -2001,5 +2001,69 @@ Return only the summary text, no JSON, no markdown.`
     }
   );
 
+  // ── CSV export ───────────────────────────────────────────────────────────
+  app.get<{ Params: { testId: string } }>(
+    '/results/:testId/report.csv',
+    async (request, reply) => {
+      const { testId } = request.params;
+      const projectId = request.projectId ?? null;
+      const { rows } = await pool.query(
+        `SELECT * FROM test_results WHERE test_id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+        [testId, projectId]
+      );
+      if (rows.length === 0) return reply.code(404).send({ error: 'Result not found' });
+
+      const result = rows[0];
+      const csvEscape = (v: unknown): string => {
+        const s = String(v ?? '');
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const lines: string[] = ['metric,value'];
+      const add = (k: string, v: unknown) => lines.push(`${csvEscape(k)},${csvEscape(v)}`);
+
+      add('testId', result.test_id);
+      add('url', result.target_url);
+      add('type', result.type);
+      add('status', result.status);
+      add('perfStatus', result.perf_status ?? '');
+      add('startedAt', result.started_at ? new Date(result.started_at).toISOString() : '');
+      add('completedAt', result.completed_at ? new Date(result.completed_at).toISOString() : '');
+
+      const m = result.metrics;
+      if (m?.type === 'backend') {
+        add('requestsTotal', m.requestsTotal);
+        add('requestsFailed', m.requestsFailed);
+        add('rps', m.rps);
+        add('avgResponseTime', m.avgResponseTime);
+        add('p50ResponseTime', m.p50ResponseTime);
+        add('p95ResponseTime', m.p95ResponseTime);
+        add('p99ResponseTime', m.p99ResponseTime);
+      } else if (m?.type === 'client') {
+        add('lcp', m.lcp);
+        add('fcp', m.fcp);
+        add('ttfb', m.ttfb);
+        add('fid', m.fid);
+        add('cls', m.cls);
+        if (m.inp != null) add('inp', m.inp);
+        if (m.tbt != null) add('tbt', m.tbt);
+        if (m.tti != null) add('tti', m.tti);
+      }
+
+      if (m?.stepMetrics?.length) {
+        lines.push('');
+        lines.push('step,avgResponseTime,p95ResponseTime,requestsTotal,requestsFailed');
+        for (const s of m.stepMetrics) {
+          lines.push([s.name, s.avgResponseTime, s.p95ResponseTime, s.requestsTotal, s.requestsFailed].map(csvEscape).join(','));
+        }
+      }
+
+      const csv = lines.join('\n') + '\n';
+      return reply
+        .header('Content-Type', 'text/csv')
+        .header('Content-Disposition', `attachment; filename="report-${testId.slice(0, 8)}.csv"`)
+        .send(csv);
+    }
+  );
+
   return app;
 };

@@ -1,7 +1,9 @@
 'use client';
 
-import { ServiceHealth } from '@/lib/api';
+import { useEffect, useState } from 'react';
+import { ServiceHealth, getTeamQuota } from '@/lib/api';
 import { useHealth } from '@/lib/HealthContext';
+import { useAuth } from '@/lib/AuthContext';
 
 const WORKER_NAMES: Record<string, string> = {
   'worker-backend': '⚡ k6',
@@ -26,9 +28,27 @@ const MiniBar = ({ value, max = 100, label }: { value: number; max?: number; lab
 
 export default function WorkerHealth() {
   const { services } = useHealth();
+  const { user } = useAuth();
   const workers = services.filter(s => WORKER_NAMES[s.name] && s.metrics);
 
-  if (workers.length === 0) return null;
+  const teamId = user?.currentTeamId;
+  const [geminiUsage, setGeminiUsage] = useState<{ used: number; max: number } | null>(null);
+
+  useEffect(() => {
+    if (!teamId) { setGeminiUsage(null); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { quota, usage } = await getTeamQuota(teamId);
+        if (!cancelled) setGeminiUsage({ used: usage.geminiCallsToday, max: quota.maxGeminiCallsPerDay });
+      } catch { /* non-fatal */ }
+    };
+    load();
+    const interval = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [teamId]);
+
+  if (workers.length === 0 && !geminiUsage) return null;
 
   return (
     <div className="border-b border-[#eaeef2] bg-[#f6f7f8] px-4 py-1.5">
@@ -62,6 +82,14 @@ export default function WorkerHealth() {
             </div>
           );
         })}
+        {geminiUsage && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-mono font-medium text-[#24292f]">Gemini</span>
+            <span className={`text-[10px] font-mono ${geminiUsage.used >= geminiUsage.max ? 'text-[#cf222e] font-semibold' : 'text-[#57606a]'}`}>
+              {geminiUsage.used}/{geminiUsage.max} today
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
