@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { findExistingScript, stepsToKey, incrementUsedCount } from '../scripts';
 import type { FlowStep } from '@alt/shared';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 
 const createSchema = async (p: Pool): Promise<void> => {
   await p.query(`
@@ -41,14 +41,12 @@ const insertScript = async (
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
-});
+}, 60_000);
 
 afterAll(async () => {
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {

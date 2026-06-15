@@ -75,7 +75,7 @@ const callAnalyserService = async (
     const res = await fetch(`${ANALYSER_URL}/analyse`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testId, targetUrl, type, metrics, previousMetrics, thresholds: thresholds ?? null, externalMetrics }),
+      body: JSON.stringify({ testId, targetUrl, type, metrics, previousMetrics, thresholds: thresholds ?? null, externalMetrics, teamId: projectId }),
       signal: AbortSignal.timeout(12000),
     });
     if (!res.ok) return null;

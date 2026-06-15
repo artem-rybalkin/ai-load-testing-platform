@@ -1,9 +1,44 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { BackendMetrics, ClientMetrics, AiInsights, MetricDiff, StepMetrics } from '@alt/shared';
+import {
+  BackendMetrics, ClientMetrics, AiInsights, MetricDiff, StepMetrics,
+  AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, isProviderConfigured,
+} from '@alt/shared';
 import { PerfStatus } from './analyzer';
 import { log } from './logger';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+const PROVIDER_CACHE_MS = 30000;
+
+const providerCache = new Map<string, { setting: AiProviderSetting; cachedAt: number }>();
+
+/** Fetches the configured AI provider + fallback chain (team override or global default) from results-service, cached for 30s per team. */
+const getProviderSetting = async (teamId?: string | null): Promise<AiProviderSetting> => {
+  const cacheKey = teamId ?? '__global__';
+  const cached = providerCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < PROVIDER_CACHE_MS) return cached.setting;
+  try {
+    const url = teamId
+      ? `${RESULTS_URL}/system/ai-provider?teamId=${encodeURIComponent(teamId)}`
+      : `${RESULTS_URL}/system/ai-provider`;
+    const res = await fetch(url, {
+      headers: INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {},
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const data = await res.json() as AiProviderSetting;
+      const setting = { provider: data.provider, fallbacks: data.fallbacks };
+      providerCache.set(cacheKey, { setting, cachedAt: Date.now() });
+      return setting;
+    }
+  } catch {
+    // results-service unreachable — keep using cached/default setting
+  }
+  return cached?.setting ?? DEFAULT_AI_PROVIDER_SETTING;
+};
+
+/** True if any provider in the primary+fallback chain has an API key configured. */
+const isAnyProviderConfigured = (setting: AiProviderSetting): boolean =>
+  [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
 
 interface ExternalMetricSource {
   sourceName: string;
@@ -21,6 +56,7 @@ interface InsightsContext {
   thresholdViolations: string[];
   diffs: MetricDiff[];
   externalMetrics?: ExternalMetricSource[];
+  teamId?: string | null;
 }
 
 /** Normalised, size-capped payload used to build the Gemini prompt.
@@ -209,22 +245,20 @@ export interface AiInsightsResult {
 }
 
 export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsightsResult> => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    log.warn('GEMINI_API_KEY not set — skipping AI insights');
+  const setting = await getProviderSetting(ctx.teamId);
+  if (!isAnyProviderConfigured(setting)) {
+    log.warn('No AI provider configured — skipping AI insights');
     return { insights: null, rateLimited: false };
   }
 
   const payload = buildPayload(ctx);
   const prompt = buildPrompt(payload, ctx.externalMetrics);
-  const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const result = await model.generateContent(prompt);
-      const text = result.response.text().trim();
+      const text = (await generateAIText(prompt, setting)).trim();
 
-      // Strip markdown fences if Gemini wraps the output
+      // Strip markdown fences if the model wraps the output
       const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
       const parsed = JSON.parse(cleaned) as AiInsights;
 
@@ -247,7 +281,7 @@ export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsigh
       const status = (err as { status?: number }).status;
 
       if (status === 429 || msg.includes('429') || msg.includes('quota')) {
-        log.warn({ attempt }, 'Gemini rate limited — skipping AI insights');
+        log.warn({ attempt }, 'AI provider rate limited — skipping AI insights');
         return { insights: null, rateLimited: true };
       }
 

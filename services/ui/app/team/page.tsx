@@ -2,15 +2,23 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
+import { AI_PROVIDER_NAMES } from '@alt/shared';
 import {
   getTeamMembers, addTeamMember, updateTeamMemberRole, removeTeamMember,
   getTeamQuota, updateTeamQuota,
   getTeamApiKeys, createTeamApiKey, revokeTeamApiKey,
   getAuditLog, eraseTeamData,
-  TeamMemberRow, TeamRole, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated, AuditLogEntry,
+  getAiProvider, setTeamAiProvider, clearTeamAiProvider,
+  TeamMemberRow, TeamRole, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated, AuditLogEntry, AiProviderConfig, AiProviderName,
 } from '@/lib/api';
 
 const ROLES: TeamRole[] = ['admin', 'member', 'viewer'];
+
+const PROVIDER_LABELS: Record<AiProviderName, string> = {
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  anthropic: 'Claude (Anthropic)',
+};
 
 const QUOTA_FIELDS: { key: keyof TeamQuota; label: string; usageKey?: keyof TeamUsage }[] = [
   { key: 'maxConcurrentTests', label: 'Concurrent Tests', usageKey: 'concurrentTests' },
@@ -42,6 +50,11 @@ export default function TeamPage() {
   const [apiKeyError, setApiKeyError] = useState('');
   const [creatingKey, setCreatingKey] = useState(false);
   const [newKey, setNewKey] = useState<TeamApiKeyCreated | null>(null);
+
+  const [aiProvider, setAiProviderState] = useState<AiProviderConfig | null>(null);
+  const [aiProviderDraft, setAiProviderDraft] = useState<{ provider: AiProviderName; fallbacks: AiProviderName[] }>({ provider: 'gemini', fallbacks: [] });
+  const [aiProviderError, setAiProviderError] = useState('');
+  const [savingAiProvider, setSavingAiProvider] = useState(false);
 
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   const [auditError, setAuditError] = useState('');
@@ -77,6 +90,13 @@ export default function TeamPage() {
         setAuditLog(entries);
       } catch {
         setAuditError('Failed to load audit log');
+      }
+      try {
+        const cfg = await getAiProvider(teamId);
+        setAiProviderState(cfg);
+        setAiProviderDraft({ provider: cfg.provider, fallbacks: cfg.fallbacks });
+      } catch {
+        setAiProviderError('Failed to load AI provider settings');
       }
     }
   };
@@ -168,6 +188,44 @@ export default function TeamPage() {
     } catch (err) {
       setApiKeyError(err instanceof Error ? err.message : 'Failed to revoke API key');
     }
+  };
+
+  const handleSaveAiProvider = async () => {
+    if (!teamId) return;
+    setSavingAiProvider(true);
+    setAiProviderError('');
+    try {
+      const result = await setTeamAiProvider(teamId, aiProviderDraft.provider, aiProviderDraft.fallbacks);
+      setAiProviderDraft(result);
+      setAiProviderState(prev => prev ? { ...prev, ...result } : prev);
+    } catch (err) {
+      setAiProviderError(err instanceof Error ? err.message : 'Failed to save AI provider');
+    } finally {
+      setSavingAiProvider(false);
+    }
+  };
+
+  const handleRevertAiProvider = async () => {
+    if (!teamId) return;
+    setSavingAiProvider(true);
+    setAiProviderError('');
+    try {
+      await clearTeamAiProvider(teamId);
+      const cfg = await getAiProvider(teamId);
+      setAiProviderState(cfg);
+      setAiProviderDraft({ provider: cfg.provider, fallbacks: cfg.fallbacks });
+    } catch (err) {
+      setAiProviderError(err instanceof Error ? err.message : 'Failed to revert AI provider');
+    } finally {
+      setSavingAiProvider(false);
+    }
+  };
+
+  const toggleAiFallback = (p: AiProviderName) => {
+    setAiProviderDraft(d => ({
+      ...d,
+      fallbacks: d.fallbacks.includes(p) ? d.fallbacks.filter(f => f !== p) : [...d.fallbacks, p],
+    }));
   };
 
   const handleEraseData = async () => {
@@ -390,6 +448,81 @@ export default function TeamPage() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
+          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de] flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">AI Provider</span>
+            {aiProvider && (
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${aiProvider.isOverride ? 'bg-[#ddf4ff] text-[#0969da]' : 'bg-[#f6f8fa] text-[#57606a] border border-[#d0d7de]'}`}>
+                {aiProvider.isOverride ? 'Custom for this team' : 'Using platform default'}
+              </span>
+            )}
+          </div>
+          {!aiProvider ? (
+            <div className="p-8 text-center text-[13px] text-[#57606a]">
+              {aiProviderError || 'Loading…'}
+            </div>
+          ) : (
+            <div className="p-4 space-y-3">
+              <p className="text-[11px] text-[#8c959f]">
+                Choose which AI provider generates scripts and insights for this team. Fallbacks are tried in order if the primary provider is rate-limited or unreachable. Leave unset to use the platform default.
+              </p>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-[12px] text-[#24292f]">Primary provider</span>
+                <select
+                  value={aiProviderDraft.provider}
+                  onChange={e => {
+                    const provider = e.target.value as AiProviderName;
+                    setAiProviderDraft(d => ({ provider, fallbacks: d.fallbacks.filter(f => f !== provider) }));
+                  }}
+                  className="border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+                >
+                  {AI_PROVIDER_NAMES.map(p => (
+                    <option key={p} value={p}>
+                      {PROVIDER_LABELS[p]}{!aiProvider.available[p] ? ' (not configured)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <span className="text-[12px] text-[#24292f]">Fallback order</span>
+                <div className="flex flex-col gap-1 mt-1">
+                  {AI_PROVIDER_NAMES.filter(p => p !== aiProviderDraft.provider).map(p => (
+                    <label key={p} className="flex items-center gap-2 text-[12px] text-[#24292f]">
+                      <input
+                        type="checkbox"
+                        checked={aiProviderDraft.fallbacks.includes(p)}
+                        onChange={() => toggleAiFallback(p)}
+                      />
+                      {PROVIDER_LABELS[p]}{!aiProvider.available[p] ? ' (not configured)' : ''}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-1">
+                {aiProviderError && <p className="text-[#cf222e] text-[12px] mr-auto">{aiProviderError}</p>}
+                {aiProvider.isOverride && (
+                  <button
+                    onClick={handleRevertAiProvider}
+                    disabled={savingAiProvider}
+                    className="px-4 py-1.5 border border-[#d0d7de] hover:bg-[#f6f8fa] text-[#24292f] rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Revert to platform default
+                  </button>
+                )}
+                <button
+                  onClick={handleSaveAiProvider}
+                  disabled={savingAiProvider}
+                  className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+                >
+                  {savingAiProvider ? 'Saving…' : 'Save'}
+                </button>
+              </div>
             </div>
           )}
         </div>

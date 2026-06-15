@@ -1,22 +1,23 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { createSchema } from '../db';
 
-let container: StartedPostgreSqlContainer;
+let dbUri: string;
+let dropDb: () => Promise<void>;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
   // The postgres docker image restarts once after initdb; createSchema's
   // queryWithRetry absorbs that transient restart so subsequent direct
   // pool.query calls in this file don't hit ECONNRESET.
-  const warmupPool = new Pool({ connectionString: container.getConnectionUri() });
+  const { pool: warmupPool, uri, drop } = await createTestDatabase();
+  dbUri = uri;
+  dropDb = drop;
   await createSchema(warmupPool);
-  await warmupPool.end();
-});
+}, 60_000);
 
 afterAll(async () => {
-  await container.stop();
+  await dropDb();
 });
 
 /** Retry a query a few times to absorb transient connection resets on a fresh Pool. */
@@ -47,7 +48,7 @@ describe('db — readPool fallback', () => {
   });
 
   it('falls back to the primary pool when READ_DATABASE_URL is unset', async () => {
-    process.env.DATABASE_URL = container.getConnectionUri();
+    process.env.DATABASE_URL = dbUri;
     delete process.env.READ_DATABASE_URL;
 
     const { pool, readPool } = await import('../db');
@@ -63,8 +64,8 @@ describe('db — readPool fallback', () => {
   });
 
   it('uses a distinct pool instance pointed at READ_DATABASE_URL when set', async () => {
-    process.env.DATABASE_URL = container.getConnectionUri();
-    process.env.READ_DATABASE_URL = container.getConnectionUri();
+    process.env.DATABASE_URL = dbUri;
+    process.env.READ_DATABASE_URL = dbUri;
 
     const { pool, readPool } = await import('../db');
 

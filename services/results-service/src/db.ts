@@ -295,6 +295,37 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`CREATE INDEX IF NOT EXISTS audit_log_team_id_idx ON audit_log(team_id, created_at DESC)`);
     },
   },
+  {
+    version: 10,
+    name: 'app_settings',
+    up: async (p) => {
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS app_settings (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      `);
+      await p.query(
+        `INSERT INTO app_settings (key, value) VALUES ('ai_provider', $1) ON CONFLICT (key) DO NOTHING`,
+        [JSON.stringify({ provider: 'gemini', fallbacks: [] })]
+      );
+    },
+  },
+  {
+    version: 11,
+    name: 'team_ai_providers',
+    up: async (p) => {
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS team_ai_providers (
+          team_id    UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          provider   VARCHAR(20) NOT NULL,
+          fallbacks  TEXT[] NOT NULL DEFAULT '{}',
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────

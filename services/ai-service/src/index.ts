@@ -151,7 +151,7 @@ const startConsumer = async (): Promise<void> => {
         } else {
           // Skip Gemini comparison if descriptions are identical (saves quota)
           const same = test.description.trim().toLowerCase() === test.cachedScriptDescription.trim().toLowerCase();
-          const verdict = same ? 'REUSE' : await compareDescriptions(test.description, test.cachedScriptDescription);
+          const verdict = same ? 'REUSE' : await compareDescriptions(test.description, test.cachedScriptDescription, test.projectId);
           log.info({ testId: test.id, verdict }, 'Description comparison result');
           if (verdict === 'REUSE') {
             const reused: EnrichedTestRequest = { ...test, generatedScript: test.cachedScript, reusedScript: true };

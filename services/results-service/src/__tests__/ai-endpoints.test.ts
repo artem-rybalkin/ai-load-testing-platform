@@ -1,28 +1,29 @@
 /**
  * Integration tests for results-service AI endpoints.
  *
- * All endpoints that call Gemini use `await import('@google/generative-ai')`
- * inside the route handler. vi.mock() intercepts the dynamic import.
+ * All endpoints that call Gemini go through `@alt/shared`'s `generateAIText()`,
+ * which dynamically imports `@google/generative-ai` from outside this test
+ * file's module graph (so vi.mock('@google/generative-ai', ...) can't intercept
+ * it). Instead, mock `generateAIText` itself.
  * Endpoints that need DB history use a real Testcontainers PostgreSQL instance.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../app';
 import { createSchema } from '../db';
 
-// ── Gemini mock ───────────────────────────────────────────────────────────────
+// ── AI provider mock ─────────────────────────────────────────────────────────
 // vi.mock is hoisted before variable declarations, so the fn must be created
-// with vi.hoisted() and the class syntax used for `new GoogleGenerativeAI(...)`.
+// with vi.hoisted().
 
-const mockGenerateContent = vi.hoisted(() => vi.fn());
+const mockGenerateAIText = vi.hoisted(() => vi.fn());
 
-vi.mock('@google/generative-ai', () => ({
-  GoogleGenerativeAI: class {
-    getGenerativeModel() { return { generateContent: mockGenerateContent }; }
-  },
-}));
+vi.mock('@alt/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alt/shared')>();
+  return { ...actual, generateAIText: mockGenerateAIText };
+});
 
 vi.mock('../scheduler', () => ({
   reloadSchedule: vi.fn(), removeSchedule: vi.fn(), startScheduler: vi.fn().mockResolvedValue(undefined),
@@ -34,17 +35,15 @@ vi.mock('../consumer', async (orig) => {
 
 // ── Infrastructure ────────────────────────────────────────────────────────────
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let app: FastifyInstance;
 
-const geminiResponse = (text: string) => ({ response: { text: () => text } });
-const jsonResponse = (obj: unknown) => geminiResponse(JSON.stringify(obj));
+const jsonResponse = (obj: unknown) => JSON.stringify(obj);
 
 beforeAll(async () => {
   process.env.GEMINI_API_KEY = 'test-key';
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
   app = await buildApp(pool);
 });
@@ -52,12 +51,11 @@ beforeAll(async () => {
 afterAll(async () => {
   delete process.env.GEMINI_API_KEY;
   await app.close();
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {
-  mockGenerateContent.mockReset();
+  mockGenerateAIText.mockReset();
   await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
 });
 
@@ -77,7 +75,7 @@ const insertCompletedResult = async (p95 = 400, avg = 200, rps = 50) => {
 
 describe('POST /ai/cron', () => {
   it('returns cron expression and preview from Gemini', async () => {
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ cron: '0 9 * * 1-5', preview: 'Every weekday at 9 AM' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ cron: '0 9 * * 1-5', preview: 'Every weekday at 9 AM' }));
     const res = await app.inject({ method: 'POST', url: '/ai/cron', payload: { phrase: 'every weekday at 9am' } });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -108,7 +106,7 @@ describe('POST /ai/trend-narrative', () => {
   ];
 
   it('returns narrative from Gemini', async () => {
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ narrative: 'Response times have increased 60% over 3 runs.' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ narrative: 'Response times have increased 60% over 3 runs.' }));
     const res = await app.inject({ method: 'POST', url: '/ai/trend-narrative', payload: { trend } });
     expect(res.statusCode).toBe(200);
     expect(res.json().narrative).toContain('Response times');
@@ -126,7 +124,7 @@ describe('GET /results/suggest-thresholds', () => {
   it('returns threshold suggestions based on run history', async () => {
     await insertCompletedResult(400);
     await insertCompletedResult(500);
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ p95: 600, avg: 250, errorRate: 1, reasoning: 'Based on 2 runs.' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ p95: 600, avg: 250, errorRate: 1, reasoning: 'Based on 2 runs.' }));
 
     const res = await app.inject({ method: 'GET', url: '/results/suggest-thresholds?url=http://test.example.com&type=backend' });
     expect(res.statusCode).toBe(200);
@@ -151,7 +149,7 @@ describe('GET /results/suggest-thresholds', () => {
 
 describe('GET /results/suggest-settings', () => {
   it('returns VU/duration/profile suggestions', async () => {
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ vus: 10, duration: '2m', profile: 'load', reasoning: 'Conservative defaults.' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ vus: 10, duration: '2m', profile: 'load', reasoning: 'Conservative defaults.' }));
     const res = await app.inject({ method: 'GET', url: '/results/suggest-settings?url=https://api.example.com' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -166,7 +164,7 @@ describe('GET /results/suggest-settings', () => {
 describe('POST /ai/webhook-noise', () => {
   it('returns noisy warning when most runs fail', async () => {
     await insertCompletedResult(2000, 1000); // will be 'passed' since we hardcode perf_status
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ level: 'noisy', message: 'Alert would fire 80% of the time.' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ level: 'noisy', message: 'Alert would fire 80% of the time.' }));
     const res = await app.inject({ method: 'POST', url: '/ai/webhook-noise', payload: { events: ['failed', 'degraded'] } });
     expect(res.statusCode).toBe(200);
     expect(res.json().level).toBe('noisy');
@@ -175,7 +173,7 @@ describe('POST /ai/webhook-noise', () => {
 
   it('returns ok level when distribution is healthy', async () => {
     await insertCompletedResult();
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ level: 'ok', message: 'Threshold looks appropriate.' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ level: 'ok', message: 'Threshold looks appropriate.' }));
     const res = await app.inject({ method: 'POST', url: '/ai/webhook-noise', payload: { events: ['failed'] } });
     expect(res.statusCode).toBe(200);
     expect(res.json().level).toBe('ok');
@@ -192,7 +190,7 @@ describe('POST /ai/webhook-noise', () => {
 
 describe('POST /ai/param-suggestions', () => {
   it('returns parameterisation column suggestions', async () => {
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ columns: ['product_id', 'category'], reasoning: 'Found hardcoded IDs.' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ columns: ['product_id', 'category'], reasoning: 'Found hardcoded IDs.' }));
     const res = await app.inject({
       method: 'POST', url: '/ai/param-suggestions',
       payload: { steps: [{ url: 'https://api.example.com/products/12345', method: 'GET' }] },
@@ -211,7 +209,7 @@ describe('POST /ai/param-suggestions', () => {
 
 describe('POST /ai/preset-name', () => {
   it('returns a suggested name and tags', async () => {
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ name: 'Homepage load test — 10 VUs', tags: ['smoke', 'frontend'] }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ name: 'Homepage load test — 10 VUs', tags: ['smoke', 'frontend'] }));
     const res = await app.inject({
       method: 'POST', url: '/ai/preset-name',
       payload: { url: 'https://example.com', type: 'backend', vus: 10, duration: '1m', profile: 'load' },
@@ -237,9 +235,9 @@ describe('GET /results/:testId/diagnose', () => {
         errorBreakdown: { success: 70, clientError: 10, serverError: 15, timeout: 5, networkError: 0 },
       })]
     );
-    mockGenerateContent.mockResolvedValueOnce({
-      response: { text: () => '[{"category":"serverError","count":15,"likelyCause":"Backend overloaded.","nextStep":"Scale horizontally."}]' },
-    });
+    mockGenerateAIText.mockResolvedValueOnce(
+      '[{"category":"serverError","count":15,"likelyCause":"Backend overloaded.","nextStep":"Scale horizontally."}]'
+    );
     const res = await app.inject({ method: 'GET', url: `/results/${testId}/diagnose` });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -302,7 +300,7 @@ describe('Gemini quota enforcement', () => {
       [teamId]
     );
 
-    mockGenerateContent.mockResolvedValueOnce(jsonResponse({ cron: '0 9 * * 1-5', preview: 'Every weekday at 9 AM' }));
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ cron: '0 9 * * 1-5', preview: 'Every weekday at 9 AM' }));
     const first = await sessionApp.inject({
       method: 'POST', url: '/ai/cron', payload: { phrase: 'every weekday at 9am' }, headers: { cookie },
     });

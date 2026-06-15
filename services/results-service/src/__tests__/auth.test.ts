@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../app';
 import { createSchema } from '../db';
@@ -17,8 +17,8 @@ vi.mock('../consumer', async (importOriginal) => {
   return { ...actual, isConsumerConnected: vi.fn().mockReturnValue(true) };
 });
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let app: FastifyInstance;
 
 const SESSION_SECRET = 'test-session-secret-32-chars-min!';
@@ -33,8 +33,7 @@ const registerUser = async (email: string, teamName: string, password = 'passwor
   });
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
   process.env.SESSION_SECRET = SESSION_SECRET;
   process.env.AUTH_RATE_LIMIT_MAX = '1000';
@@ -47,8 +46,7 @@ afterAll(async () => {
   delete process.env.SESSION_SECRET;
   delete process.env.AUTH_RATE_LIMIT_MAX;
   await app.close();
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {

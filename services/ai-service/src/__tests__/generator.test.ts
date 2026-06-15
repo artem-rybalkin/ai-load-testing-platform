@@ -2,22 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { generateScript, compareDescriptions } from '../generator';
 import type { TestRequest } from '@alt/shared';
 
-// Mock Gemini API — factory must be self-contained (vi.mock is hoisted)
-vi.mock('@google/generative-ai', () => {
-  const mockFn = vi.fn().mockResolvedValue({
-    response: { text: () => "import http from 'k6/http';\nexport default function() {}" },
-  });
-  class FakeGAI {
-    getGenerativeModel() { return { generateContent: mockFn }; }
-  }
-  (FakeGAI as unknown as { _mockFn: typeof mockFn })._mockFn = mockFn;
-  return { GoogleGenerativeAI: FakeGAI };
+// Mock the shared AI provider abstraction — factory must be self-contained (vi.mock is hoisted)
+vi.mock('@alt/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alt/shared')>();
+  const mockFn = vi.fn().mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
+  return { ...actual, generateAIText: mockFn };
 });
+
+// Mock global fetch so getProviderSetting() (results-service lookup) never makes a real network call
+vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
 
 // Accessor for the shared mock function
 const getMockFn = async () => {
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  return (GoogleGenerativeAI as unknown as { _mockFn: ReturnType<typeof vi.fn> })._mockFn;
+  const shared = await import('@alt/shared');
+  return (shared as unknown as { generateAIText: ReturnType<typeof vi.fn> }).generateAIText;
 };
 
 const baseFlow = (): TestRequest => ({
@@ -179,19 +177,19 @@ describe('FLOW_PROMPT — combined extract + placeholder + parameterization', ()
 describe('compareDescriptions', () => {
   it('returns REUSE when Gemini responds with REUSE', async () => {
     const fn = await getMockFn();
-    fn.mockResolvedValueOnce({ response: { text: () => 'REUSE' } });
+    fn.mockResolvedValueOnce('REUSE');
     expect(await compareDescriptions('a', 'a')).toBe('REUSE');
   });
 
   it('returns REGENERATE when Gemini responds with REGENERATE', async () => {
     const fn = await getMockFn();
-    fn.mockResolvedValueOnce({ response: { text: () => 'REGENERATE' } });
+    fn.mockResolvedValueOnce('REGENERATE');
     expect(await compareDescriptions('a', 'b')).toBe('REGENERATE');
   });
 
   it('defaults to REGENERATE on unexpected model response', async () => {
     const fn = await getMockFn();
-    fn.mockResolvedValueOnce({ response: { text: () => 'maybe' } });
+    fn.mockResolvedValueOnce('maybe');
     expect(await compareDescriptions('a', 'b')).toBe('REGENERATE');
   });
 
@@ -205,7 +203,7 @@ describe('compareDescriptions', () => {
     const fn = await getMockFn();
     fn.mockClear(); // reset accumulated call count from earlier tests in this file
     fn.mockRejectedValueOnce({ status: 429 });
-    fn.mockResolvedValueOnce({ response: { text: () => 'REUSE' } });
+    fn.mockResolvedValueOnce('REUSE');
 
     vi.useFakeTimers();
     try {
@@ -216,7 +214,7 @@ describe('compareDescriptions', () => {
     } finally {
       vi.useRealTimers();
       fn.mockReset();
-      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+      fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
     }
   });
 });
@@ -374,7 +372,7 @@ describe('generateScript — 429 retry', () => {
     const fn = await getMockFn();
     fn.mockClear(); // reset accumulated call count from earlier tests in this file
     fn.mockRejectedValueOnce({ status: 429 });
-    fn.mockResolvedValueOnce({ response: { text: () => 'k6 script content' } });
+    fn.mockResolvedValueOnce('k6 script content');
 
     vi.useFakeTimers();
     try {
@@ -386,7 +384,7 @@ describe('generateScript — 429 retry', () => {
     } finally {
       vi.useRealTimers();
       fn.mockReset();
-      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+      fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
     }
   });
 
@@ -415,7 +413,7 @@ describe('generateScript — 429 retry', () => {
     } finally {
       vi.useRealTimers();
       fn.mockReset();
-      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+      fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
     }
   });
 });
@@ -439,7 +437,7 @@ describe('compareDescriptions — retry exhaustion', () => {
     } finally {
       vi.useRealTimers();
       fn.mockReset();
-      fn.mockResolvedValue({ response: { text: () => "import http from 'k6/http';\nexport default function() {}" } });
+      fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
     }
   });
 });
@@ -494,5 +492,80 @@ describe('performance', () => {
 
     // Regression guard: prompt construction for a large 20-step flow should be fast.
     expect(elapsed).toBeLessThan(200);
+  });
+});
+
+// ─── Per-team AI provider resolution (AI-15 Phase C) ─────────────────────────
+
+describe('getProviderSetting — per-team resolution', () => {
+  it('passes projectId as ?teamId= when generateScript is called for a team', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const test = baseFlow();
+    test.projectId = 'team-alpha';
+    await generateScript(test);
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).toContain(`teamId=${encodeURIComponent('team-alpha')}`);
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('omits ?teamId= when no projectId is set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {} }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const test = baseFlow();
+    test.projectId = undefined;
+    await generateScript(test);
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).not.toContain('teamId=');
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('caches provider settings independently per team', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'openai', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const testA = baseFlow();
+    testA.projectId = 'team-cache-a';
+    const testB = baseFlow();
+    testB.projectId = 'team-cache-b';
+
+    await generateScript(testA);
+    await generateScript(testB);
+    await generateScript(testA); // should hit the per-team cache, not refetch
+
+    const aiProviderCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes('/system/ai-provider'));
+    expect(aiProviderCalls.length).toBe(2); // one fetch per distinct teamId
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('passes projectId from cachedScriptDescription comparison through compareDescriptions', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {}, isOverride: false }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await compareDescriptions('new description', 'old description', 'team-compare');
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).toContain(`teamId=${encodeURIComponent('team-compare')}`);
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
   });
 });

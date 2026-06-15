@@ -85,7 +85,7 @@ export async function buildApp(
   }));
 
   // ── POST /recordings/start ──────────────────────────────────────────────────
-  app.post<{ Body: { targetUrl?: string; ignorePatterns?: string[] } }>('/recordings/start', async (request, reply) => {
+  app.post<{ Body: { targetUrl?: string; ignorePatterns?: string[]; teamId?: string | null } }>('/recordings/start', async (request, reply) => {
     const sessionId = crypto.randomUUID();
     const ignorePatterns = compileIgnorePatterns(request.body?.ignorePatterns ?? []);
 
@@ -97,6 +97,7 @@ export async function buildApp(
       return reply.code(500).send({ error: 'Failed to launch recording browser — is DISPLAY set or noVNC running?' });
     }
 
+    session.teamId = request.body?.teamId ?? null;
     _sessions.set(sessionId, session);
 
     if (request.body?.targetUrl) {
@@ -167,10 +168,10 @@ export async function buildApp(
 
     const rawSteps = toFlowSteps(capturedRequests);
     const thinkTimes = computeThinkTimes(capturedRequests);
-    const correlatedSteps = await detectCorrelations(capturedRequests, rawSteps);
+    const correlatedSteps = await detectCorrelations(capturedRequests, rawSteps, session.teamId);
     const [enrichedSteps, suggestedIgnore] = await Promise.all([
-      suggestStepNames(correlatedSteps),
-      suggestIgnorePatterns(capturedRequests),
+      suggestStepNames(correlatedSteps, session.teamId),
+      suggestIgnorePatterns(capturedRequests, session.teamId),
     ]);
     const duplicates = detectDuplicateSteps(enrichedSteps);
 

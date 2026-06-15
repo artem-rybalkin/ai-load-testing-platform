@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { createHash, randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
 
@@ -26,8 +26,8 @@ vi.mock('../scripts', async (importOriginal) => {
   };
 });
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let app: FastifyInstance;
 let appPool: Pool;
 let mockFetch: ReturnType<typeof vi.fn>;
@@ -58,10 +58,10 @@ const createSchema = async (p: Pool): Promise<void> => {
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  let uri: string;
+  ({ pool, uri, drop: dropDb } = await createTestDatabase());
+  process.env.DATABASE_URL = uri;
 
-  pool = new Pool({ connectionString: container.getConnectionUri() });
   await createSchema(pool);
 
   const { buildApp } = await import('../index');
@@ -79,8 +79,7 @@ afterAll(async () => {
   vi.unstubAllGlobals();
   await app.close();
   await appPool.end();
-  await pool.end();
-  await container.stop();
+  await dropDb();
   delete process.env.DATABASE_URL;
 });
 

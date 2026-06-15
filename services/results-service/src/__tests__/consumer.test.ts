@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { handleResult } from '../consumer';
 import { createSchema } from '../db';
 import type { TestResult, BackendMetrics } from '@alt/shared';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let mockFetch: ReturnType<typeof vi.fn>;
 
 const baseMetrics: BackendMetrics = {
@@ -36,8 +36,7 @@ const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
 });
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
   mockFetch = vi.fn().mockResolvedValue({ ok: true });
   vi.stubGlobal('fetch', mockFetch);
@@ -45,8 +44,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   vi.unstubAllGlobals();
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {
@@ -95,6 +93,24 @@ describe('handleResult — analyser-service integration', () => {
     expect(rows[0].analysis.aiInsights).toBeDefined();
     expect(rows[0].analysis.aiInsights.narrative).toBe('The system performed well.');
     expect(rows[0].analysis.summary).toBe('AI-enriched summary');
+  });
+
+  it('passes the result projectId as teamId in the /analyse request body', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(analysisFromService) });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const projectId = crypto.randomUUID();
+    await pool.query(`INSERT INTO projects (id, name) VALUES ($1, $2)`, [projectId, `proj-${projectId}`]);
+    const result = makeResult({ projectId });
+    await handleResult(pool, result);
+
+    const call = mockFetch.mock.calls.find(([url]) => String(url).includes('/analyse'));
+    const body = JSON.parse(call![1].body);
+    expect(body.teamId).toBe(projectId);
   });
 
   it('falls back to local analyzeResult when analyser-service returns non-ok', async () => {

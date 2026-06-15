@@ -21,6 +21,7 @@ interface AnalyseBody {
   previousMetrics: BackendMetrics | ClientMetrics | null;
   thresholds?: SLOThresholds | null;
   externalMetrics?: ExternalMetricSource[];
+  teamId?: string | null;
 }
 
 // ── App factory (exported for testing) ───────────────────────────────────────
@@ -41,7 +42,7 @@ export function buildApp() {
   });
 
   app.post<{ Body: AnalyseBody }>('/analyse', async (request, reply) => {
-    const { testId, targetUrl, type, metrics, previousMetrics, thresholds, externalMetrics } = request.body;
+    const { testId, targetUrl, type, metrics, previousMetrics, thresholds, externalMetrics, teamId } = request.body;
     const testLog = log.child({ testId });
 
     testLog.info({ targetUrl, type }, 'Running analysis');
@@ -60,6 +61,7 @@ export function buildApp() {
       thresholdViolations: base.thresholdViolations,
       diffs: base.diffs,
       externalMetrics: externalMetrics ?? [],
+      teamId: teamId ?? null,
     });
 
     const result: AnalysisResult = {

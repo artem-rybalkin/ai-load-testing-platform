@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { DEFAULT_TEAM_QUOTA } from '@alt/shared';
 import { createSchema } from '../db';
 import {
@@ -8,8 +8,8 @@ import {
   checkGeminiQuota, incrementGeminiUsage, getTeamUsage,
 } from '../quotas';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let teamId: string;
 
 const insertTestResult = async (status: string, projectId: string): Promise<void> => {
@@ -27,14 +27,12 @@ const insertSchedule = async (projectId: string, enabled: boolean): Promise<void
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
 }, 120_000);
 
 afterAll(async () => {
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {

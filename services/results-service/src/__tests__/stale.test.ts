@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { runStaleCleanup, startStaleCleanup } from '../cleanup';
 import { createSchema } from '../db';
 
 const mockBroadcast = vi.hoisted(() => vi.fn());
 vi.mock('../ws', () => ({ broadcast: mockBroadcast }));
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 
 const insertResult = async (
   status: string,
@@ -28,14 +28,12 @@ const insertResult = async (
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
 });
 
 afterAll(async () => {
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {

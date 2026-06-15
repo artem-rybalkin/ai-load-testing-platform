@@ -1,11 +1,36 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
-import { TestRequest, ExtractRule } from '@alt/shared';
+import { TestRequest, ExtractRule, AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText } from '@alt/shared';
 import { log } from './logger';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+const PROVIDER_CACHE_MS = 30000;
 
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+const providerCache = new Map<string, { setting: AiProviderSetting; cachedAt: number }>();
+
+/** Fetches the configured AI provider + fallback chain (team override or global default) from results-service, cached for 30s per team. */
+const getProviderSetting = async (teamId?: string | null): Promise<AiProviderSetting> => {
+  const cacheKey = teamId ?? '__global__';
+  const cached = providerCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < PROVIDER_CACHE_MS) return cached.setting;
+  try {
+    const url = teamId
+      ? `${RESULTS_URL}/system/ai-provider?teamId=${encodeURIComponent(teamId)}`
+      : `${RESULTS_URL}/system/ai-provider`;
+    const res = await fetch(url, {
+      headers: INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {},
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const data = await res.json() as AiProviderSetting;
+      const setting = { provider: data.provider, fallbacks: data.fallbacks };
+      providerCache.set(cacheKey, { setting, cachedAt: Date.now() });
+      return setting;
+    }
+  } catch {
+    // results-service unreachable — keep using cached/default setting
+  }
+  return cached?.setting ?? DEFAULT_AI_PROVIDER_SETTING;
+};
 
 const profileInstructions = (opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string }): string => {
   const { vus, duration, profile = 'load', peakVus } = opts;
@@ -254,7 +279,8 @@ export default function() {
 
 export const compareDescriptions = async (
   newDescription: string,
-  storedDescription: string
+  storedDescription: string,
+  projectId?: string | null
 ): Promise<'REUSE' | 'REGENERATE'> => {
   const prompt = `You are a load test script classifier.
 
@@ -274,12 +300,12 @@ Decide whether the existing script still satisfies the new description.
 
 Reply with exactly one word: REUSE or REGENERATE`;
 
+  const setting = await getProviderSetting(projectId);
   const maxRetries = 3;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-      const result = await model.generateContent(prompt);
-      const verdict = result.response.text().trim().toUpperCase();
+      const text = await generateAIText(prompt, setting);
+      const verdict = text.trim().toUpperCase();
       if (verdict === 'REUSE' || verdict === 'REGENERATE') return verdict;
       log.warn({ verdict }, 'Unexpected comparison verdict, defaulting to REGENERATE');
       return 'REGENERATE';
@@ -299,7 +325,7 @@ Reply with exactly one word: REUSE or REGENERATE`;
 };
 
 export const generateScript = async (test: TestRequest): Promise<string> => {
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+  const setting = await getProviderSetting(test.projectId);
   const prompt = test.type === 'flow'
     ? FLOW_PROMPT(test)
     : test.type === 'backend'
@@ -311,8 +337,7 @@ export const generateScript = async (test: TestRequest): Promise<string> => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       log.info({ testType: test.type, attempt }, 'Generating script');
-      const result = await model.generateContent(prompt);
-      const script = result.response.text();
+      const script = await generateAIText(prompt, setting);
       log.info({ testType: test.type }, 'Script generated successfully');
       return script;
     } catch (err: unknown) {

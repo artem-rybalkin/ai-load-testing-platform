@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../app';
 import { createSchema } from '../db';
@@ -18,25 +18,23 @@ vi.mock('../consumer', async (importOriginal) => {
   return { ...actual, isConsumerConnected: vi.fn().mockReturnValue(true) };
 });
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let app: FastifyInstance;
 let mockFetch: ReturnType<typeof vi.fn>;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
   app = await buildApp(pool);
   mockFetch = vi.fn();
   vi.stubGlobal('fetch', mockFetch);
-});
+}, 60_000);
 
 afterAll(async () => {
   vi.unstubAllGlobals();
   await app.close();
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {

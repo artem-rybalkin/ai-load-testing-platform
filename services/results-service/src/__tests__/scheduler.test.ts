@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import cron from 'node-cron';
 import { startScheduler, reloadSchedule, removeSchedule } from '../scheduler';
 import { createSchema } from '../db';
@@ -13,8 +13,8 @@ vi.mock('node-cron', () => ({
 
 const mockCronSchedule = cron.schedule as unknown as ReturnType<typeof vi.fn>;
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let mockFetch: ReturnType<typeof vi.fn>;
 
 const insertSchedule = async (enabled = true): Promise<string> => {
@@ -29,8 +29,7 @@ const insertSchedule = async (enabled = true): Promise<string> => {
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
   mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
   vi.stubGlobal('fetch', mockFetch);
@@ -38,8 +37,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   vi.unstubAllGlobals();
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {

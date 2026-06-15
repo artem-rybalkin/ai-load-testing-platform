@@ -625,6 +625,7 @@ function HomeContent() {
                     onTestDataChange={setFlowTestData}
                     csvFile={flowCsvFile}
                     onCsvChange={setFlowCsvFile}
+                    teamId={user?.currentTeamId ?? undefined}
                   />
                   {/* Runner selector */}
                   <div>

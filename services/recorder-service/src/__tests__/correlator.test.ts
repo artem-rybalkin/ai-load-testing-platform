@@ -2,24 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { detectCorrelations, suggestStepNames, suggestIgnorePatterns, detectDuplicateSteps } from '../correlator';
 import type { RecordedRequest, FlowStep } from '@alt/shared';
 
-// ─── Mock Gemini (same pattern as generator.test.ts) ─────────────────────────
-vi.mock('@google/generative-ai', () => {
-  const mockGenerate = vi.fn().mockResolvedValue({
-    response: { text: () => '{"correlations":[]}' },
-  });
-  class FakeGAI {
-    getGenerativeModel() { return { generateContent: mockGenerate }; }
-  }
-  (FakeGAI as unknown as { _mock: typeof mockGenerate })._mock = mockGenerate;
-  return { GoogleGenerativeAI: FakeGAI };
+// ─── Mock the shared AI provider abstraction (same pattern as aiInsights.test.ts) ──
+vi.mock('@alt/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alt/shared')>();
+  const mockFn = vi.fn();
+  return { ...actual, generateAIText: mockFn };
 });
+
+// Mock global fetch so getProviderSetting() (results-service lookup) never makes a real network call
+vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
 
 // We need puppeteer-core mocked so recorder.ts can be imported transitively
 vi.mock('puppeteer-core', () => ({ default: {} }));
 
 const getMock = async () => {
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  return (GoogleGenerativeAI as unknown as { _mock: ReturnType<typeof vi.fn> })._mock;
+  const shared = await import('@alt/shared');
+  return (shared as unknown as { generateAIText: ReturnType<typeof vi.fn> }).generateAIText;
 };
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -57,15 +55,17 @@ const TWO_STEPS = [
 beforeEach(async () => {
   const mock = await getMock();
   mock.mockReset();
-  mock.mockResolvedValue({ response: { text: () => '{"correlations":[]}' } });
+  mock.mockResolvedValue('{"correlations":[]}');
   process.env.GEMINI_API_KEY = 'test-key';
 });
 
 // ─── Early-return guards ──────────────────────────────────────────────────────
 
 describe('detectCorrelations — early returns', () => {
-  it('returns steps unchanged when GEMINI_API_KEY is not set', async () => {
+  it('returns steps unchanged when no AI provider is configured', async () => {
     delete process.env.GEMINI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
     const mock = await getMock();
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result).toEqual(TWO_STEPS);
@@ -92,7 +92,7 @@ describe('detectCorrelations — early returns', () => {
 describe('detectCorrelations — happy path', () => {
   it('returns steps with no extract rules when Gemini finds no correlations', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => '{"correlations":[]}' } });
+    mock.mockResolvedValueOnce('{"correlations":[]}');
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result[0].extract).toEqual({});
     expect(result[1].extract).toEqual({});
@@ -100,9 +100,7 @@ describe('detectCorrelations — happy path', () => {
 
   it('adds an extract rule to the source step when Gemini returns a correlation', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{
             sourceStepIndex: 0,
             variableName: 'access_token',
@@ -110,9 +108,7 @@ describe('detectCorrelations — happy path', () => {
             expression: '$.access_token',
             usedInStepIndices: [1],
           }],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result[0].extract).toEqual({
@@ -127,16 +123,12 @@ describe('detectCorrelations — happy path', () => {
     const threeSteps = [...TWO_STEPS, makeStep('Get data', 'https://api.example.com/data')];
 
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [
             { sourceStepIndex: 0, variableName: 'token',   source: 'jsonpath', expression: '$.access_token', usedInStepIndices: [1, 2] },
             { sourceStepIndex: 1, variableName: 'csrf',    source: 'header',   expression: 'X-CSRF-Token',   usedInStepIndices: [2] },
           ],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(threeRequests, threeSteps);
     expect(result[0].extract).toHaveProperty('token');
@@ -150,18 +142,14 @@ describe('detectCorrelations — happy path', () => {
     ];
     const fourSteps = [0,1,2,3,4].map(i => makeStep(`Step ${i}`, `https://api.example.com/${i}`));
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [
             { sourceStepIndex: 0, variableName: 'jp_var',  source: 'jsonpath', expression: '$.id',              usedInStepIndices: [1] },
             { sourceStepIndex: 1, variableName: 'hdr_var', source: 'header',   expression: 'X-Auth-Token',      usedInStepIndices: [2] },
             { sourceStepIndex: 2, variableName: 'ck_var',  source: 'cookie',   expression: 'session',           usedInStepIndices: [3] },
             { sourceStepIndex: 3, variableName: 'rx_var',  source: 'regex',    expression: 'token=([^;]+)',     usedInStepIndices: [4] },
           ],
-        }),
-      },
-    });
+        }));
     const result = await detectCorrelations(fourRequests, fourSteps);
     expect(result[0].extract!.jp_var.source).toBe('jsonpath');
     expect(result[1].extract!.hdr_var.source).toBe('header');
@@ -225,43 +213,35 @@ describe('detectCorrelations — PII redaction', () => {
 describe('detectCorrelations — Gemini response parsing', () => {
   it('extracts JSON from a markdown code fence', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => '```json\n{"correlations":[]}\n```',
-      },
-    });
+    mock.mockResolvedValueOnce('```json\n{"correlations":[]}\n```');
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result).toEqual(TWO_STEPS);  // no error, correlations applied (empty)
   });
 
   it('extracts JSON even when Gemini adds explanation text around it', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => 'Here are the correlations I found:\n{"correlations":[]}\nEnd of analysis.',
-      },
-    });
+    mock.mockResolvedValueOnce('Here are the correlations I found:\n{"correlations":[]}\nEnd of analysis.');
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result).toHaveLength(TWO_STEPS.length);
   });
 
   it('returns steps unchanged when response contains no JSON object', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => 'No correlations found.' } });
+    mock.mockResolvedValueOnce('No correlations found.');
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result).toEqual(TWO_STEPS);
   });
 
   it('returns steps unchanged when parsed JSON has no correlations array', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => '{"result":"ok"}' } });
+    mock.mockResolvedValueOnce('{"result":"ok"}');
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result).toEqual(TWO_STEPS);
   });
 
   it('returns steps unchanged when correlations field is not an array', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => '{"correlations":"none"}' } });
+    mock.mockResolvedValueOnce('{"correlations":"none"}');
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result).toEqual(TWO_STEPS);
   });
@@ -279,13 +259,9 @@ describe('detectCorrelations — Gemini response parsing', () => {
 describe('detectCorrelations — applyCorrelations edge cases', () => {
   it('skips correlation entry with sourceStepIndex < 0', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: -1, variableName: 'bad', source: 'jsonpath', expression: '$.x', usedInStepIndices: [0] }],
-        }),
-      },
-    });
+        }));
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // No extract rule should have been added
     expect(result[0].extract).toEqual({});
@@ -294,26 +270,18 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
 
   it('skips correlation entry with sourceStepIndex >= steps.length', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 99, variableName: 'bad', source: 'jsonpath', expression: '$.x', usedInStepIndices: [] }],
-        }),
-      },
-    });
+        }));
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     expect(result[0].extract).toEqual({});
   });
 
   it('sanitizes variable names by replacing non-alphanumeric/underscore chars with _', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'my-token.val', source: 'jsonpath', expression: '$.t', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // Hyphens and dots become underscores
     expect(result[0].extract).toHaveProperty('my_token_val');
@@ -321,13 +289,9 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
 
   it('uses var_N fallback when sanitized variable name is empty', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: '---', source: 'jsonpath', expression: '$.t', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // "---" sanitized → "___" which is not empty, so var_N fallback won't trigger
     // BUT if the result is empty string:
@@ -337,13 +301,9 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
 
   it('does not mutate the original steps array', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'token', source: 'jsonpath', expression: '$.tok', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
     const originalExtract = { ...TWO_STEPS[0].extract };
     await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // Original steps should be unchanged
@@ -364,13 +324,9 @@ describe('detectCorrelations — {{varName}} substitution', () => {
       { ...makeStep('Get profile', 'https://api.example.com/profile'), headers: { Authorization: 'Bearer tok123' } },
     ];
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'access_token', source: 'jsonpath', expression: '$.access_token', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(requests, steps);
     expect(result[0].extract).toEqual({ access_token: { source: 'jsonpath', expression: '$.access_token' } });
@@ -387,13 +343,9 @@ describe('detectCorrelations — {{varName}} substitution', () => {
       { ...makeStep('Checkout', 'https://api.example.com/checkout'), body: '{"sessionId":"sess-abc-456","item":"sku1"}' },
     ];
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'session_id', source: 'jsonpath', expression: '$.session_id', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(requests, steps);
     expect(result[1].body).toBe('{"sessionId":"{{session_id}}","item":"sku1"}');
@@ -409,13 +361,9 @@ describe('detectCorrelations — {{varName}} substitution', () => {
       { ...makeStep('Get profile', 'https://api.example.com/profile'), headers: { Authorization: 'Bearer tok123' } },
     ];
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'access_token', source: 'jsonpath', expression: '$.access_token', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(requests, steps);
     expect(result[1].headers!.Authorization).toBe('Bearer tok123');
@@ -431,13 +379,9 @@ describe('detectCorrelations — {{varName}} substitution', () => {
       { ...makeStep('Get item', 'https://api.example.com/items/42'), headers: { 'X-Item-Id': '42' } },
     ];
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'item_id', source: 'jsonpath', expression: '$.id', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(requests, steps);
     expect(result[1].headers!['X-Item-Id']).toBe('42');
@@ -459,13 +403,9 @@ describe('detectCorrelations — {{varName}} substitution', () => {
       makeStep('Get bag count', 'https://api.example.com/bag/count'), // headers: {} — stripped by toFlowSteps
     ];
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'access_token', source: 'jsonpath', expression: '$.access_token', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(requests, steps);
     expect(result[1].headers!.Authorization).toBe('Bearer {{access_token}}');
@@ -481,13 +421,9 @@ describe('detectCorrelations — {{varName}} substitution', () => {
       { ...makeStep('Get profile', 'https://api.example.com/profile'), headers: { Cookie: 'session=abc123def' } },
     ];
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: {
-        text: () => JSON.stringify({
+    mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'session', source: 'cookie', expression: 'session', usedInStepIndices: [1] }],
-        }),
-      },
-    });
+        }));
 
     const result = await detectCorrelations(requests, steps);
     expect(result[1].headers!.Cookie).toBe('session={{session}}');
@@ -499,9 +435,7 @@ describe('detectCorrelations — {{varName}} substitution', () => {
 describe('suggestStepNames', () => {
   it('renames steps with Gemini suggestions', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: { text: () => '["Authenticate — get token", "Load homepage"]' },
-    });
+    mock.mockResolvedValueOnce('["Authenticate — get token", "Load homepage"]');
     const result = await suggestStepNames(TWO_STEPS);
     expect(result[0].name).toBe('Authenticate — get token');
     expect(result[1].name).toBe('Load homepage');
@@ -509,16 +443,14 @@ describe('suggestStepNames', () => {
 
   it('returns original steps when Gemini returns wrong array length', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: { text: () => '["Only one name"]' },
-    });
+    mock.mockResolvedValueOnce('["Only one name"]');
     const result = await suggestStepNames(TWO_STEPS);
     expect(result[0].name).toBe(TWO_STEPS[0].name);
   });
 
   it('returns original steps when Gemini returns non-JSON', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => 'not json' } });
+    mock.mockResolvedValueOnce('not json');
     const result = await suggestStepNames(TWO_STEPS);
     expect(result).toEqual(TWO_STEPS);
   });
@@ -541,23 +473,21 @@ describe('suggestStepNames', () => {
 describe('suggestIgnorePatterns', () => {
   it('returns suggested domain strings from Gemini', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: { text: () => '["analytics.google.com", "cdn.clarity.ms"]' },
-    });
+    mock.mockResolvedValueOnce('["analytics.google.com", "cdn.clarity.ms"]');
     const result = await suggestIgnorePatterns(TWO_REQUESTS);
     expect(result).toEqual(['analytics.google.com', 'cdn.clarity.ms']);
   });
 
   it('returns empty array when Gemini returns empty array', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => '[]' } });
+    mock.mockResolvedValueOnce('[]');
     const result = await suggestIgnorePatterns(TWO_REQUESTS);
     expect(result).toEqual([]);
   });
 
   it('returns empty array when Gemini response is not parseable', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => 'not json' } });
+    mock.mockResolvedValueOnce('not json');
     const result = await suggestIgnorePatterns(TWO_REQUESTS);
     expect(result).toEqual([]);
   });
@@ -571,7 +501,7 @@ describe('suggestIgnorePatterns', () => {
 
   it('filters non-string values from Gemini output', async () => {
     const mock = await getMock();
-    mock.mockResolvedValueOnce({ response: { text: () => '["valid.com", 42, null, "also.valid"]' } });
+    mock.mockResolvedValueOnce('["valid.com", 42, null, "also.valid"]');
     const result = await suggestIgnorePatterns(TWO_REQUESTS);
     expect(result).toEqual(['valid.com', 'also.valid']);
   });
@@ -623,9 +553,7 @@ describe('performance', () => {
     }));
 
     const mock = await getMock();
-    mock.mockResolvedValueOnce({
-      response: { text: () => JSON.stringify({ correlations }) },
-    });
+    mock.mockResolvedValueOnce(JSON.stringify({ correlations }));
 
     const start = performance.now();
     const result = await detectCorrelations(requests, steps);
@@ -709,5 +637,101 @@ describe('detectDuplicateSteps', () => {
     ];
     expect(() => detectDuplicateSteps(steps)).not.toThrow();
     expect(detectDuplicateSteps(steps)).toEqual([]);
+  });
+});
+
+// ─── Per-team AI provider resolution (AI-15 Phase C) ──────────────────────────
+
+describe('getProviderSetting — per-team resolution', () => {
+  it('detectCorrelations passes teamId as ?teamId= when fetching the provider setting', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValue('{"correlations":[]}');
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await detectCorrelations(TWO_REQUESTS, TWO_STEPS, 'team-detect-1');
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).toContain(`teamId=${encodeURIComponent('team-detect-1')}`);
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('suggestStepNames passes teamId as ?teamId= when fetching the provider setting', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValue(JSON.stringify(TWO_STEPS.map(s => s.name)));
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await suggestStepNames(TWO_STEPS, 'team-detect-2');
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).toContain(`teamId=${encodeURIComponent('team-detect-2')}`);
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('suggestIgnorePatterns passes teamId as ?teamId= when fetching the provider setting', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValue('{"patterns":[]}');
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await suggestIgnorePatterns(TWO_REQUESTS, 'team-detect-3');
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).toContain(`teamId=${encodeURIComponent('team-detect-3')}`);
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('omits ?teamId= when no teamId is provided', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValue('{"correlations":[]}');
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {} }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).not.toContain('teamId=');
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('caches provider settings independently per team', async () => {
+    const mock = await getMock();
+    mock.mockResolvedValue('{"correlations":[]}');
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'openai', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await detectCorrelations(TWO_REQUESTS, TWO_STEPS, 'team-cache-x');
+    await detectCorrelations(TWO_REQUESTS, TWO_STEPS, 'team-cache-y');
+    await detectCorrelations(TWO_REQUESTS, TWO_STEPS, 'team-cache-x'); // should hit the per-team cache, not refetch
+
+    const aiProviderCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes('/system/ai-provider'));
+    expect(aiProviderCalls.length).toBe(2); // one fetch per distinct teamId
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
   });
 });

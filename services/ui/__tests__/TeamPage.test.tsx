@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import TeamPage from '../app/team/page';
-import type { SessionUser, TeamMemberRow, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated } from '../lib/api';
+import type { SessionUser, TeamMemberRow, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated, AiProviderConfig } from '../lib/api';
 
 const mockGetTeamMembers      = vi.hoisted(() => vi.fn());
 const mockAddTeamMember       = vi.hoisted(() => vi.fn());
@@ -15,6 +15,9 @@ const mockCreateTeamApiKey     = vi.hoisted(() => vi.fn());
 const mockRevokeTeamApiKey     = vi.hoisted(() => vi.fn());
 const mockGetAuditLog          = vi.hoisted(() => vi.fn());
 const mockEraseTeamData        = vi.hoisted(() => vi.fn());
+const mockGetAiProvider        = vi.hoisted(() => vi.fn());
+const mockSetTeamAiProvider    = vi.hoisted(() => vi.fn());
+const mockClearTeamAiProvider  = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   getTeamMembers: mockGetTeamMembers,
@@ -28,6 +31,9 @@ vi.mock('@/lib/api', () => ({
   revokeTeamApiKey: mockRevokeTeamApiKey,
   getAuditLog: mockGetAuditLog,
   eraseTeamData: mockEraseTeamData,
+  getAiProvider: mockGetAiProvider,
+  setTeamAiProvider: mockSetTeamAiProvider,
+  clearTeamAiProvider: mockClearTeamAiProvider,
 }));
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
@@ -64,12 +70,20 @@ const defaultUsage: TeamUsage = {
   geminiCallsToday: 50,
 };
 
+const defaultAiProvider: AiProviderConfig = {
+  provider: 'gemini',
+  fallbacks: [],
+  available: { gemini: true, openai: false, anthropic: false },
+  isOverride: false,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetTeamMembers.mockResolvedValue(members);
   mockGetTeamQuota.mockResolvedValue({ quota: defaultQuota, usage: defaultUsage });
   mockGetTeamApiKeys.mockResolvedValue([]);
   mockGetAuditLog.mockResolvedValue({ entries: [] });
+  mockGetAiProvider.mockResolvedValue(defaultAiProvider);
 });
 afterEach(() => cleanup());
 
@@ -333,5 +347,94 @@ describe('TeamPage — Danger Zone (data erasure)', () => {
     render(<TeamPage />);
     await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
     expect(screen.queryByText('Danger Zone')).not.toBeInTheDocument();
+  });
+});
+
+describe('TeamPage — AI Provider', () => {
+  it('admin sees the AI Provider section with the current provider selected', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    render(<TeamPage />);
+
+    expect(await screen.findByText('AI Provider')).toBeInTheDocument();
+    await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalled());
+
+    const select = screen.getByDisplayValue(/Gemini/) as HTMLSelectElement;
+    expect(select.value).toBe('gemini');
+    expect(screen.getAllByText(/Claude \(Anthropic\) \(not configured\)/).length).toBeGreaterThan(0);
+  });
+
+  it('saves the selected primary provider and fallbacks for this team', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    mockSetTeamAiProvider.mockResolvedValue({ provider: 'openai', fallbacks: ['gemini'], isOverride: true });
+    render(<TeamPage />);
+
+    await screen.findByText('AI Provider');
+    await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalled());
+
+    const select = screen.getByDisplayValue(/Gemini/);
+    fireEvent.change(select, { target: { value: 'openai' } });
+
+    const geminiCheckbox = screen.getByRole('checkbox', { name: /Gemini/i });
+    fireEvent.click(geminiCheckbox);
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockSetTeamAiProvider).toHaveBeenCalledWith('t1', 'openai', ['gemini']));
+  });
+
+  it('shows an error message when saving fails', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    mockSetTeamAiProvider.mockRejectedValue(new Error('Admin role required'));
+    render(<TeamPage />);
+
+    await screen.findByText('AI Provider');
+    await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText('Admin role required')).toBeInTheDocument();
+  });
+
+  it('non-admin members do not see the AI Provider section', async () => {
+    mockUseAuth.mockReturnValue({ user: memberUser });
+    render(<TeamPage />);
+    await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
+    expect(screen.queryByText('AI Provider')).not.toBeInTheDocument();
+    expect(mockGetAiProvider).not.toHaveBeenCalled();
+  });
+
+  it('shows "Using platform default" badge and no revert button when there is no team override', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    render(<TeamPage />);
+
+    await screen.findByText('AI Provider');
+    await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalledWith('t1'));
+
+    expect(await screen.findByText('Using platform default')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /revert to platform default/i })).not.toBeInTheDocument();
+  });
+
+  it('shows "Custom for this team" badge and a revert button when a team override exists', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    mockGetAiProvider.mockResolvedValue({ ...defaultAiProvider, provider: 'anthropic', isOverride: true });
+    render(<TeamPage />);
+
+    await screen.findByText('AI Provider');
+    expect(await screen.findByText('Custom for this team')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /revert to platform default/i })).toBeInTheDocument();
+  });
+
+  it('reverts the team override to the platform default', async () => {
+    mockUseAuth.mockReturnValue({ user: adminUser });
+    mockGetAiProvider
+      .mockResolvedValueOnce({ ...defaultAiProvider, provider: 'anthropic', isOverride: true })
+      .mockResolvedValueOnce(defaultAiProvider);
+    mockClearTeamAiProvider.mockResolvedValue({ success: true });
+    render(<TeamPage />);
+
+    await screen.findByText('AI Provider');
+    const revertButton = await screen.findByRole('button', { name: /revert to platform default/i });
+    fireEvent.click(revertButton);
+
+    await waitFor(() => expect(mockClearTeamAiProvider).toHaveBeenCalledWith('t1'));
+    expect(await screen.findByText('Using platform default')).toBeInTheDocument();
   });
 });

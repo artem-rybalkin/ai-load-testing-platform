@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
+import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { DEFAULT_TEAM_QUOTA } from '@alt/shared';
 import { getTeamQuota, checkTestQuota } from '../quotas';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let dropDb: () => Promise<void>;
 let teamId: string;
 
 const createSchema = async (p: Pool): Promise<void> => {
@@ -51,14 +51,12 @@ const insertTestResult = async (p: Pool, status: string, projectId: string | nul
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
 }, 120_000);
 
 afterAll(async () => {
-  await pool.end();
-  await container.stop();
+  await dropDb();
 });
 
 beforeEach(async () => {

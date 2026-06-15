@@ -1,6 +1,6 @@
-import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, SLOThresholds } from '@alt/shared';
+import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, SLOThresholds, AiProviderName } from '@alt/shared';
 
-export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole };
+export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, AiProviderName };
 
 // Base paths — all routed through Vite proxy (same-origin, cookies work)
 const API_URL     = '/api';
@@ -394,11 +394,11 @@ export interface RecordingSession {
   error?: string;
 }
 
-export const startRecording = async (targetUrl?: string, ignorePatterns?: string[]): Promise<RecordingSession> => {
+export const startRecording = async (targetUrl?: string, ignorePatterns?: string[], teamId?: string): Promise<RecordingSession> => {
   const res = await fetch(`/recordings/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ targetUrl, ignorePatterns }),
+    body: JSON.stringify({ targetUrl, ignorePatterns, teamId }),
     credentials: 'include',
   });
   if (!res.ok) throw new Error(`Recorder error: ${res.status}`);
@@ -638,6 +638,33 @@ export const updateTeamQuota = (teamId: string, quota: Partial<TeamQuota>): Prom
     }
     return r.json();
   });
+
+export interface AiProviderConfig {
+  provider: AiProviderName;
+  fallbacks: AiProviderName[];
+  available: Record<AiProviderName, boolean>;
+  isOverride?: boolean;
+}
+
+export const getAiProvider = (teamId?: string): Promise<AiProviderConfig> =>
+  f(`${RESULTS_URL}/system/ai-provider${teamId ? `?teamId=${encodeURIComponent(teamId)}` : ''}`).then(orgJson<AiProviderConfig>());
+
+export const setAiProvider = (provider: AiProviderName, fallbacks: AiProviderName[]): Promise<{ provider: AiProviderName; fallbacks: AiProviderName[] }> =>
+  f(`${RESULTS_URL}/system/ai-provider`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, fallbacks }),
+  }).then(orgJson<{ provider: AiProviderName; fallbacks: AiProviderName[] }>());
+
+export const setTeamAiProvider = (teamId: string, provider: AiProviderName, fallbacks: AiProviderName[]): Promise<{ provider: AiProviderName; fallbacks: AiProviderName[]; isOverride: boolean }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/ai-provider`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, fallbacks }),
+  }).then(orgJson<{ provider: AiProviderName; fallbacks: AiProviderName[]; isOverride: boolean }>());
+
+export const clearTeamAiProvider = (teamId: string): Promise<{ success: boolean }> =>
+  f(`${RESULTS_URL}/teams/${teamId}/ai-provider`, { method: 'DELETE' }).then(orgJson<{ success: boolean }>());
 
 export interface AuditLogEntry {
   id: string;

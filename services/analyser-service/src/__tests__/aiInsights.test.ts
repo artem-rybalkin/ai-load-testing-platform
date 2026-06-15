@@ -1,17 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// ── Mock @google/generative-ai before importing the module under test ─────────
-
-const mockGenerateContent = vi.fn();
-
-vi.mock('@google/generative-ai', () => {
-  class FakeGAI {
-    getGenerativeModel() {
-      return { generateContent: mockGenerateContent };
-    }
-  }
-  return { GoogleGenerativeAI: FakeGAI };
+// Mock the shared AI provider abstraction — factory must be self-contained (vi.mock is hoisted)
+vi.mock('@alt/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alt/shared')>();
+  const mockFn = vi.fn();
+  return { ...actual, generateAIText: mockFn };
 });
+
+// Mock global fetch so getProviderSetting() (results-service lookup) never makes a real network call
+vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+
+// Accessor for the shared mock function
+const getMockFn = async () => {
+  const shared = await import('@alt/shared');
+  return (shared as unknown as { generateAIText: ReturnType<typeof vi.fn> }).generateAIText;
+};
 
 // Import after mock is registered
 import { generateAiInsights } from '../aiInsights';
@@ -50,20 +53,18 @@ const makeCtx = (overrides: Partial<Parameters<typeof generateAiInsights>[0]> = 
   ...overrides,
 });
 
-const mockResponse = (text: string) => ({
-  response: { text: () => text },
-});
-
-beforeEach(() => {
-  mockGenerateContent.mockReset();
+beforeEach(async () => {
+  const mock = await getMockFn();
+  mock.mockReset();
   process.env.GEMINI_API_KEY = 'test-key';
 });
 
 // ─── Happy path ───────────────────────────────────────────────────────────────
 
 describe('generateAiInsights — happy path', () => {
-  it('returns AiInsights when Gemini returns valid JSON', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+  it('returns AiInsights when the AI provider returns valid JSON', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
 
     const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
@@ -77,8 +78,9 @@ describe('generateAiInsights — happy path', () => {
   });
 
   it('strips markdown fences from the response before parsing', async () => {
+    const mock = await getMockFn();
     const wrapped = `\`\`\`json\n${JSON.stringify(validInsightsPayload)}\n\`\`\``;
-    mockGenerateContent.mockResolvedValue(mockResponse(wrapped));
+    mock.mockResolvedValue(wrapped);
 
     const { insights } = await generateAiInsights(makeCtx());
 
@@ -87,9 +89,8 @@ describe('generateAiInsights — happy path', () => {
   });
 
   it('accepts severity "critical"', async () => {
-    mockGenerateContent.mockResolvedValue(
-      mockResponse(JSON.stringify({ ...validInsightsPayload, severity: 'critical' }))
-    );
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify({ ...validInsightsPayload, severity: 'critical' }));
 
     const { insights } = await generateAiInsights(makeCtx());
 
@@ -97,9 +98,8 @@ describe('generateAiInsights — happy path', () => {
   });
 
   it('accepts severity "info"', async () => {
-    mockGenerateContent.mockResolvedValue(
-      mockResponse(JSON.stringify({ ...validInsightsPayload, severity: 'info' }))
-    );
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify({ ...validInsightsPayload, severity: 'info' }));
 
     const { insights } = await generateAiInsights(makeCtx());
 
@@ -107,9 +107,8 @@ describe('generateAiInsights — happy path', () => {
   });
 
   it('accepts empty anomalies and rootCauses arrays', async () => {
-    mockGenerateContent.mockResolvedValue(
-      mockResponse(JSON.stringify({ ...validInsightsPayload, anomalies: [], rootCauses: [] }))
-    );
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify({ ...validInsightsPayload, anomalies: [], rootCauses: [] }));
 
     const { insights } = await generateAiInsights(makeCtx());
 
@@ -118,25 +117,29 @@ describe('generateAiInsights — happy path', () => {
   });
 });
 
-// ─── Missing/invalid API key ──────────────────────────────────────────────────
+// ─── No AI provider configured ─────────────────────────────────────────────────
 
-describe('generateAiInsights — missing API key', () => {
-  it('returns null insights immediately when GEMINI_API_KEY is not set', async () => {
+describe('generateAiInsights — no provider configured', () => {
+  it('returns null insights immediately when no AI provider API key is set', async () => {
     delete process.env.GEMINI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
 
+    const mock = await getMockFn();
     const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
     expect(insights).toBeNull();
     expect(rateLimited).toBe(false);
-    expect(mockGenerateContent).not.toHaveBeenCalled();
+    expect(mock).not.toHaveBeenCalled();
   });
 });
 
 // ─── Error cases ──────────────────────────────────────────────────────────────
 
 describe('generateAiInsights — error cases', () => {
-  it('returns null insights when Gemini returns invalid JSON', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse('not json at all'));
+  it('returns null insights when the AI provider returns invalid JSON', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue('not json at all');
 
     const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
@@ -145,9 +148,8 @@ describe('generateAiInsights — error cases', () => {
   });
 
   it('returns null insights when response is missing required fields', async () => {
-    mockGenerateContent.mockResolvedValue(
-      mockResponse(JSON.stringify({ narrative: 'ok' }))
-    );
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify({ narrative: 'ok' }));
 
     const { insights } = await generateAiInsights(makeCtx());
 
@@ -155,9 +157,8 @@ describe('generateAiInsights — error cases', () => {
   });
 
   it('returns null insights when severity is not one of the allowed values', async () => {
-    mockGenerateContent.mockResolvedValue(
-      mockResponse(JSON.stringify({ ...validInsightsPayload, severity: 'unknown' }))
-    );
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify({ ...validInsightsPayload, severity: 'unknown' }));
 
     const { insights } = await generateAiInsights(makeCtx());
 
@@ -165,39 +166,42 @@ describe('generateAiInsights — error cases', () => {
   });
 
   it('returns rateLimited=true on rate limit error (429)', async () => {
+    const mock = await getMockFn();
     const err = Object.assign(new Error('429 quota exceeded'), { status: 429 });
-    mockGenerateContent.mockRejectedValue(err);
+    mock.mockRejectedValue(err);
 
     const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
     expect(insights).toBeNull();
     expect(rateLimited).toBe(true);
     // Should not retry on rate limit
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    expect(mock).toHaveBeenCalledTimes(1);
   });
 
   it('returns null insights after exhausting retries on generic API error', async () => {
-    mockGenerateContent.mockRejectedValue(new Error('service unavailable'));
+    const mock = await getMockFn();
+    mock.mockRejectedValue(new Error('service unavailable'));
 
     const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
     expect(insights).toBeNull();
     expect(rateLimited).toBe(false);
     // Should try twice (1 attempt + 1 retry)
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mock).toHaveBeenCalledTimes(2);
   });
 
   it('succeeds on second attempt after transient error', async () => {
-    mockGenerateContent
+    const mock = await getMockFn();
+    mock
       .mockRejectedValueOnce(new Error('transient error'))
-      .mockResolvedValueOnce(mockResponse(JSON.stringify(validInsightsPayload)));
+      .mockResolvedValueOnce(JSON.stringify(validInsightsPayload));
 
     const { insights, rateLimited } = await generateAiInsights(makeCtx());
 
     expect(insights).not.toBeNull();
     expect(rateLimited).toBe(false);
     expect(insights!.severity).toBe('warning');
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -205,31 +209,34 @@ describe('generateAiInsights — error cases', () => {
 
 describe('generateAiInsights — prompt includes key context', () => {
   it('includes targetUrl in the prompt', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
 
     await generateAiInsights(makeCtx({ targetUrl: 'https://checkout.example.com/api/pay' }));
 
-    const prompt = mockGenerateContent.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0][0] as string;
     expect(prompt).toContain('https://checkout.example.com/api/pay');
   });
 
   it('includes threshold violations in the prompt when present', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
 
     await generateAiInsights(makeCtx({
       thresholdViolations: ['p95 response time 1500ms exceeds threshold 1000ms'],
     }));
 
-    const prompt = mockGenerateContent.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0][0] as string;
     expect(prompt).toContain('p95 response time 1500ms exceeds threshold 1000ms');
   });
 
   it('shows "None" when there are no threshold violations', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
 
     await generateAiInsights(makeCtx({ thresholdViolations: [] }));
 
-    const prompt = mockGenerateContent.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0][0] as string;
     expect(prompt).toContain('None');
   });
 });
@@ -253,7 +260,8 @@ describe('performance', () => {
   };
 
   it('builds the prompt for a 50-step flow within a generous time budget', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
 
     const start = performance.now();
     await generateAiInsights(makeCtx({ metrics: manyStepsMetrics }));
@@ -265,11 +273,12 @@ describe('performance', () => {
   });
 
   it('caps stepMetrics in the prompt to the top 5 by p95ResponseTime', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
 
     await generateAiInsights(makeCtx({ metrics: manyStepsMetrics }));
 
-    const prompt = mockGenerateContent.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0][0] as string;
 
     // Compute expected top-5 steps by p95ResponseTime (descending), matching
     // the sort+slice(0, 5) implemented in buildPayload's topStepsByP95.
@@ -297,7 +306,8 @@ describe('performance', () => {
   });
 
   it('includes the error breakdown line for a large statusCodes/error map without ballooning prompt size', async () => {
-    mockGenerateContent.mockResolvedValue(mockResponse(JSON.stringify(validInsightsPayload)));
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
 
     const metricsWithErrors: BackendMetrics = {
       ...manyStepsMetrics,
@@ -306,11 +316,71 @@ describe('performance', () => {
 
     await generateAiInsights(makeCtx({ metrics: metricsWithErrors }));
 
-    const prompt = mockGenerateContent.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0][0] as string;
     expect(prompt).toContain('Error breakdown: 30 server (5xx), 50 client (4xx), 15 timeouts, 5 network');
 
     // Even with 50 steps + error breakdown, the prompt stays well within a
     // reasonable token budget (~4 chars/token; 20000 chars ≈ 5000 tokens).
     expect(prompt.length).toBeLessThan(20000);
+  });
+});
+
+// ─── Per-team AI provider resolution (AI-15 Phase C) ──────────────────────────
+
+describe('generateAiInsights — per-team provider resolution', () => {
+  it('passes ctx.teamId as ?teamId= when fetching the provider setting', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateAiInsights(makeCtx({ teamId: 'team-alpha' }));
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).toContain(`teamId=${encodeURIComponent('team-alpha')}`);
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('omits ?teamId= when ctx.teamId is not set', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'gemini', fallbacks: [], available: {} }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateAiInsights(makeCtx({ teamId: null }));
+
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
+    expect(url).not.toContain('teamId=');
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('caches provider settings independently per team', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ provider: 'openai', fallbacks: [], available: {}, isOverride: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateAiInsights(makeCtx({ teamId: 'team-cache-a' }));
+    await generateAiInsights(makeCtx({ teamId: 'team-cache-b' }));
+    await generateAiInsights(makeCtx({ teamId: 'team-cache-a' })); // should hit the per-team cache, not refetch
+
+    const aiProviderCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes('/system/ai-provider'));
+    expect(aiProviderCalls.length).toBe(2); // one fetch per distinct teamId
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
   });
 });

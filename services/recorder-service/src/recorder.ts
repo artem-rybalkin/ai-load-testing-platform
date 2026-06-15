@@ -32,6 +32,7 @@ export interface RecordingSessionInternal {
   onStep: (() => void) | null; // called when a new step is captured
   startedAt: number;     // epoch ms when the session was created
   lastActivityAt: number; // epoch ms of the last captured request
+  teamId?: string | null; // team whose AI provider override should be used for correlation
 }
 
 // ─── Static assets we always skip ────────────────────────────────────────────

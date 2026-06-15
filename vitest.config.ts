@@ -22,20 +22,23 @@ export default defineConfig({
     include: [
       'services/*/src/__tests__/**/*.test.ts',
       'services/ui/__tests__/**/*.test.tsx',
+      'packages/*/src/__tests__/**/*.test.ts',
     ],
     environment: 'node',
     environmentMatchGlobs: [
       ['services/ui/**', 'jsdom'],
     ],
     setupFiles: ['services/ui/__tests__/setup.ts'],
+    globalSetup: ['./test-support/globalSetup.ts'],
     testTimeout: 120000,
     hookTimeout: 120000,
     pool: 'threads',
-    // Capped at 2 to prevent simultaneous Testcontainer PostgreSQL container
-    // exhaustion when all 5 results-service integration test files run together.
-    // Each file spins up its own pg container; 4+ concurrent containers race for
-    // Docker socket resources and fail with "pool is undefined".
-    maxWorkers: 2,
+    // All Testcontainers-based integration test files share a single PostgreSQL
+    // container (started once in globalSetup), each creating its own isolated
+    // database on it — see test-support/sharedPostgres.ts. This removes the
+    // per-file container startup cost that previously forced maxWorkers down to 2
+    // and caused resource-contention timeouts on the full suite.
+    maxWorkers: 4,
     minWorkers: 1,
     coverage: {
       provider: 'v8',

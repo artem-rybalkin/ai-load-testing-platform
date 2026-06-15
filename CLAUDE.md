@@ -57,7 +57,7 @@ node-cron in results-service → POST /tests (auto-trigger on schedule)
 - **Message Queue:** RabbitMQ (amqplib)
 - **Rate Limiting:** ioredis-backed shared store (api-service + results-service)
 - **Database:** PostgreSQL (pg)
-- **AI:** Google Gemini API (@google/generative-ai), model: gemini-3.1-flash-lite (configurable via `GEMINI_MODEL`)
+- **AI:** Pluggable provider (`@alt/shared` → `generateAIText()`): Google Gemini API (@google/generative-ai, model `gemini-3.1-flash-lite`, configurable via `GEMINI_MODEL`) is the default provider; OpenAI (`openai`, model via `OPENAI_MODEL`) and Anthropic Claude (`@anthropic-ai/sdk`, model via `ANTHROPIC_MODEL`) can be configured as primary or fallback (admin-configurable via Team page → AI Provider / `GET`+`PUT /system/ai-provider`)
 - **Load Testing:** k6 (installed in worker-backend Docker image)
 - **Browser Testing:** Puppeteer 22 + Lighthouse (headless Chromium in Alpine)
 - **Frontend:** Vite 6 + React Router v7 + Tailwind CSS 4 + Recharts
@@ -88,7 +88,12 @@ ai-load-testing-platform/
 │   └── compare.spec.ts       # create 2 tests → select → compare view
 ├── packages/
 │   └── shared/               # @alt/shared — shared types (build: npm run build:shared)
-│       └── src/index.ts
+│       └── src/
+│           ├── index.ts      # shared types + re-exports
+│           └── aiProvider.ts # pluggable AI provider abstraction: generateAIText(), isProviderConfigured(),
+│                              #   AiProviderName/AiProviderSetting/AI_PROVIDER_NAMES/DEFAULT_AI_PROVIDER_SETTING
+│       └── src/__tests__/
+│           └── aiProvider.test.ts # isProviderConfigured + generateAIText fallback-chain tests
 └── services/
     ├── api-service/          # @alt/api-service
     │   └── src/
@@ -151,6 +156,7 @@ ai-load-testing-platform/
     │       ├── db.ts         # PostgreSQL pool, createSchema (all tables + migrations), findOrCreateProject
     │       ├── scheduler.ts  # node-cron, startScheduler, triggerSchedule
     │       ├── cleanup.ts    # runStaleCleanup: running>15min / pending>30min → failed
+    │       ├── settings.ts   # getAiProviderSetting/setAiProviderSetting — app_settings 'ai_provider' row
     │       └── logger.ts
     │   └── src/__tests__/
     │       ├── api.test.ts       # all REST endpoints (Testcontainers)
@@ -160,7 +166,8 @@ ai-load-testing-platform/
     │       ├── session.test.ts   # createSession/getSession/revokeSession/switchSessionTeam unit tests (Testcontainers)
     │       ├── consumer.test.ts  # handleResult pipeline, webhooks, baseline ordering
     │       ├── stale.test.ts     # runStaleCleanup unit tests (Testcontainers)
-    │       └── scheduler.test.ts # startScheduler, triggerSchedule (mocked node-cron)
+    │       ├── scheduler.test.ts # startScheduler, triggerSchedule (mocked node-cron)
+    │       └── aiProvider.test.ts # GET/PUT /system/ai-provider — availability, admin-only update, RBAC (Testcontainers)
     └── ui/                   # @alt/ui — Vite 6 + React Router v7 SPA
         ├── index.html        # Vite entry HTML (loads src/main.tsx)
         ├── vite.config.ts    # Vite config: tailwindcss plugin, @/ alias, polling watcher
@@ -438,6 +445,23 @@ CREATE TABLE audit_log (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX audit_log_team_id_idx ON audit_log(team_id, created_at DESC);
+
+-- Global app settings (key/value) — migration #10
+-- 'ai_provider' key holds JSON-encoded AiProviderSetting { provider, fallbacks }
+CREATE TABLE app_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- Per-team AI provider override — migration #11
+-- A row only exists once a team admin customizes the setting; absence = "use platform default"
+CREATE TABLE team_ai_providers (
+  team_id    UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  provider   VARCHAR(20) NOT NULL,
+  fallbacks  TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 ```
 
 ## Shared Types (@alt/shared)
@@ -446,6 +470,13 @@ CREATE INDEX audit_log_team_id_idx ON audit_log(team_id, created_at DESC);
 type TestType    = 'backend' | 'client-side' | 'flow'
 type TestStatus  = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak'
+
+type AiProviderName = 'gemini' | 'openai' | 'anthropic'
+const AI_PROVIDER_NAMES: AiProviderName[] = ['gemini', 'openai', 'anthropic']
+interface AiProviderSetting { provider: AiProviderName; fallbacks: AiProviderName[] }
+const DEFAULT_AI_PROVIDER_SETTING: AiProviderSetting = { provider: 'gemini', fallbacks: [] }
+// isProviderConfigured(provider) — true if that provider's API key env var is set
+// generateAIText(prompt, setting) — tries provider then fallbacks in order, returns first success
 
 type ExtractSource = 'jsonpath' | 'header' | 'cookie' | 'regex'
 interface ExtractRule { source: ExtractSource; expression: string }
@@ -578,6 +609,8 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `GET  /results/:testId/report.pdf` — download pdfkit PDF report
 - `GET  /results/:testId/report.csv` — download CSV metrics export (summary + per-step rows for flow tests)
 - `GET  /system/health`           — aggregated health of all 5 services (calls each /health in parallel)
+- `GET  /system/ai-provider`      — public (no auth); returns `{ provider, fallbacks, available: { gemini, openai, anthropic } }` — `available` reflects which providers have an API key configured in env; with `?teamId=<id>`, returns the effective per-team setting (team override if one exists, else the global default) plus `isOverride: boolean`
+- `PUT  /system/ai-provider`      — admin only; body `{ provider, fallbacks? }` (each an `AiProviderName`); validates `provider` is one of `gemini|openai|anthropic` (`400` otherwise), strips `provider` out of `fallbacks`, persists to `app_settings`
 
 **Scripts**
 - `GET  /scripts`      — all saved scripts (by used_count DESC)
@@ -626,6 +659,10 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `GET /teams/:id/quotas` — any member of team `:id`; returns `{ quota: TeamQuota, usage: TeamUsage }` (absent `team_quotas` row → `DEFAULT_TEAM_QUOTA`)
 - `PUT /teams/:id/quotas` — admin only; body is a partial `TeamQuota` (positive integers); upserts `team_quotas`
 
+**Per-Team AI Provider Override (RBAC — requires SESSION_SECRET, admin only)**
+- `PUT    /teams/:id/ai-provider` — body `{ provider, fallbacks? }` (each an `AiProviderName`); validates `provider` is one of `gemini|openai|anthropic` (`400` otherwise), strips `provider`/invalid entries out of `fallbacks`; upserts `team_ai_providers`; returns `{ provider, fallbacks, isOverride: true }`
+- `DELETE /teams/:id/ai-provider` — deletes the `team_ai_providers` row, reverting the team to the platform default; returns `{ success: true }`
+
 **Per-Team API Keys (RBAC — requires SESSION_SECRET, admin only)**
 - `POST   /teams/:id/api-keys` — `{ name }` → generates `crypto.randomBytes(24).toString('hex')`, stores `sha256(key)`; returns `{ id, name, key, createdAt }` — **the raw `key` is shown only once**
 - `GET    /teams/:id/api-keys` — list `[{ id, name, createdAt, lastUsedAt, revoked }]` (no key material)
@@ -673,9 +710,36 @@ After 3 retries the message is routed to `<queue>.dlq` and acked.
 ### Semantic Script Comparison (ai-service/generator.ts)
 
 `compareDescriptions(newDescription, storedDescription)` → `'REUSE' | 'REGENERATE'`
-- Sends both descriptions to the configured Gemini model (`GEMINI_MODEL`, default `gemini-3.1-flash-lite`) with a tight prompt asking for one-word verdict
+- Sends both descriptions to the configured AI provider (see "Pluggable AI Provider" below) with a tight prompt asking for one-word verdict
 - Defaults to `'REGENERATE'` on any unexpected response or error (safe fallback)
 - Same 3-attempt retry loop with 60/120/180s backoff as `generateScript`
+
+### Pluggable AI Provider (AI-15)
+
+`@alt/shared` → `packages/shared/src/aiProvider.ts` provides a provider-agnostic `generateAIText(prompt, setting)`:
+- `AiProviderName = 'gemini' | 'openai' | 'anthropic'`; `AiProviderSetting { provider, fallbacks }`; `DEFAULT_AI_PROVIDER_SETTING = { provider: 'gemini', fallbacks: [] }`
+- `isProviderConfigured(provider)` checks `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
+- `generateAIText(prompt, { provider, fallbacks })` tries the primary provider, then each fallback in order (dynamic `import()` of `@google/generative-ai` / `openai` / `@anthropic-ai/sdk`); throws the last error (preserving `.status` for 429 handling) if every provider in the chain fails or is unconfigured
+- Models: Gemini via `GEMINI_MODEL` (default `gemini-3.1-flash-lite`), OpenAI via `OPENAI_MODEL` (default `gpt-4o-mini`), Anthropic via `ANTHROPIC_MODEL` (default `claude-3-5-haiku-latest`)
+
+**Active setting storage** (results-service):
+- `app_settings` table (migration #10), key `ai_provider` → JSON-encoded `AiProviderSetting`; `getAiProviderSetting`/`setAiProviderSetting` in `results-service/src/settings.ts`
+- `GET /system/ai-provider` (public) / `PUT /system/ai-provider` (admin-only) — see API Endpoints
+- All of results-service's own Gemini call sites (`/ai/cron`, `/ai/trend-narrative`, `/ai/webhook-noise`, `/ai/preset-name`, `/ai/param-suggestions`, `/results/suggest-settings`, `/results/suggest-thresholds`, `/results/:testId/diagnose`, and the AI-8 PDF executive summary) resolve the active setting via `getAiProviderSetting(pool)` and call `generateAIText`; each returns `503 { error: 'No AI provider configured' }` if no provider in the chain has an API key (or silently skips, for the PDF summary)
+
+**ai-service** (`generator.ts`):
+- `getProviderSetting()` fetches `GET ${RESULTS_URL}/system/ai-provider` (with `X-Internal-Key` if `INTERNAL_API_KEY` set), cached for 30s in module-level state; falls back to the last-cached/default setting if results-service is unreachable
+- `generateScript()` and `compareDescriptions()` both call `generateAIText(prompt, setting)` instead of talking to the Gemini SDK directly, preserving the existing 429-retry/backoff loops
+
+**UI**: Team page → "AI Provider" section (admin only) — dropdown for the primary provider + checkboxes for the fallback chain, each option labeled "(not configured)" when that provider's API key is absent; `getAiProvider()`/`setAiProvider()` in `lib/api.ts`
+
+**Phase B (done)**: analyser-service's `aiInsights.ts` and recorder-service's `correlator.ts` (`suggestIgnorePatterns`, `suggestStepNames`, `detectCorrelations`) now resolve the configured provider+fallback chain via the same cached `getProviderSetting()`/`isAnyProviderConfigured()` pattern and call `generateAIText()` instead of the Gemini SDK directly.
+
+**Phase C (done)**: per-team AI provider override. `team_ai_providers` table (migration #11, one row per team, `team_id PK REFERENCES projects(id)`, `provider`, `fallbacks TEXT[]`) — a row only exists once a team admin customizes the setting; absence means "use the platform default" (same convention as `team_quotas`). `results-service/src/settings.ts` adds `getTeamAiProviderSetting`/`setTeamAiProviderSetting`/`clearTeamAiProviderSetting`/`getEffectiveAiProviderSetting(pool, teamId?)` (team override if present, else global default). `GET /system/ai-provider?teamId=<id>` returns `{ provider, fallbacks, available, isOverride }` (`isOverride` true if a `team_ai_providers` row exists); without `teamId` behavior is unchanged. `PUT`/`DELETE /teams/:id/ai-provider` (admin-only, team-membership-checked) set/clear the team's override.
+
+Downstream services resolve the effective per-team setting: ai-service's `getProviderSetting(teamId?)` (cache is now a `Map<string, {...}>` keyed by `teamId ?? '__global__'`, 30s TTL) is called with `test.projectId` from `generateScript`/`compareDescriptions`; analyser-service's `generateAiInsights` receives `teamId` via `InsightsContext` (results-service's `consumer.ts` passes `teamId: projectId` in the `/analyse` POST body); recorder-service's `detectCorrelations`/`suggestStepNames`/`suggestIgnorePatterns` accept an optional `teamId` sourced from `POST /recordings/start`'s body (`session.teamId`).
+
+UI: Team page → "AI Provider" section shows a "Custom for this team" / "Using platform default" badge based on `isOverride`, with a "Revert to platform default" button when overridden; saves go to `PUT /teams/:id/ai-provider` (`setTeamAiProvider`). `FlowBuilder` accepts an optional `teamId` prop (passed from `app/page.tsx` as `user?.currentTeamId`) and forwards it to `startRecording()`.
 
 **ai-service consumer branching:**
 - If `cachedScript` + `description` present and `cachedScriptDescription != null` → call `compareDescriptions()`
@@ -974,6 +1038,11 @@ k6 exit codes: `0` = pass, `99` = threshold violation (test ran; resolve with me
 ```bash
 # .env (root — NEVER commit, add to .gitignore)
 GEMINI_API_KEY=your_key_here
+# GEMINI_MODEL=gemini-3.1-flash-lite   # default Gemini model
+# OPENAI_API_KEY=your_key_here         # optional — enables OpenAI as a selectable/fallback AI provider
+# OPENAI_MODEL=gpt-4o-mini             # default OpenAI model
+# ANTHROPIC_API_KEY=your_key_here      # optional — enables Claude (Anthropic) as a selectable/fallback AI provider
+# ANTHROPIC_MODEL=claude-3-5-haiku-latest  # default Anthropic model
 # COMPOSE_BAKE=true           # disabled — Windows path bug (doubled absolute path in bake evaluation)
 
 # Set automatically by docker-compose:
@@ -1073,7 +1142,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~940 tests across 48 test files (`npm test` reports ~937 tests; some intentionally skipped in non-Docker/full-suite contexts)
+**Total:** ~950 tests across 50 test files (`npm test` reports ~947 tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -1083,12 +1152,14 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `api-service/src/__tests__/options.test.ts` | `buildK6Options`, `replaceK6Options`, `httpOptions` (http2, discard) | 16 |
 | `api-service/src/__tests__/index.test.ts` | POST /tests routing, parameterization passthrough, cancel, health, sensitive-field redaction, quota 429s | 22 |
 | `results-service/src/__tests__/scheduler.test.ts` | `startScheduler`, `triggerSchedule` (mocked cron), `project_id` passthrough | 12 |
-| `ai-service/src/__tests__/generator.test.ts` | `FLOW_PROMPT` ExtractRule rendering, parameterization, `compareDescriptions` | 12 |
+| `ai-service/src/__tests__/generator.test.ts` | `FLOW_PROMPT` ExtractRule rendering, parameterization, `compareDescriptions`, AI provider abstraction | 41 |
+| `packages/shared/src/__tests__/aiProvider.test.ts` | `isProviderConfigured`, `generateAIText` primary + fallback-chain behavior | 9 |
 
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
 |------|---------|-------|
-| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export + threshold preview | 98 |
+| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export + threshold preview | 106 |
+| `results-service/src/__tests__/aiProvider.test.ts` | `GET`/`PUT /system/ai-provider` — available providers, admin-only update, fallback validation, RBAC | 7 |
 | `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 43 |
 | `results-service/src/__tests__/orgs.test.ts` | POST /orgs, GET /orgs/:id, member role mgmt, last-owner protection, POST /orgs/:id/teams, cross-org isolation | 22 |
 | `results-service/src/__tests__/teams.test.ts` | POST /teams, GET/POST/PUT/DELETE /teams/:id/members, role enforcement, last-admin protection, audit log, data erasure | 35 |
@@ -1110,7 +1181,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 | `ui/__tests__/AuthContext.test.tsx` | AuthProvider loading/user/setUser/switchTeam state, AuthGate redirect/render | 6 |
 | `ui/__tests__/home.test.tsx` | form validation, Advanced settings, preset dropdown, INP/TBT SLO inputs, threshold preview | 18 |
 | `ui/__tests__/LoginPage.test.tsx` | sign-in mode + register mode forms, API calls, setUser+navigate, errors, disabled states | 11 |
-| `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke), Audit Log (admin only), Danger Zone data erasure | 22 |
+| `ui/__tests__/TeamPage.test.tsx` | dev-mode message, admin member list/add/role-change/remove, non-admin read-only view, Usage & Limits, API Keys (generate/revoke), Audit Log (admin only), Danger Zone data erasure, AI Provider section | 26 |
 | `ui/__tests__/FlowBuilder.test.tsx` | request headers editor, recording lifecycle, HAR import, step reordering (↑/↓ + drag-and-drop) | 54 |
 | `ui/__tests__/OrgPage.test.tsx` | org member list, admin add/role-change/remove, teams-in-org list, "+ New team" form | 9 |
 | `ui/__tests__/results.test.tsx` | compare bar, checkboxes, links, Re-run button | 9 |

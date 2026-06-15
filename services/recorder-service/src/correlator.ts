@@ -1,6 +1,43 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { FlowStep, RecordedRequest, ExtractRule, ExtractSource, redactPII } from '@alt/shared';
+import {
+  FlowStep, RecordedRequest, ExtractRule, ExtractSource, redactPII,
+  AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, isProviderConfigured,
+} from '@alt/shared';
 import { log } from './logger';
+
+const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+const PROVIDER_CACHE_MS = 30000;
+
+const providerCache = new Map<string, { setting: AiProviderSetting; cachedAt: number }>();
+
+/** Fetches the configured AI provider + fallback chain (team override or global default) from results-service, cached for 30s per team. */
+const getProviderSetting = async (teamId?: string | null): Promise<AiProviderSetting> => {
+  const cacheKey = teamId ?? '__global__';
+  const cached = providerCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < PROVIDER_CACHE_MS) return cached.setting;
+  try {
+    const url = teamId
+      ? `${RESULTS_URL}/system/ai-provider?teamId=${encodeURIComponent(teamId)}`
+      : `${RESULTS_URL}/system/ai-provider`;
+    const res = await fetch(url, {
+      headers: INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {},
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const data = await res.json() as AiProviderSetting;
+      const setting = { provider: data.provider, fallbacks: data.fallbacks };
+      providerCache.set(cacheKey, { setting, cachedAt: Date.now() });
+      return setting;
+    }
+  } catch {
+    // results-service unreachable — keep using cached/default setting
+  }
+  return cached?.setting ?? DEFAULT_AI_PROVIDER_SETTING;
+};
+
+/** True if any provider in the primary+fallback chain has an API key configured. */
+const isAnyProviderConfigured = (setting: AiProviderSetting): boolean =>
+  [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
 
 // ─── AI-powered correlation detection ─────────────────────────────────────────
 //
@@ -222,9 +259,9 @@ function applyCorrelations(requests: RecordedRequest[], steps: FlowStep[], corre
 export let correlatorRateLimited = false;
 
 /** Analyse all captured domains and suggest ignore patterns for next recording. */
-export async function suggestIgnorePatterns(requests: RecordedRequest[]): Promise<string[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || requests.length === 0) return [];
+export async function suggestIgnorePatterns(requests: RecordedRequest[], teamId?: string | null): Promise<string[]> {
+  const setting = await getProviderSetting(teamId);
+  if (!isAnyProviderConfigured(setting) || requests.length === 0) return [];
 
   // Count requests per domain
   const domainCounts: Record<string, number> = {};
@@ -250,11 +287,7 @@ Return ONLY valid JSON array of domain strings to ignore. Use exact hostnames on
 If all domains are relevant, return: []`;
 
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
+    const text = (await generateAIText(prompt, setting)).trim();
     const match = text.match(/\[[\s\S]*\]/);
     if (!match) {
       log.debug({ domains, text }, 'Ignore-pattern suggestion: no JSON array in response');
@@ -314,9 +347,9 @@ export function detectDuplicateSteps(steps: FlowStep[]): DeduplicationSuggestion
 }
 
 /** Ask Gemini to replace mechanical step names with human-readable labels. */
-export async function suggestStepNames(steps: FlowStep[]): Promise<FlowStep[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || steps.length === 0) return steps;
+export async function suggestStepNames(steps: FlowStep[], teamId?: string | null): Promise<FlowStep[]> {
+  const setting = await getProviderSetting(teamId);
+  if (!isAnyProviderConfigured(setting) || steps.length === 0) return steps;
 
   const input = steps.map((s, i) => ({ index: i, method: s.method, url: s.url }));
   const prompt = `You are an expert in web APIs and load testing.
@@ -330,11 +363,7 @@ Return ONLY valid JSON array with one name string per step (same order, same cou
 ["name for step 0", "name for step 1", ...]`;
 
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
+    const text = (await generateAIText(prompt, setting)).trim();
     const match = text.match(/\[[\s\S]*\]/);
     if (!match) return steps;
     const names: string[] = JSON.parse(match[0]);
@@ -350,10 +379,11 @@ Return ONLY valid JSON array with one name string per step (same order, same cou
 export async function detectCorrelations(
   requests: RecordedRequest[],
   steps: FlowStep[],
+  teamId?: string | null,
 ): Promise<FlowStep[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    log.warn('GEMINI_API_KEY not set — skipping correlation detection');
+  const setting = await getProviderSetting(teamId);
+  if (!isAnyProviderConfigured(setting)) {
+    log.warn('No AI provider configured — skipping correlation detection');
     return steps;
   }
   if (requests.length < 2) {
@@ -363,10 +393,7 @@ export async function detectCorrelations(
   const summary = buildSummary(requests);
 
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-    const result = await model.generateContent(CORRELATION_PROMPT(summary));
-    const text = result.response.text().trim();
+    const text = (await generateAIText(CORRELATION_PROMPT(summary), setting)).trim();
 
     // Extract JSON even if Gemini wraps it in markdown code fences
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -389,7 +416,7 @@ export async function detectCorrelations(
     const status = (err as { status?: number }).status;
     if (status === 429 || msg.includes('429') || msg.includes('quota')) {
       correlatorRateLimited = true;
-      log.warn('Gemini rate limited during correlation detection');
+      log.warn('AI provider rate limited during correlation detection');
     } else {
       log.warn({ err }, 'Correlation detection failed — returning steps without extraction rules');
     }

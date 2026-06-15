@@ -1,3 +1,5 @@
+export * from './aiProvider';
+
 export type TestType = 'backend' | 'client-side' | 'flow';
 
 export type TestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';

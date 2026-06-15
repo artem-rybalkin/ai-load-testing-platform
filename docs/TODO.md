@@ -32,7 +32,9 @@ Improvements, suggestions, and large future work items.
 - [x] **AI-14: Preset name + tag auto-suggestion** — On "Save preset", `POST /ai/preset-name` → Gemini → auto-fills name + shows tag chips; non-fatal fallback to description/URL
 
 ### 🆕 New ideas — not yet prioritized
-- [ ] **AI-15: Fallback to another provider (OpenAI/Claude API)** — solves the single-point-of-failure problem on Gemini and looks like a more mature architecture; needs a pluggable provider abstraction so script generation/insights/etc. can retry against OpenAI or Claude when Gemini is rate-limited or unreachable
+- [x] **AI-15: Fallback to another provider (OpenAI/Claude API)** — Gemini remains the default; `@alt/shared`'s `generateAIText()` pluggable provider abstraction (`AiProviderSetting { provider, fallbacks }`) supports OpenAI/Anthropic as primary or fallback. results-service stores the active setting in `app_settings` (`GET`/`PUT /system/ai-provider`, admin-only PUT); ai-service's `generator.ts` and results-service's `/ai/*`/`/results/suggest-*`/`/results/:testId/diagnose`/PDF executive-summary endpoints all resolve the configured provider+fallback chain (ai-service caches the lookup for 30s). UI: admin-only "AI Provider" section on the Team page (provider dropdown + fallback checkboxes, shows "(not configured)" when an API key is missing).
+  - **Phase B (done)**: analyser-service's `aiInsights.ts` and recorder-service's `correlator.ts` (`suggestIgnorePatterns`, `suggestStepNames`, `detectCorrelations`) now use `generateAIText`/`getProviderSetting`/`isAnyProviderConfigured` (same 30s-cached `GET /system/ai-provider` lookup pattern as ai-service); docker-compose wires `OPENAI_API_KEY`/`OPENAI_MODEL`/`ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` (+ `RESULTS_URL`/`INTERNAL_API_KEY` for recorder-service) into both services.
+  - **Phase C (done)**: per-team override via `team_ai_providers` (migration #11, `team_quotas`-style — absent row = use platform default). `GET /system/ai-provider?teamId=<id>` returns the effective setting + `isOverride`; `PUT`/`DELETE /teams/:id/ai-provider` (admin-only) set/clear the override. ai-service, analyser-service, and recorder-service all resolve the per-team setting (`getProviderSetting(teamId?)` with a `Map`-based 30s cache); recorder-service gets `teamId` via `POST /recordings/start`. Team page shows "Custom for this team" / "Using platform default" + a "Revert to platform default" button.
 - [ ] **AI-16: Better prompt engineering** — add more k6/Puppeteer pattern examples to the system prompts (BACKEND_PROMPT/CLIENT_PROMPT/FLOW_PROMPT) to improve generated-script quality and consistency
 
 ## High Priority (Tech Debt)
@@ -94,10 +96,6 @@ Improvements, suggestions, and large future work items.
 - [x] **RabbitMQ persistence** — Audited all 5 queue-connected services: every queue (`ai-requests`, `backend-tests`, `client-tests`, `test-results`, and all `.dlq` queues) is asserted with `durable: true`, every `sendToQueue`/`publish` call uses `{ persistent: true }`, and `rabbitmq_data` is a named Docker volume (`docker-compose.yml`) so messages survive broker restarts. Only the `cancel-fanout` signal is non-persistent, which is correct — it targets ephemeral per-replica exclusive/auto-delete queues
 - [x] **OpenTelemetry tracing** — `tracing.ts` in all 7 services; auto-instruments Fastify/pg/amqplib/fetch/k6; `test.id` span attribute; exports to Tempo via `OTEL_EXPORTER_OTLP_ENDPOINT`; disabled with `OTEL_SDK_DISABLED=true`
 - [x] **worker-client TTFB accuracy** — Now uses `performance.getEntriesByType('navigation')[0].responseStart - requestStart` via `page.evaluate()` — excludes DNS/TCP/TLS/settle time
-
-## Future Features
-
-- [ ] **RUM (Real User Monitoring)** — collect vitals from real end users via an injected script snippet; report LCP, INP, CLS, TTFB back to results-service for comparison with synthetic test results
 
 ## MEGA Features (requires deep investigation)
 

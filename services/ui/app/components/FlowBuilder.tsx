@@ -14,6 +14,7 @@ interface Props {
   onTestDataChange: (rows: Array<Record<string, string>>) => void;
   csvFile: { name: string; data: string } | null;
   onCsvChange: (file: { name: string; data: string } | null) => void;
+  teamId?: string;
 }
 
 const SOURCE_PLACEHOLDERS: Record<ExtractSource, string> = {
@@ -96,7 +97,7 @@ export const parseHar = (raw: string): FlowStep[] => {
   }
 };
 
-export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange, testData, onTestDataChange, csvFile, onCsvChange }: Props) {
+export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange, testData, onTestDataChange, csvFile, onCsvChange, teamId }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const csvRef  = useRef<HTMLInputElement>(null);
   const ignoreFileRef = useRef<HTMLInputElement>(null);
@@ -275,7 +276,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
     setRecordingError(null);
     setRecordingLaunching(true);
     try {
-      const session = await startRecording(steps[0]?.url, ignorePatterns.length ? ignorePatterns : undefined);
+      const session = await startRecording(steps[0]?.url, ignorePatterns.length ? ignorePatterns : undefined, teamId);
       setRecording(session);
       // Register a callback so the viewer tab can push the full /stop result back via window.opener
       (window as any).__recordingDone = (result: StopResult) => {

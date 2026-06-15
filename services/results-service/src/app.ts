@@ -14,8 +14,25 @@ import { createSession, getSession, revokeSession, switchSessionTeam, hashApiKey
 import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, incrementGeminiUsage, getTeamUsage } from './quotas';
 import { redisClient } from './redis';
 import { recordAudit } from './audit';
-import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics } from '@alt/shared';
+import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics, AiProviderName } from '@alt/shared';
+import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText } from '@alt/shared';
 import { analyzeResult } from './analyzer';
+import {
+  getAiProviderSetting, setAiProviderSetting,
+  getTeamAiProviderSetting, setTeamAiProviderSetting, clearTeamAiProviderSetting, getEffectiveAiProviderSetting,
+} from './settings';
+
+/** Generates text using the team's configured AI provider (with fallback chain). */
+const aiGenerateText = async (pool: Pool, prompt: string): Promise<string> => {
+  const setting = await getAiProviderSetting(pool);
+  return generateAIText(prompt, setting);
+};
+
+/** Whether any provider in the configured chain has an API key set. */
+const isAiConfigured = async (pool: Pool): Promise<boolean> => {
+  const setting = await getAiProviderSetting(pool);
+  return [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
+};
 
 // Augment Fastify request type with session info — must be at module level
 declare module 'fastify' {
@@ -126,6 +143,9 @@ export const buildApp = async (
     const url = request.url.split('?')[0];
     if (url.startsWith('/auth/')) return;
     if (publicPaths.has(url)) return;
+    // GET is read by ai-service (no session) to pick the active provider; PUT
+    // still requires normal session/admin auth (handled below + in the handler).
+    if (url === '/system/ai-provider' && request.method === 'GET') return;
 
     if (isInternalCallback(url, request.method)) {
       if (internalApiKey && request.headers['x-internal-key'] !== internalApiKey) {
@@ -557,6 +577,32 @@ export const buildApp = async (
     return { quota };
   });
 
+  // ── Per-team AI provider override (AI-15 Phase C) ─────────────────────────
+  app.put<{ Params: { id: string }; Body: { provider: AiProviderName; fallbacks?: AiProviderName[] } }>(
+    '/teams/:id/ai-provider',
+    async (request, reply) => {
+      if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+      if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+
+      const { provider, fallbacks } = request.body ?? {};
+      if (!AI_PROVIDER_NAMES.includes(provider)) {
+        return reply.code(400).send({ error: `provider must be one of: ${AI_PROVIDER_NAMES.join(', ')}` });
+      }
+      const cleanFallbacks = (fallbacks ?? []).filter(f => AI_PROVIDER_NAMES.includes(f) && f !== provider);
+      const setting = { provider, fallbacks: cleanFallbacks };
+      await setTeamAiProviderSetting(pool, request.params.id, setting);
+      return { ...setting, isOverride: true };
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>('/teams/:id/ai-provider', async (request, reply) => {
+    if (request.params.id !== request.projectId) return reply.code(403).send({ error: 'Not a member of this team' });
+    if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+
+    await clearTeamAiProviderSetting(pool, request.params.id);
+    return { success: true };
+  });
+
   // ── Audit log ──────────────────────────────────────────────────────────────
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>('/teams/:id/audit-log', async (request, reply) => {
     if (!sessionSecret || !request.user) return reply.code(403).send({ error: 'Not available' });
@@ -877,6 +923,40 @@ export const buildApp = async (
       return { quotaExceeded: false };
     }
   });
+
+  // ── AI-15: Pluggable AI provider (Gemini default, OpenAI/Anthropic fallback) ──
+  app.get<{ Querystring: { teamId?: string } }>('/system/ai-provider', async (request) => {
+    const teamId = request.query?.teamId;
+    const available = {
+      gemini: isProviderConfigured('gemini'),
+      openai: isProviderConfigured('openai'),
+      anthropic: isProviderConfigured('anthropic'),
+    };
+    if (teamId) {
+      const [setting, teamSetting] = await Promise.all([
+        getEffectiveAiProviderSetting(pool, teamId),
+        getTeamAiProviderSetting(pool, teamId),
+      ]);
+      return { provider: setting.provider, fallbacks: setting.fallbacks, available, isOverride: teamSetting !== null };
+    }
+    const setting = await getAiProviderSetting(pool);
+    return { provider: setting.provider, fallbacks: setting.fallbacks, available };
+  });
+
+  app.put<{ Body: { provider: AiProviderName; fallbacks?: AiProviderName[] } }>(
+    '/system/ai-provider',
+    async (request, reply) => {
+      if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+      const { provider, fallbacks } = request.body;
+      if (!AI_PROVIDER_NAMES.includes(provider)) {
+        return reply.code(400).send({ error: `provider must be one of: ${AI_PROVIDER_NAMES.join(', ')}` });
+      }
+      const cleanFallbacks = (fallbacks ?? []).filter(f => AI_PROVIDER_NAMES.includes(f) && f !== provider);
+      const setting = { provider, fallbacks: cleanFallbacks };
+      await setAiProviderSetting(pool, setting);
+      return setting;
+    }
+  );
 
   app.get('/system/health', async (_request, reply) => {
     const recorderUrl = process.env.RECORDER_URL || 'http://recorder-service:3007';
@@ -1344,23 +1424,19 @@ export const buildApp = async (
     async (request, reply) => {
       const { phrase } = request.body;
       if (!phrase) return reply.code(400).send({ error: 'phrase is required' });
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-        const result = await model.generateContent(
+        const text = (await aiGenerateText(pool,
           `Convert this plain-English schedule description to a standard cron expression (5 fields: minute hour day month weekday).
 Also provide a short human-readable preview confirming when it runs.
 
 Description: "${phrase}"
 
 Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
-        );
+        )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return JSON.parse(match[0]);
@@ -1377,8 +1453,7 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
     async (request, reply) => {
       const { trend } = request.body;
       if (!trend || trend.length < 3) return reply.code(422).send({ error: 'Need at least 3 trend points' });
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
@@ -1388,17 +1463,14 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
           rps: t.metrics.rps,
           perfStatus: t.perf_status,
         }));
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-        const result = await model.generateContent(
+        const text = (await aiGenerateText(pool,
           `You are a performance engineer. Write a 2-sentence plain-English summary of this load test trend. Focus on what changed and what it means for the system.
 
 Trend data (chronological):
 ${JSON.stringify(summary, null, 2)}
 
 Return ONLY valid JSON: {"narrative": "<2 sentences>"}`
-        );
-        const text = result.response.text().trim();
+        )).trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return JSON.parse(match[0]);
@@ -1415,8 +1487,7 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
@@ -1431,18 +1502,15 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`
         const history = rows.map((r: { metrics: Record<string,number>; perf_status: string }) => ({
           vus: r.metrics.vus, p95: r.metrics.p95ResponseTime, rps: r.metrics.rps, perfStatus: r.perf_status,
         }));
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-        const result = await model.generateContent(
+        const text = (await aiGenerateText(pool,
           `Suggest sensible load test settings for this URL: ${url}
 Type: ${type}
 ${history.length > 0 ? `Recent run history:\n${JSON.stringify(history, null, 2)}` : 'No previous runs — suggest conservative defaults.'}
 
 Return ONLY valid JSON:
 {"vus": <number>, "duration": "<e.g. 1m>", "profile": "load|spike|soak|capacity", "reasoning": "<one sentence>"}`
-        );
+        )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return JSON.parse(match[0]);
@@ -1459,8 +1527,7 @@ Return ONLY valid JSON:
     async (request, reply) => {
       const { events } = request.body;
       if (!events?.length) return reply.code(400).send({ error: 'events is required' });
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
@@ -1473,9 +1540,7 @@ Return ONLY valid JSON:
         const dist = Object.fromEntries(rows.map((r: { perf_status: string; count: string }) => [r.perf_status, parseInt(r.count)]));
         const total = Object.values(dist).reduce((a, b) => a + b, 0);
 
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-        const result = await model.generateContent(
+        const text = (await aiGenerateText(pool,
           `Analyse this load test result distribution and predict whether a webhook firing on [${events.join(', ')}] would be too noisy or never fire.
 
 Historical result distribution (${total} total runs):
@@ -1483,9 +1548,8 @@ ${JSON.stringify(dist)}
 
 Return ONLY valid JSON:
 {"level": "noisy|ok|silent", "message": "<one sentence warning or confirmation>"}`
-        );
+        )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return { warning: null };
         const parsed = JSON.parse(match[0]) as { level: string; message: string };
@@ -1502,14 +1566,11 @@ Return ONLY valid JSON:
     { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type, vus, duration, profile, stepCount } = request.body;
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-        const result = await model.generateContent(
+        const text = (await aiGenerateText(pool,
           `Suggest a short, descriptive name and 2-3 tags for a load test preset with these settings:
 URL: ${url || 'n/a'}, Type: ${type}, VUs: ${vus ?? 'n/a'}, Duration: ${duration ?? 'n/a'}, Profile: ${profile ?? 'load'}${stepCount ? `, Steps: ${stepCount}` : ''}
 
@@ -1517,9 +1578,8 @@ Name should be concise (max 50 chars), human-readable, and describe what is bein
 Tags should be lowercase, single words or hyphenated (e.g. "e2e", "smoke", "auth-flow").
 
 Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
-        );
+        )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return JSON.parse(match[0]);
@@ -1536,14 +1596,11 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
     async (request, reply) => {
       const { steps } = request.body;
       if (!steps || steps.length === 0) return reply.code(400).send({ error: 'steps is required' });
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-        const result = await model.generateContent(
+        const text = (await aiGenerateText(pool,
           `You are an expert in load testing. Analyse these HTTP steps and identify any hardcoded values in URLs or request bodies that should be parameterised (user IDs, emails, product IDs, search terms, session tokens, etc.).
 Suggest test-data column names for a CSV/JSON data file.
 
@@ -1552,9 +1609,8 @@ ${JSON.stringify(steps.slice(0, 20), null, 2)}
 
 Return ONLY valid JSON:
 {"columns": ["column_name_1", "column_name_2"], "reasoning": "<one sentence>"}`
-        );
+        )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const text = result.response.text().trim();
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return JSON.parse(match[0]);
@@ -1572,8 +1628,7 @@ Return ONLY valid JSON:
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
 
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
 
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
@@ -1603,10 +1658,6 @@ Return ONLY valid JSON:
           date: r.created_at,
         }));
 
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-
         const prompt = `You are a performance engineering expert. Based on the following load test history for ${url}, suggest SLO threshold values that are realistic but meaningful (not so loose they never fire, not so tight they always fire).
 
 Test history (last ${rows.length} runs):
@@ -1620,9 +1671,8 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
   "reasoning": "<one sentence explaining the choices>"
 }`;
 
-        const result = await model.generateContent(prompt);
+        const text = (await aiGenerateText(pool, prompt)).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const text = result.response.text().trim();
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return reply.code(500).send({ error: 'AI returned unexpected response' });
 
@@ -1681,8 +1731,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
     { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { testId } = request.params;
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
 
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
@@ -1720,10 +1769,6 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
       };
 
       try {
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-
         const externalSection = externalMetrics.length > 0
           ? `\n\nExternal observability data (from configured integrations):\n${externalMetrics.map(e => `--- ${e.sourceName}${e.platform ? ` (${e.platform})` : ''} ---\n${e.data}`).join('\n\n')}`
           : '';
@@ -1743,9 +1788,8 @@ Return ONLY valid JSON array. Include only categories with count > 0:
   }
 ]`;
 
-        const result = await model.generateContent(prompt);
+        const text = (await aiGenerateText(pool, prompt)).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const text = result.response.text().trim();
         const match = text.match(/\[[\s\S]*\]/);
         if (!match) return { diagnoses: [], message: 'AI returned unexpected response' };
         return { diagnoses: JSON.parse(match[0]) };
@@ -1976,8 +2020,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
 
       // AI-8: Executive summary
       let execSummary = '';
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (apiKey && result.metrics && result.perf_status) {
+      if (result.metrics && result.perf_status && (await isAiConfigured(pool))) {
         try {
           const m = result.metrics;
           const summaryCtx = {
@@ -1986,14 +2029,11 @@ Return ONLY valid JSON array. Include only categories with count > 0:
             errorRate: m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : '0',
             analysis: result.analysis?.summary,
           };
-          const { GoogleGenerativeAI } = await import('@google/generative-ai');
-          const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-          const r = await model.generateContent(
+          execSummary = (await aiGenerateText(pool,
             `Write a 3-sentence executive summary of this load test result for a non-technical manager. Be clear, factual, and end with a recommendation.
 Data: ${JSON.stringify(summaryCtx)}
 Return only the summary text, no JSON, no markdown.`
-          );
-          execSummary = r.response.text().trim();
+          )).trim();
         } catch { /* non-fatal */ }
       }
 
