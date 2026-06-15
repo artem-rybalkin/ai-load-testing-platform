@@ -14,16 +14,29 @@ test.describe.serial('Result detail — completed test actions', () => {
   test('creates a backend test and waits for it to complete', async ({ page }) => {
     await page.goto('/');
 
+    // Use Custom Script mode — AI generation fails in CI (no real GEMINI_API_KEY)
+    // and would leave the result `status: 'failed'`, hiding the baseline/PDF/
+    // re-run actions exercised by the rest of this serial block (they only
+    // render for `status === 'completed'`).
+    await page.getByRole('button', { name: /custom script/i }).click();
+
     const urlInput = page.locator('input[placeholder*="example"]');
     await urlInput.click();
     // Must be reachable from inside the worker-backend container (not "localhost",
     // which resolves to the worker itself, not api-service) so the test completes.
     await urlInput.fill('http://api-service:3000/health');
-    await urlInput.press('Tab');
 
-    const descInput = page.locator('input[placeholder*="test"]');
-    await descInput.fill('E2E result-detail test 3 VUs 20s');
-    await descInput.press('Tab');
+    const scriptInput = page.locator('textarea');
+    await scriptInput.fill(`import http from 'k6/http';
+import { sleep } from 'k6';
+
+export const options = { vus: 1, duration: '10s' };
+
+export default function () {
+  http.get('http://api-service:3000/health');
+  sleep(1);
+}
+`);
 
     await page.getByRole('button', { name: /run test/i }).click();
 

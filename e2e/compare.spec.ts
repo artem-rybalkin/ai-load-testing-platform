@@ -9,6 +9,20 @@ import { test, expect, Page } from '@playwright/test';
 const API_URL = 'http://localhost:3000';
 const RESULTS_URL = 'http://localhost:3004';
 
+// Bypasses AI script generation (which fails in CI — no real GEMINI_API_KEY —
+// and leaves the result `status: 'failed'`, hiding the compare checkboxes
+// that only render for `status === 'completed'`).
+const CUSTOM_SCRIPT = `import http from 'k6/http';
+import { sleep } from 'k6';
+
+export const options = { vus: 1, duration: '10s' };
+
+export default function () {
+  http.get('http://api-service:3000/health');
+  sleep(1);
+}
+`;
+
 async function createAndWaitForResult(page: Page): Promise<string> {
   const res = await page.request.post(`${API_URL}/tests`, {
     data: {
@@ -18,6 +32,7 @@ async function createAndWaitForResult(page: Page): Promise<string> {
       targetUrl: 'http://api-service:3000/health',
       description: 'compare E2E test',
       options: { vus: 1, duration: '10s' },
+      customScript: CUSTOM_SCRIPT,
     },
   });
   const { test: created } = await res.json();
