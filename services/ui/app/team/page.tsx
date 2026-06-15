@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { AI_PROVIDER_NAMES } from '@alt/shared';
 import {
   getTeamMembers, addTeamMember, updateTeamMemberRole, removeTeamMember,
   getTeamQuota, updateTeamQuota,
@@ -13,6 +12,11 @@ import {
 } from '@/lib/api';
 
 const ROLES: TeamRole[] = ['admin', 'member', 'viewer'];
+
+// Mirrors @alt/shared's AI_PROVIDER_NAMES — duplicated locally because Vite/Rollup
+// cannot statically resolve value exports re-exported via `export *` from the
+// shared package's compiled CJS output.
+const AI_PROVIDER_NAMES: AiProviderName[] = ['gemini', 'openai', 'anthropic'];
 
 const PROVIDER_LABELS: Record<AiProviderName, string> = {
   gemini: 'Gemini',
