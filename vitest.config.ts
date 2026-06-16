@@ -23,6 +23,7 @@ export default defineConfig({
       'services/*/src/__tests__/**/*.test.ts',
       'services/ui/__tests__/**/*.test.tsx',
       'packages/*/src/__tests__/**/*.test.ts',
+      'chaos/**/*.test.ts',
     ],
     environment: 'node',
     environmentMatchGlobs: [
