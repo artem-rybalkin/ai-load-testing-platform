@@ -105,16 +105,30 @@ ${fallback}
 ${httpSection ? `\n${httpSection}` : ''}
 ${headersSection ? `\n${headersSection}\n` : ''}
 Requirements:
-- Use k6 JavaScript API
+- Use k6 JavaScript API (import from 'k6/http' and 'k6')
 - Include realistic think time between requests (sleep 1-3s)
-- Add checks for response status and response time
+- Add checks for HTTP status AND at least one body/header assertion per request
+- Always include thresholds: p(95) < 1000 (adjust if description implies stricter SLO) and http_req_failed rate < 0.01
+- For JSON APIs: set Content-Type: application/json header, use JSON.stringify for request body, call res.json() to parse
+- For authenticated endpoints: read credentials from __ENV.USERNAME / __ENV.PASSWORD / __ENV.API_TOKEN — never hardcode secrets
 - Return ONLY the JavaScript code, no markdown, no explanation
+
+Common patterns to follow:
+// JSON POST with auth
+const payload = JSON.stringify({ username: __ENV.USERNAME, password: __ENV.PASSWORD });
+const params = { headers: { 'Content-Type': 'application/json', 'Authorization': \`Bearer \${__ENV.API_TOKEN}\` } };
+const res = http.post('${test.targetUrl}', payload, params);
+check(res, { 'status 200': (r) => r.status === 200, 'has id': (r) => r.json('id') !== undefined });
+
+// GET with query params
+const res = http.get(\`\${__ENV.BASE_URL}/items?page=1&limit=20\`, params);
+check(res, { 'status 200': (r) => r.status === 200, 'non-empty list': (r) => r.json('items').length > 0 });
 
 Structure:
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-export const options = { stages: [...], thresholds: {...} };
+export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] } };
 export default function() { ... }
 `;
 };
@@ -134,10 +148,57 @@ Description: ${test.description}
 Sessions: ${opts.sessions}
 ${headersSection}
 Requirements:
-- Use Puppeteer with async/await
-- Collect Web Vitals: LCP, FCP, TTFB, CLS
-- Simulate realistic user interactions
+- Use Puppeteer with async/await (CommonJS require, not ESM import)
+- Collect Web Vitals: LCP, FCP, TTFB, CLS — inject PerformanceObserver before page.goto()
+- Collect INP (Interaction to Next Paint) via PerformanceObserver with type 'event'
+- Simulate realistic user interactions: waitForSelector, scroll, click, waitForNetworkIdle
+- Track JS errors via page.on('pageerror', ...) and console errors via page.on('console', msg => msg.type() === 'error')
+- Run ${opts.sessions} sessions sequentially in a single browser instance (share browser, new page per session)
+- Return performance metrics at the end: { lcp, fcp, ttfb, cls, inp, jsErrors }
 - Return ONLY the JavaScript code, no markdown, no explanation
+
+Web Vitals injection pattern (call before every page.goto()):
+await page.evaluateOnNewDocument(() => {
+  window.__wv = { lcp: 0, cls: 0, inp: 0 };
+  new PerformanceObserver(l => l.getEntries().forEach(e => { window.__wv.lcp = e.startTime; }))
+    .observe({ type: 'largest-contentful-paint', buffered: true });
+  new PerformanceObserver(l => l.getEntries().forEach(e => {
+    if (!e.hadRecentInput) window.__wv.cls += e.value;
+  })).observe({ type: 'layout-shift', buffered: true });
+  new PerformanceObserver(l => l.getEntries().forEach(e => {
+    if (e.duration > (window.__wv.inp || 0)) window.__wv.inp = e.duration;
+  })).observe({ type: 'event', buffered: true, durationThreshold: 16 });
+});
+
+TTFB from NavigationTiming:
+const ttfb = await page.evaluate(() => {
+  const t = performance.getEntriesByType('navigation')[0];
+  return t ? t.responseStart - t.requestStart : 0;
+});
+
+FCP from paint timing:
+const fcp = await page.evaluate(() => {
+  const e = performance.getEntriesByName('first-contentful-paint')[0];
+  return e ? e.startTime : 0;
+});
+
+Interaction pattern (after page loads):
+await page.waitForSelector('main, article, [data-testid], h1', { timeout: 10000 }).catch(() => {});
+await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 3));
+
+Structure:
+const puppeteer = require('puppeteer');
+module.exports = async function run() {
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  const results = [];
+  for (let i = 0; i < ${opts.sessions}; i++) {
+    const page = await browser.newPage();
+    // inject vitals, navigate, interact, collect metrics, page.close()
+    results.push({ lcp, fcp, ttfb, cls, inp });
+  }
+  await browser.close();
+  return results;
+};
 `;
 };
 
@@ -264,13 +325,24 @@ import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 ${hasExtractions ? "import exec from 'k6/execution';" : ''}
 
-export const options = { stages: [...], thresholds: {...} };
+export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] } };
 
 export default function() {
   const vars = {};
 
-  group('Step 1: ...', function() { /* request + check + extract */ });
-  group('Step 2: ...', function() { /* use vars.token etc */ });
+  // Example: step that extracts a token and passes it to the next step
+  group('Step 1: Login', function() {
+    const res = http.post('https://example.com/auth', JSON.stringify({ u: 'user' }), { headers: { 'Content-Type': 'application/json' } });
+    check(res, { 'login 200': (r) => r.status === 200 });
+    const token = (res.status === 200 && res.json('access_token')) || '';   // defensive — never throws
+    if (!token) { exec.vu.abort('access_token not found in step 1 response'); }
+    vars.token = token;
+  });
+
+  group('Step 2: Fetch data', function() {
+    const res = http.get('https://example.com/data', { headers: { 'Authorization': \`Bearer \${vars.token}\` } });
+    check(res, { 'data 200': (r) => r.status === 200 });
+  });
 
   sleep(1);
 }

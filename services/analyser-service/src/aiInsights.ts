@@ -85,6 +85,8 @@ interface ClientPromptMetrics {
   fcpMs: number;
   ttfbMs: number;
   fidMs: number;
+  inpMs?: number;
+  tbtMs?: number;
   clsScore: number;
   lighthousePerformance?: number;
   lighthouseAccessibility?: number;
@@ -137,6 +139,8 @@ const buildPayload = (ctx: InsightsContext): AnalysisPromptPayload => {
       ttfbMs: Math.round(m.ttfb),
       fidMs:  Math.round(m.fid),
       clsScore: Math.round(m.cls * 1000) / 1000,
+      ...(m.inp !== undefined ? { inpMs: Math.round(m.inp) } : {}),
+      ...(m.tbt !== undefined ? { tbtMs: Math.round(m.tbt) } : {}),
       ...(m.lighthouseScore ? {
         lighthousePerformance:   m.lighthouseScore.performance,
         lighthouseAccessibility: m.lighthouseScore.accessibility,
@@ -175,17 +179,24 @@ const formatMetrics = (p: AnalysisPromptPayload): string => {
   } else {
     const m = p.metrics;
     const lines = [
-      `LCP: ${m.lcpMs}ms`, `FCP: ${m.fcpMs}ms`, `TTFB: ${m.ttfbMs}ms`,
-      `FID: ${m.fidMs}ms`, `CLS: ${m.clsScore}`,
+      `LCP: ${m.lcpMs}ms (good <2500, needs-improvement <4000, poor ≥4000)`,
+      `FCP: ${m.fcpMs}ms (good <1800, needs-improvement <3000, poor ≥3000)`,
+      `TTFB: ${m.ttfbMs}ms (good <800, needs-improvement <1800, poor ≥1800)`,
+      `CLS: ${m.clsScore} (good <0.1, needs-improvement <0.25, poor ≥0.25)`,
     ];
+    if (m.inpMs !== undefined)
+      lines.push(`INP: ${m.inpMs}ms (good <200, needs-improvement <500, poor ≥500)`);
+    if (m.tbtMs !== undefined)
+      lines.push(`TBT: ${m.tbtMs}ms (good <200, needs-improvement <600, poor ≥600)`);
     if (m.lighthousePerformance !== undefined)
-      lines.push(`Lighthouse performance: ${m.lighthousePerformance}/100, accessibility: ${m.lighthouseAccessibility}/100`);
+      lines.push(`Lighthouse performance: ${m.lighthousePerformance}/100 (good ≥90, needs-improvement ≥50, poor <50), accessibility: ${m.lighthouseAccessibility}/100`);
     return lines.join('\n');
   }
 };
 
 const buildPrompt = (payload: AnalysisPromptPayload, externalMetrics?: ExternalMetricSource[]): string => {
   const isBackend = payload.metrics.type === 'backend';
+  const isFlow = payload.testType === 'flow';
 
   const violationsText = payload.thresholdViolations.length > 0
     ? payload.thresholdViolations.map(v => `  - ${v}`).join('\n')
@@ -204,11 +215,17 @@ const buildPrompt = (payload: AnalysisPromptPayload, externalMetrics?: ExternalM
       }`
     : '';
 
+  const typeHint = isBackend
+    ? isFlow
+      ? `Root cause focus for multi-step flow tests: look at per-step p95 gaps (a single slow step drags the whole flow), connection reuse across steps, session token expiry causing auth failures in later steps, and downstream service fan-out effects.`
+      : `Root cause focus for HTTP load tests: connection pool exhaustion (p99 >> p95 gap), slow DB queries under concurrency, GC pauses (periodic latency spikes), misconfigured keep-alive (high http_req_connecting), and thread/worker starvation at the target service.`
+    : `Root cause focus for browser tests: render-blocking JS/CSS (high TBT/FCP), large unoptimised images (high LCP), layout thrash from dynamic content (high CLS), slow server response (high TTFB), and main-thread contention from third-party scripts (high INP/TBT).`;
+
   return `You are a senior performance engineer analyzing load test results. Provide expert insights based on the data below.${externalSection ? ' External observability data from your monitoring stack is included — correlate it with the load test metrics.' : ''}
 
 Test Context:
 - URL: ${payload.targetUrl}
-- Test type: ${payload.testType} (${isBackend ? 'k6 HTTP load test' : 'Puppeteer browser test'})
+- Test type: ${payload.testType} (${isBackend ? (isFlow ? 'k6 multi-step flow test' : 'k6 HTTP load test') : 'Puppeteer browser test'})
 
 Current Metrics:
 ${formatMetrics(payload)}
@@ -221,6 +238,8 @@ ${diffsText}
 
 Overall Status: ${payload.perfStatus} — ${payload.summary}${externalSection}
 
+${typeHint}
+
 Respond ONLY with a valid JSON object (no markdown fences, no explanation outside the JSON):
 {
   "narrative": "<2-3 sentences explaining what these results reveal about the system under test — not just repeating numbers>",
@@ -231,12 +250,15 @@ Respond ONLY with a valid JSON object (no markdown fences, no explanation outsid
 }
 
 Rules:
-- narrative: interpret the data, explain what it means for the system health and user experience
-- anomalies: only list genuinely anomalous patterns (e.g. high tail latency gap, error spike, low throughput); empty array if all looks normal
-- rootCauses: infer from data patterns only — do not invent causes without evidence
-- recommendations: specific engineering actions (e.g. "Enable HTTP connection keep-alive", "Profile slow DB queries above 500ms")
+- narrative: interpret what the numbers mean for real users or system stability; avoid phrases like "the test shows" — say what it implies
+- anomalies: only list genuinely anomalous patterns (e.g. p99 > 3× p95 suggests GC pauses; error spike mid-test suggests connection pool exhaustion); empty array if all looks normal
+- rootCauses: infer from data patterns only — do not invent causes without evidence in the metrics
+- recommendations: specific engineering actions with measurable targets (e.g. "Enable HTTP connection keep-alive to reduce http_req_connecting from Xms", "Increase DB connection pool size above current concurrency of N VUs")
 - severity: "critical" if failed status or >5% error rate, "warning" if degraded or threshold violated, "info" if all passed
-- Keep each string under 120 characters`;
+- Keep each string under 120 characters
+
+Example output (for reference — generate your own based on the actual data above):
+{"narrative":"The API handled 500 req/s with p95 at 340ms, well within the 1000ms SLO. A p99 spike to 2800ms (+720%) suggests occasional GC pauses or connection pool contention at peak load.","anomalies":["p99 latency (2800ms) is 8× the p95 (340ms) — abnormal tail latency distribution"],"rootCauses":["GC pause or connection pool saturation causing occasional long waits at the 99th percentile"],"recommendations":["Profile GC activity during peak load; consider increasing JVM heap or connection pool size above 500"],"severity":"warning"}`;
 };
 
 export interface AiInsightsResult {
