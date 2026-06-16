@@ -16,7 +16,7 @@ import lighthouse from 'lighthouse';
 import Fastify from 'fastify';
 import * as os from 'os';
 
-import { TestRequest, TestResult, ClientMetrics, LighthouseScore, ResourceBreakdown, connectWithBackoff } from '@alt/shared';
+import { TestRequest, TestResult, ClientMetrics, LighthouseScore, ResourceBreakdown, connectWithBackoff, stripAnsi } from '@alt/shared';
 import { log } from './logger';
 import { handleRetry, MAX_RETRIES } from './retry';
 
@@ -85,15 +85,14 @@ export const avgResourceBreakdown = (snapshots: WebVitalsSnapshot[]): ResourceBr
 
 // ── Execution log helpers ─────────────────────────────────────────────────────
 
-const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
+const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
 
 const MAX_LOG_LINES = 5000;
+const MAX_LOG_BYTES = 100 * 1024; // 100 KB — mirrors worker-backend cap
 
 const postLogLine = async (testId: string, level: string, line: string): Promise<void> => {
-  const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
   try {
-    await fetch(`${resultsUrl}/results/${testId}/log-line`, {
+    await fetch(`${RESULTS_URL}/results/${testId}/log-line`, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ level, line }),
@@ -105,20 +104,21 @@ const runClientTest = async (test: TestRequest): Promise<{ metrics: ClientMetric
   const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
   testLog.info('Launching browser');
 
-  const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
   const postMessage = (message: string): Promise<Response | void> =>
-    fetch(`${resultsUrl}/results/${test.id}/message`, {
+    fetch(`${RESULTS_URL}/results/${test.id}/message`, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ message }),
     }).catch((err: Error) => testLog.debug({ err: err.message }, 'postMessage delivery failed'));
 
-  // Execution log accumulation
+  // Execution log accumulation (capped at MAX_LOG_LINES / MAX_LOG_BYTES)
   const logLines: string[] = [];
+  let logBytes = 0;
   const addLog = (level: string, text: string): void => {
     const clean = stripAnsi(text).trimEnd();
-    if (!clean || logLines.length >= MAX_LOG_LINES) return;
+    if (!clean || logLines.length >= MAX_LOG_LINES || logBytes >= MAX_LOG_BYTES) return;
     logLines.push(`[${level}] ${clean}`);
+    logBytes += level.length + Buffer.byteLength(clean, 'utf8') + 3;
     postLogLine(test.id, level, clean).catch(() => {});
   };
 
@@ -333,6 +333,9 @@ const runClientTest = async (test: TestRequest): Promise<{ metrics: ClientMetric
       },
       executionLog: logLines.join('\n'),
     };
+  } catch (err) {
+    (err as Error & { partialLog?: string }).partialLog = logLines.join('\n');
+    throw err;
   } finally {
     clearTimeout(killTimer);
     runningBrowsers.delete(test.id);
@@ -437,8 +440,12 @@ const start = async (): Promise<void> => {
       log.error({ testId: test.id, err: (err as Error).message }, 'Client test failed');
       const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
       if (retryCount >= MAX_RETRIES) {
-        const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
-        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
+        const partialLog = (err as { partialLog?: string }).partialLog;
+        fetch(`${RESULTS_URL}/results/${test.id}/fail`, {
+          method: 'POST',
+          headers: internalHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ executionLog: partialLog ?? null }),
+        }).catch(() => {});
       }
       handleRetry(channel, msg, QUEUE, DLQ, test.id);
     }

@@ -97,11 +97,11 @@ const LEVEL_COLOR: Record<string, string> = {
   INFO:  'text-[#24292f]',
 };
 
-interface LogEntry { level: string; line: string }
+interface LogEntry { level: string; line: string; seq: number }
 
-const parseEntry = (raw: string): LogEntry => {
+const parseEntry = (raw: string, seq: number): LogEntry => {
   const m = raw.match(/^\[(INFO|WARN|ERROR|DEBUG)\] ([\s\S]*)$/);
-  return m ? { level: m[1], line: m[2] } : { level: 'INFO', line: raw };
+  return m ? { level: m[1], line: m[2], seq } : { level: 'INFO', line: raw, seq };
 };
 
 function ExecutionLogPanel({
@@ -131,7 +131,7 @@ function ExecutionLogPanel({
 
   const allEntries: LogEntry[] = isRunning
     ? liveLines
-    : (stored ?? '').split('\n').filter(Boolean).map(parseEntry);
+    : (stored ?? '').split('\n').filter(Boolean).map((s, i) => parseEntry(s, i));
 
   const visible = filter === 'ALL'
     ? allEntries
@@ -219,8 +219,8 @@ function ExecutionLogPanel({
                     : `No ${filter} entries.`}
                 </span>
               ) : (
-                visible.map((e, i) => (
-                  <div key={i} className={LEVEL_COLOR[e.level] ?? 'text-[#24292f]'}>
+                visible.map((e) => (
+                  <div key={e.seq} className={LEVEL_COLOR[e.level] ?? 'text-[#24292f]'}>
                     <span className="select-none text-[#8c959f]">[{e.level.padEnd(5)}] </span>
                     {e.line}
                   </div>
@@ -382,7 +382,10 @@ export default function ResultPage() {
       }
     }
     if (event.type === 'test:log' && event.testId === testId) {
-      setLiveLogLines(prev => [...prev, { level: event.level, line: event.line }].slice(-5000));
+      setLiveLogLines(prev => {
+        const next = [...prev, { level: event.level, line: event.line, seq: prev.length }];
+        return next.slice(-5000);
+      });
     }
   });
 

@@ -1021,14 +1021,17 @@ export const buildApp = async (
     }
   );
 
-  app.post<{ Params: { testId: string } }>(
+  app.post<{ Params: { testId: string }; Body: { executionLog?: string | null } }>(
     '/results/:testId/fail',
     async (request, reply) => {
       try {
         const { testId } = request.params;
+        const executionLog = request.body?.executionLog ?? null;
         const { rowCount } = await pool.query(
-          `UPDATE test_results SET status = 'failed', completed_at = NOW(), status_message = NULL WHERE test_id = $1 AND status IN ('pending', 'running')`,
-          [testId]
+          `UPDATE test_results SET status = 'failed', completed_at = NOW(), status_message = NULL,
+           execution_log = COALESCE($2, execution_log)
+           WHERE test_id = $1 AND status IN ('pending', 'running')`,
+          [testId, executionLog]
         );
         if (rowCount) {
           broadcast({ type: 'test:status', testId, status: 'failed', perfStatus: null });
@@ -1227,9 +1230,12 @@ export const buildApp = async (
     Body: { level: string; line: string };
   }>('/results/:testId/log-line', async (request, reply) => {
     const { testId } = request.params;
-    const { level, line } = request.body;
+    const { level, line } = request.body ?? {};
+    if (typeof level !== 'string' || typeof line !== 'string') {
+      return reply.code(400).send({ error: 'level and line must be strings' });
+    }
     reply.send({ success: true });
-    setImmediate(() => broadcast({ type: 'test:log', testId, level, line }));
+    broadcast({ type: 'test:log', testId, level, line });
     return reply;
   });
 

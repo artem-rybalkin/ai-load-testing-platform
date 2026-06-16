@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import Fastify from 'fastify';
 
-import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint, connectWithBackoff } from '@alt/shared';
+import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint, connectWithBackoff, stripAnsi } from '@alt/shared';
 import { parseK6Output, aggregateWindow, parseK6JsonOutput, LIVE_WINDOW_SEC } from './parser';
 import { log } from './logger';
 
@@ -75,9 +75,6 @@ const saveScript = async (
 };
 
 // ── Execution log helpers ─────────────────────────────────────────────────────
-
-const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
 
 const k6Level = (line: string): string => {
   if (line.startsWith('ERRO')) return 'ERROR';
@@ -194,7 +191,7 @@ const runK6Test = async (
       const text = stripAnsi(raw).trimEnd();
       if (!text || logLines.length >= MAX_LOG_LINES || logBytes >= MAX_LOG_BYTES) return;
       logLines.push(`[${level}] ${text}`);
-      logBytes += level.length + text.length + 4;
+      logBytes += level.length + Buffer.byteLength(text, 'utf8') + 3;
       postLogLine(testId, level, text).catch(() => {});
     };
 
@@ -258,7 +255,8 @@ const runK6Test = async (
 
       // Only reject if we got nothing useful AND it was a hard failure (not a threshold violation)
       if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
-        reject(new Error(`k6 exited with code ${code}: ${Buffer.concat(stderrChunks).toString().slice(-500)}`));
+        const e = Object.assign(new Error(`k6 exited with code ${code}: ${Buffer.concat(stderrChunks).toString().slice(-500)}`), { partialLog: logLines.join('\n') });
+        reject(e);
         return;
       }
 
@@ -270,6 +268,7 @@ const runK6Test = async (
       clearTimeout(killTimer);
       runningTests.delete(testId);
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
+      (err as Error & { partialLog?: string }).partialLog = logLines.join('\n');
       reject(err);
     });
   });
@@ -286,8 +285,14 @@ const notifyRunning = async (testId: string): Promise<void> => {
   catch { /* best-effort */ }
 };
 
-const notifyFailed = async (testId: string): Promise<void> => {
-  try { await fetch(`${RESULTS_URL}/results/${testId}/fail`, { method: 'POST', headers: internalHeaders() }); }
+const notifyFailed = async (testId: string, executionLog?: string): Promise<void> => {
+  try {
+    await fetch(`${RESULTS_URL}/results/${testId}/fail`, {
+      method: 'POST',
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ executionLog: executionLog ?? null }),
+    });
+  }
   catch { /* best-effort */ }
 };
 
@@ -441,7 +446,8 @@ const start = async (): Promise<void> => {
       channel.ack(msg);
     } catch (err) {
       testLog.error({ err: (err as Error).message }, 'Test failed');
-      await notifyFailed(test.id);
+      const partialLog = (err as { partialLog?: string }).partialLog;
+      await notifyFailed(test.id, partialLog);
       handleRetry(channel, msg, QUEUE, DLQ, test.id);
     }
   });

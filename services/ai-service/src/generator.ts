@@ -323,7 +323,7 @@ Requirements:
 Structure:
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
-${hasExtractions ? "import exec from 'k6/execution';" : ''}
+import exec from 'k6/execution';
 
 export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] } };
 

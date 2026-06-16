@@ -1,5 +1,9 @@
 export * from './aiProvider';
 
+/** Strip ANSI escape codes from a string (safe to call on every log line). */
+export const stripAnsi = (s: string): string =>
+  s.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+
 export type TestType = 'backend' | 'client-side' | 'flow';
 
 export type TestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
