@@ -326,6 +326,13 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       `);
     },
   },
+  {
+    version: 12,
+    name: 'execution_log',
+    up: async (p): Promise<void> => {
+      await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS execution_log TEXT`);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────

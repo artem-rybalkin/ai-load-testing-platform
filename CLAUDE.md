@@ -462,6 +462,10 @@ CREATE TABLE team_ai_providers (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Raw worker execution log (ANSI-stripped) — migration #12
+-- Populated by consumer.ts from the RabbitMQ test-results message; capped at 5000 lines / 100 KB
+ALTER TABLE test_results ADD COLUMN IF NOT EXISTS execution_log TEXT;
 ```
 
 ## Shared Types (@alt/shared)
@@ -606,6 +610,8 @@ interface LiveMetricPoint { timestamp, vus, rps, avgResponseTime, errorRate, ste
 - `GET  /results/:testId/live`    — all live points for a test (chronological), includes `stepMetrics`
 - `POST /results/:testId/baseline` — mark as baseline for regression comparisons
 - `DELETE /results/:testId/baseline` — clear baseline flag
+- `GET  /results/:testId/log`         — ANSI-stripped execution log (project-scoped); `{ log: string | null }` — null when no log stored
+- `POST /results/:testId/log-line`    — internal only (`X-Internal-Key`); broadcasts `test:log` WS event (`{ testId, level, line }`) for real-time streaming; returns `{ success: true }`
 - `GET  /results/:testId/report.pdf` — download pdfkit PDF report
 - `GET  /results/:testId/report.csv` — download CSV metrics export (summary + per-step rows for flow tests)
 - `GET  /system/health`           — aggregated health of all 5 services (calls each /health in parallel)
@@ -895,7 +901,7 @@ Real-time updates use **WebSocket push** (`ws://localhost:3004/ws`) for the high
 WebSocket server: `ws` package with `{ noServer: true }` attached to Fastify's `http.Server` via `server.on('upgrade', ...)`. `@fastify/websocket` not used — incompatible with Fastify v5 (requires `^4.x`).
 
 - **WebSocket** (`useResultsSocket` hook, `services/ui/lib/useResultsSocket.ts`):
-  - Result detail page: `test:status` event → update status immediately; `test:live` event → append metric point (replaces 2s polls)
+  - Result detail page: `test:status` event → update status immediately; `test:live` event → append metric point (replaces 2s polls); `test:log` event → append log line to `ExecutionLogPanel` during live run
   - `ActiveTests` strip: `tests:changed` / `test:status` → refetch active list (replaces 3s poll)
   - Results list page: `tests:changed` / `test:status` → refetch results (replaces 5s poll)
   - Auto-reconnects with exponential backoff (1s → 2s → … → 30s cap)
@@ -1142,7 +1148,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~950 tests across 50 test files (`npm test` reports ~947 tests; some intentionally skipped in non-Docker/full-suite contexts)
+**Total:** ~1300 tests across 66 test files (`npm test` reports 1297 tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
@@ -1158,7 +1164,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 ### Integration Tests (real PostgreSQL via Testcontainers)
 | File | Subject | Tests |
 |------|---------|-------|
-| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export + threshold preview | 106 |
+| `results-service/src/__tests__/api.test.ts` | all REST endpoints + preset regression + script_description + team quotas + AI quota 429s + CSV export + threshold preview + execution log | 110 |
 | `results-service/src/__tests__/aiProvider.test.ts` | `GET`/`PUT /system/ai-provider` — available providers, admin-only update, fallback validation, RBAC | 7 |
 | `results-service/src/__tests__/auth.test.ts` | register/login/logout/me/switch-team, RBAC session middleware, viewer/admin enforcement, cross-team isolation, dev mode | 43 |
 | `results-service/src/__tests__/orgs.test.ts` | POST /orgs, GET /orgs/:id, member role mgmt, last-owner protection, POST /orgs/:id/teams, cross-org isolation | 22 |
@@ -1209,9 +1215,7 @@ fail (`status: 'failed'`), which hides the compare checkboxes and "Re-run" butto
 
 ## Known Issues / Tech Debt
 - **Breaking change (Org/Team/RBAC foundation, migration #6)**: the old `POST /auth/login { username, projectName }` free-text join-any-project flow is replaced by password-based `register`/`login` against real `users` accounts. Any `projects` rows created via the old flow become orphaned teams with no `team_members` — existing sessions are invalidated (new DB-backed session model); users must `POST /auth/register` to create an account + team (or be added to an existing team by its admin via `POST /teams/:id/members`).
-- Redis backs `@fastify/rate-limit` (see Security → Rate Limiting); pub/sub for WebSocket horizontal scaling still not implemented
+- Redis backs `@fastify/rate-limit` (see Security → Rate Limiting) and powers `broadcast()` pub/sub for horizontally-scaled WebSocket replicas (`services/results-service/src/ws.ts`)
 - Gemini rate limit: default model is `gemini-3.1-flash-lite` — free tier is roughly **15 requests/minute and ~1,000 requests/day** (flash-lite class; check the current values in [AI Studio's rate limit page](https://aistudio.google.com/rate-limit), as Google adjusts preview-model quotas frequently). `compareDescriptions()` also consumes quota so each new-description test costs 2 calls. Paid key removes/raises the daily cap. Backoff retry (60s/120s/180s) handles 429 automatically.
 - Semantic comparison adds ~1-3s latency when description + cached script both exist (Gemini round-trip)
 - **recorder-service**: noVNC requires `xvfb` + `x11vnc` + `novnc` APK packages; these add ~60 MB to the Docker image. On Windows/Mac host without Docker the recording browser appears natively (no virtual display needed) when `DISPLAY` is unset.
-- **Playwright → Puppeteer script import**: allow users to upload existing Playwright test scripts; an AI agent would translate them to Puppeteer scripts compatible with worker-client. Requires a new conversion endpoint in ai-service (or a dedicated converter-service) and a UI file upload step in the test form.
-- **Strict input contract for analyser-service AI prompt** — `aiInsights.ts` currently forwards raw metric objects to the Gemini prompt without enforcing which fields are included or capping array lengths (e.g. `stepMetrics` for large flows, `statusCodes` maps). This risks inflated token usage, inconsistent prompt structure across test types, and weaker model output. Define a typed `AnalysisPromptPayload` interface that explicitly picks only the fields the prompt uses, caps lists (e.g. top-5 step metrics by p95), and normalises units (all times in ms, rates as percentages) before building the prompt string.

@@ -233,8 +233,8 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis, script_id, reused_script, project_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO test_results (test_id, type, target_url, status, metrics, started_at, completed_at, perf_status, analysis, script_id, reused_script, project_id, execution_log)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (test_id) DO UPDATE SET
          status        = EXCLUDED.status,
          status_message = NULL,
@@ -245,7 +245,8 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
          analysis      = EXCLUDED.analysis,
          script_id     = COALESCE(EXCLUDED.script_id, test_results.script_id),
          reused_script = COALESCE(EXCLUDED.reused_script, test_results.reused_script),
-         project_id    = COALESCE(EXCLUDED.project_id, test_results.project_id)`,
+         project_id    = COALESCE(EXCLUDED.project_id, test_results.project_id),
+         execution_log = COALESCE(EXCLUDED.execution_log, test_results.execution_log)`,
       [
         result.testId,
         result.metrics.type,
@@ -259,6 +260,7 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
         result.scriptId ?? null,
         result.reusedScript ?? false,
         projectId,
+        result.executionLog ?? null,
       ]
     );
     await client.query('COMMIT');

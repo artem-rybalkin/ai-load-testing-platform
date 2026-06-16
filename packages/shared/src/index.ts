@@ -185,6 +185,7 @@ export interface TestResult {
   completedAt?: string;
   perfStatus?: 'passed' | 'degraded' | 'failed';
   analysis?: AnalysisResult;
+  executionLog?: string;   // ANSI-stripped, severity-prefixed lines joined by \n; capped at 5000 lines / 100 KB
 }
 
 export interface BackendMetrics {

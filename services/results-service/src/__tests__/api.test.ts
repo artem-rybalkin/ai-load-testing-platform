@@ -857,6 +857,59 @@ describe('GET /results/:testId', () => {
   });
 });
 
+// ─── GET /results/:testId/log ────────────────────────────────────────────────
+
+describe('GET /results/:testId/log', () => {
+  it('returns null when no execution_log stored', async () => {
+    const testId = '00000000-0000-0000-0000-0000000000a1';
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status) VALUES ($1, 'backend', 'http://x.com', 'completed')`,
+      [testId]
+    );
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/log` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ log: null });
+  });
+
+  it('returns stored execution_log when present', async () => {
+    const testId = '00000000-0000-0000-0000-0000000000a2';
+    const logContent = '[INFO] Starting test\n[WARN] High response time\n[ERROR] Request failed';
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, execution_log)
+       VALUES ($1, 'backend', 'http://x.com', 'completed', $2)`,
+      [testId, logContent]
+    );
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/log` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ log: logContent });
+  });
+
+  it('returns 404 for unknown testId', async () => {
+    const res = await app.inject({ method: 'GET', url: '/results/00000000-0000-0000-0000-000000000099/log' });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('stores execution_log via consumer and retrieves it', async () => {
+    const testId = '00000000-0000-0000-0000-0000000000a4';
+    const logContent = '[INFO] k6 starting\n[WARN] slow response\n[ERROR] failed request';
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, execution_log)
+       VALUES ($1, 'backend', 'http://x.com', 'completed', $2)`,
+      [testId, logContent]
+    );
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/log` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { log: string };
+    expect(body.log).toBe(logContent);
+    // log entries are newline-separated and parseable
+    const lines = body.log.split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^\[INFO\]/);
+    expect(lines[1]).toMatch(/^\[WARN\]/);
+    expect(lines[2]).toMatch(/^\[ERROR\]/);
+  });
+});
+
 // ─── POST /results/:testId/live ───────────────────────────────────────────────
 
 describe('POST /results/:testId/live', () => {

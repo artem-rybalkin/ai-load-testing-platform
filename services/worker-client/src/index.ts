@@ -83,7 +83,25 @@ export const avgResourceBreakdown = (snapshots: WebVitalsSnapshot[]): ResourceBr
   return result;
 };
 
-const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
+// ── Execution log helpers ─────────────────────────────────────────────────────
+
+const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
+
+const MAX_LOG_LINES = 5000;
+
+const postLogLine = async (testId: string, level: string, line: string): Promise<void> => {
+  const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+  try {
+    await fetch(`${resultsUrl}/results/${testId}/log-line`, {
+      method: 'POST',
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ level, line }),
+    });
+  } catch { /* best-effort */ }
+};
+
+const runClientTest = async (test: TestRequest): Promise<{ metrics: ClientMetrics; executionLog: string }> => {
   const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
   testLog.info('Launching browser');
 
@@ -94,6 +112,17 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ message }),
     }).catch((err: Error) => testLog.debug({ err: err.message }, 'postMessage delivery failed'));
+
+  // Execution log accumulation
+  const logLines: string[] = [];
+  const addLog = (level: string, text: string): void => {
+    const clean = stripAnsi(text).trimEnd();
+    if (!clean || logLines.length >= MAX_LOG_LINES) return;
+    logLines.push(`[${level}] ${clean}`);
+    postLogLine(test.id, level, clean).catch(() => {});
+  };
+
+  addLog('INFO', `Starting browser test: ${test.targetUrl}`);
 
   let pageLoadCount = 0;
 
@@ -127,8 +156,18 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
       await postMessage(`Running browser session ${i + 1} of ${sessions}…`);
       const page = await browser.newPage();
 
+      addLog('INFO', `[session ${i + 1}/${sessions}] Navigating to ${test.targetUrl}`);
+
       let sessionJsErrors = 0;
-      page.on('pageerror', () => { sessionJsErrors++; });
+      page.on('pageerror', (err) => {
+        sessionJsErrors++;
+        addLog('ERROR', `[session ${i + 1}] pageerror: ${err.message}`);
+      });
+      page.on('console', (msg) => {
+        const t = msg.type();
+        const level = t === 'error' ? 'ERROR' : t === 'warn' ? 'WARN' : 'DEBUG';
+        addLog(level, `[session ${i + 1}] [browser] ${msg.text()}`);
+      });
 
       const cdp = await page.createCDPSession();
       await cdp.send('Performance.enable');
@@ -216,6 +255,7 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
       snapshots.push({ lcp: webVitals.lcp, fid: webVitals.fid, cls: webVitals.cls, ttfb, fcp: webVitals.fcp, inp: webVitals.inp, longTaskCount: webVitals.longTaskCount, resourceBreakdown });
       await page.close();
       testLog.info({ session: i + 1, metrics: snapshots[i] }, 'Session complete');
+      addLog('INFO', `[session ${i + 1}/${sessions}] Complete — LCP ${Math.round(webVitals.lcp)}ms FCP ${Math.round(webVitals.fcp)}ms TTFB ${ttfb}ms CLS ${webVitals.cls.toFixed(3)}${sessionJsErrors > 0 ? ` jsErrors=${sessionJsErrors}` : ''}`);
     }
   
     // ── Lighthouse audit — reuses the same Chrome instance via CDP port ──────
@@ -259,8 +299,12 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
         lhDomNodes = a['dom-size']?.numericValue           != null ? Math.round(a['dom-size'].numericValue)            : undefined;
       }
       testLog.info({ lighthouseScore, lhTbt, lhTti, lhInp, lhDomNodes }, 'Lighthouse complete');
+      if (lighthouseScore) {
+        addLog('INFO', `Lighthouse complete — perf=${lighthouseScore.performance} a11y=${lighthouseScore.accessibility} bp=${lighthouseScore.bestPractices} seo=${lighthouseScore.seo}${lhTbt != null ? ` TBT=${lhTbt}ms` : ''}${lhInp != null ? ` INP=${lhInp}ms` : ''}`);
+      }
     } catch (err) {
       testLog.error({ err: (err as Error).message }, 'Lighthouse audit failed (non-fatal)');
+      addLog('WARN', `Lighthouse audit failed (non-fatal): ${(err as Error).message}`);
     }
   
     // ── Average Web Vitals across sessions ───────────────────────────────────
@@ -270,21 +314,24 @@ const runClientTest = async (test: TestRequest): Promise<ClientMetrics> => {
     const avgLongTaskCount = avgNum(snapshots, 'longTaskCount');
 
     return {
-      type: 'client',
-      lcp:              avgNum(snapshots, 'lcp'),
-      fid:              avgNum(snapshots, 'fid'),
-      cls:              avgNum(snapshots, 'cls'),
-      ttfb:             avgNum(snapshots, 'ttfb'),
-      fcp:              avgNum(snapshots, 'fcp'),
-      inp:              inpValue,
-      tbt:              lhTbt,
-      tti:              lhTti,
-      jsErrors:         totalJsErrors > 0 ? totalJsErrors : undefined,
-      longTaskCount:    avgLongTaskCount > 0 ? Math.round(avgLongTaskCount) : undefined,
-      domNodeCount:     lhDomNodes,
-      pageLoadCount,
-      resourceBreakdown: avgResourceBreakdown(snapshots),
-      lighthouseScore,
+      metrics: {
+        type: 'client',
+        lcp:              avgNum(snapshots, 'lcp'),
+        fid:              avgNum(snapshots, 'fid'),
+        cls:              avgNum(snapshots, 'cls'),
+        ttfb:             avgNum(snapshots, 'ttfb'),
+        fcp:              avgNum(snapshots, 'fcp'),
+        inp:              inpValue,
+        tbt:              lhTbt,
+        tti:              lhTti,
+        jsErrors:         totalJsErrors > 0 ? totalJsErrors : undefined,
+        longTaskCount:    avgLongTaskCount > 0 ? Math.round(avgLongTaskCount) : undefined,
+        domNodeCount:     lhDomNodes,
+        pageLoadCount,
+        resourceBreakdown: avgResourceBreakdown(snapshots),
+        lighthouseScore,
+      },
+      executionLog: logLines.join('\n'),
     };
   } finally {
     clearTimeout(killTimer);
@@ -364,7 +411,7 @@ const start = async (): Promise<void> => {
       const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
       fetch(`${resultsUrl}/results/${test.id}/running`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
 
-      const metrics = await runClientTest(test);
+      const { metrics, executionLog } = await runClientTest(test);
 
       // r2: check if cancelled while running
       if (cancelledTests.has(test.id)) {
@@ -383,7 +430,7 @@ const start = async (): Promise<void> => {
         completedAt: new Date().toISOString(),
       };
 
-      channel.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId })), { persistent: true });
+      channel.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId, executionLog })), { persistent: true });
       log.info({ testId: test.id, metrics }, 'Client test completed');
       channel.ack(msg);
     } catch (err) {

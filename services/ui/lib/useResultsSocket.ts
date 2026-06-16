@@ -5,6 +5,7 @@ import type { LiveMetricPoint } from './api';
 export type WSEvent =
   | { type: 'test:status'; testId: string; status: string; perfStatus?: string | null }
   | { type: 'test:live';   testId: string; point: LiveMetricPoint }
+  | { type: 'test:log';    testId: string; level: string; line: string }
   | { type: 'tests:changed' }
   | { type: 'reconnected' }; // synthetic — emitted by the provider, never sent by the server
 

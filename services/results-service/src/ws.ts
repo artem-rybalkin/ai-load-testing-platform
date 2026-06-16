@@ -8,6 +8,7 @@ import { log } from './logger';
 export type WSEvent =
   | { type: 'test:status'; testId: string; status: string; perfStatus?: string | null }
   | { type: 'test:live';   testId: string; point: LiveMetricPoint }
+  | { type: 'test:log';    testId: string; level: string; line: string }
   | { type: 'tests:changed' };
 
 const clients = new Set<WebSocket>();

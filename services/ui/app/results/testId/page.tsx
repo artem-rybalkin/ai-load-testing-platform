@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, diagnoseErrors, getTrendNarrative, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource, ErrorDiagnosis } from '@/lib/api';
+import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, diagnoseErrors, getTrendNarrative, getExecutionLog, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource, ErrorDiagnosis } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 const BackendChart  = lazy(() => import('@/app/components/BackendChart'));
 const ClientChart   = lazy(() => import('@/app/components/ClientChart'));
@@ -88,6 +88,152 @@ const StepMetricsTable = ({ steps }: { steps: StepMetric[] }) => (
   </BentoCard>
 );
 
+type LogLevel = 'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
+
+const LEVEL_COLOR: Record<string, string> = {
+  ERROR: 'text-[#cf222e]',
+  WARN:  'text-[#9a6700]',
+  DEBUG: 'text-[#8c959f]',
+  INFO:  'text-[#24292f]',
+};
+
+interface LogEntry { level: string; line: string }
+
+const parseEntry = (raw: string): LogEntry => {
+  const m = raw.match(/^\[(INFO|WARN|ERROR|DEBUG)\] ([\s\S]*)$/);
+  return m ? { level: m[1], line: m[2] } : { level: 'INFO', line: raw };
+};
+
+function ExecutionLogPanel({
+  testId, isRunning, liveLines,
+}: { testId: string; isRunning: boolean; liveLines: LogEntry[] }) {
+  const [open, setOpen]       = useState(false);
+  const [stored, setStored]   = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter]   = useState<LogLevel>('ALL');
+  const scrollRef = useRef<HTMLPreElement>(null);
+  const autoScroll = useRef(true);
+
+  useEffect(() => {
+    if (!open || isRunning || stored !== null) return;
+    setLoading(true);
+    getExecutionLog(testId)
+      .then(d => setStored(d.log ?? ''))
+      .catch(() => setStored(''))
+      .finally(() => setLoading(false));
+  }, [open, isRunning, testId, stored]);
+
+  useEffect(() => {
+    if (open && isRunning && autoScroll.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [liveLines, open, isRunning]);
+
+  const allEntries: LogEntry[] = isRunning
+    ? liveLines
+    : (stored ?? '').split('\n').filter(Boolean).map(parseEntry);
+
+  const visible = filter === 'ALL'
+    ? allEntries
+    : allEntries.filter(e => e.level === filter);
+
+  const rawText = allEntries.map(e => `[${e.level}] ${e.line}`).join('\n');
+
+  const download = (): void => {
+    const blob = new Blob([rawText], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `test-${testId.slice(0, 8)}-log.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const copy = (): void => { navigator.clipboard.writeText(rawText).catch(() => {}); };
+
+  const counts = allEntries.reduce<Record<string, number>>((acc, e) => {
+    acc[e.level] = (acc[e.level] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <BentoCard className="col-span-full">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa] hover:bg-[#eaeef2] transition-colors"
+      >
+        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide flex items-center gap-2">
+          Execution Log
+          {isRunning && liveLines.length > 0 && (
+            <span className="text-[#0969da] animate-pulse text-[10px]">● LIVE</span>
+          )}
+          {!isRunning && allEntries.length > 0 && (
+            <span className="text-[#8c959f] font-normal normal-case">{allEntries.length} lines</span>
+          )}
+        </span>
+        <span className="text-[11px] text-[#57606a]">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div>
+          {/* Filter + action bar */}
+          <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[#eaeef2] bg-[#f6f8fa] flex-wrap">
+            {(['ALL', 'INFO', 'WARN', 'ERROR', 'DEBUG'] as LogLevel[]).map(lvl => (
+              <button
+                key={lvl}
+                type="button"
+                onClick={() => setFilter(lvl)}
+                className={`px-2 py-0.5 text-[11px] font-mono rounded border transition-colors ${
+                  filter === lvl
+                    ? 'bg-[#0969da] border-[#0969da] text-white'
+                    : 'bg-white border-[#d0d7de] text-[#57606a] hover:bg-[#f6f8fa]'
+                }`}
+              >
+                {lvl}{lvl !== 'ALL' && counts[lvl] ? ` (${counts[lvl]})` : ''}
+              </button>
+            ))}
+            <span className="ml-auto flex gap-1.5">
+              <button type="button" onClick={copy}     className="px-2 py-0.5 text-[11px] font-mono rounded border border-[#d0d7de] bg-white text-[#57606a] hover:bg-[#f6f8fa]">Copy</button>
+              <button type="button" onClick={download} className="px-2 py-0.5 text-[11px] font-mono rounded border border-[#d0d7de] bg-white text-[#57606a] hover:bg-[#f6f8fa]">↓ Download</button>
+            </span>
+          </div>
+
+          {/* Log output */}
+          {loading ? (
+            <div className="px-3 py-4 text-[12px] font-mono text-[#57606a]">Loading…</div>
+          ) : (
+            <pre
+              ref={scrollRef}
+              onScroll={() => {
+                if (!scrollRef.current) return;
+                const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+                autoScroll.current = scrollHeight - scrollTop - clientHeight < 40;
+              }}
+              className="px-3 py-2 text-[11px] font-mono overflow-x-auto overflow-y-auto max-h-[400px] leading-relaxed bg-[#f6f8fa] whitespace-pre-wrap break-all"
+            >
+              {visible.length === 0 ? (
+                <span className="text-[#8c959f]">
+                  {allEntries.length === 0
+                    ? (isRunning ? 'Waiting for log output…' : 'No execution log recorded.')
+                    : `No ${filter} entries.`}
+                </span>
+              ) : (
+                visible.map((e, i) => (
+                  <div key={i} className={LEVEL_COLOR[e.level] ?? 'text-[#24292f]'}>
+                    <span className="select-none text-[#8c959f]">[{e.level.padEnd(5)}] </span>
+                    {e.line}
+                  </div>
+                ))
+              )}
+            </pre>
+          )}
+        </div>
+      )}
+    </BentoCard>
+  );
+}
+
 export default function ResultPage() {
   const { testId } = useParams() as { testId: string };
   const [result, setResult] = useState<TestResult | null>(null);
@@ -105,6 +251,7 @@ export default function ResultPage() {
   const [diagnoseError, setDiagnoseError] = useState<string | null>(null);
   const [trendNarrative, setTrendNarrative] = useState<string | null>(null);
   const [trendNarrativeLoading, setTrendNarrativeLoading] = useState(false);
+  const [liveLogLines, setLiveLogLines] = useState<LogEntry[]>([]);
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -233,6 +380,9 @@ export default function ResultPage() {
       if (resultRef.current?.status === 'pending') {
         getResult(testId).then(d => { if (d.result) setResult(d.result); }).catch(() => {});
       }
+    }
+    if (event.type === 'test:log' && event.testId === testId) {
+      setLiveLogLines(prev => [...prev, { level: event.level, line: event.line }].slice(-5000));
     }
   });
 
@@ -715,6 +865,16 @@ export default function ResultPage() {
               </BentoCard>
             </div>
           )}
+
+          {/* ── Execution log (completed) ── */}
+          <ExecutionLogPanel testId={testId} isRunning={false} liveLines={liveLogLines} />
+        </div>
+      )}
+
+      {/* ── Execution log (running) — shown below the running state card ── */}
+      {isRunning && (
+        <div className="mt-3">
+          <ExecutionLogPanel testId={testId} isRunning={true} liveLines={liveLogLines} />
         </div>
       )}
     </div>

@@ -74,6 +74,41 @@ const saveScript = async (
   return rows[0].id;
 };
 
+// ── Execution log helpers ─────────────────────────────────────────────────────
+
+const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
+
+const k6Level = (line: string): string => {
+  if (line.startsWith('ERRO')) return 'ERROR';
+  if (line.startsWith('WARN')) return 'WARN';
+  if (line.startsWith('DEBU')) return 'DEBUG';
+  return 'INFO';
+};
+
+const makeLineBuffer = (onLine: (line: string) => void): ((chunk: Buffer) => void) => {
+  let buf = '';
+  return (chunk: Buffer) => {
+    buf += chunk.toString('utf-8');
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? '';
+    for (const l of lines) { if (l.trim()) onLine(l); }
+  };
+};
+
+const postLogLine = async (testId: string, level: string, line: string): Promise<void> => {
+  try {
+    await fetch(`${RESULTS_URL}/results/${testId}/log-line`, {
+      method: 'POST',
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ level, line }),
+    });
+  } catch { /* best-effort */ }
+};
+
+const MAX_LOG_LINES = 5000;
+const MAX_LOG_BYTES = 100 * 1024; // 100 KB
+
 const postLiveMetric = async (testId: string, point: LiveMetricPoint): Promise<void> => {
   try {
     await fetch(`${RESULTS_URL}/results/${testId}/live`, {
@@ -107,7 +142,7 @@ const runK6Test = async (
   envVars?: Record<string, string>,
   testData?: Array<Record<string, string>>,
   csvData?: string,
-): Promise<BackendMetrics> => {
+): Promise<{ metrics: BackendMetrics; executionLog: string }> => {
   // Per-test directory avoids file collisions when WORKER_CONCURRENCY > 1
   const runDir    = path.join(os.tmpdir(), `k6-run-${testId}`);
   await mkdir(runDir, { recursive: true });
@@ -152,8 +187,22 @@ const runK6Test = async (
     const stderrChunks: Buffer[] = [];
     let fileOffset = 0;
 
-    k6.stdout.on('data', (d: Buffer) => stdoutChunks.push(d));
-    k6.stderr.on('data', (d: Buffer) => stderrChunks.push(d));
+    // Execution log accumulation (capped at MAX_LOG_LINES / MAX_LOG_BYTES)
+    const logLines: string[] = [];
+    let logBytes = 0;
+    const addLogLine = (level: string, raw: string): void => {
+      const text = stripAnsi(raw).trimEnd();
+      if (!text || logLines.length >= MAX_LOG_LINES || logBytes >= MAX_LOG_BYTES) return;
+      logLines.push(`[${level}] ${text}`);
+      logBytes += level.length + text.length + 4;
+      postLogLine(testId, level, text).catch(() => {});
+    };
+
+    const stdoutLineBuf = makeLineBuffer(line => addLogLine(k6Level(line), line));
+    const stderrLineBuf = makeLineBuffer(line => addLogLine(k6Level(line), line));
+
+    k6.stdout.on('data', (d: Buffer) => { stdoutChunks.push(d); stdoutLineBuf(d); });
+    k6.stderr.on('data', (d: Buffer) => { stderrChunks.push(d); stderrLineBuf(d); });
 
     const readAndPost = async (): Promise<void> => {
       try {
@@ -213,7 +262,7 @@ const runK6Test = async (
         return;
       }
 
-      resolve(metrics);
+      resolve({ metrics, executionLog: logLines.join('\n') });
     });
 
     k6.on('error', async (err) => {
@@ -358,7 +407,7 @@ const start = async (): Promise<void> => {
     try {
       // Status flips to 'running' (+ started_at) inside runK6Test, once
       // validation passes and the k6 process actually spawns — see notifyRunning.
-      const metrics = await runK6Test(test.id, test.generatedScript!, test.envVars, test.testData, test.csvData);
+      const { metrics, executionLog } = await runK6Test(test.id, test.generatedScript!, test.envVars, test.testData, test.csvData);
 
       // r2: check if the test was cancelled while running
       if (cancelledTests.has(test.id)) {
@@ -383,7 +432,7 @@ const start = async (): Promise<void> => {
 
       channel.sendToQueue(
         RESULTS_QUEUE,
-        Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds, projectId: test.projectId })),
+        Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds, projectId: test.projectId, executionLog })),
         { persistent: true }
       );
 

@@ -111,7 +111,7 @@ export const buildApp = async (
   // Gated by INTERNAL_API_KEY (X-Internal-Key header) when configured; empty =
   // disabled, same convention as API_KEYS, for local dev.
   const internalPaths = new Set(['/results/pending']);
-  const internalSuffixes = ['/running', '/fail', '/message', '/live', '/cancel'];
+  const internalSuffixes = ['/running', '/fail', '/message', '/live', '/cancel', '/log-line'];
   const isInternalCallback = (url: string, method: string): boolean => {
     if (internalPaths.has(url)) return true;
     // GET /results/:testId/live is read by the UI and must be project-scoped;
@@ -1217,6 +1217,39 @@ export const buildApp = async (
         return { points: rows };
       } catch {
         return reply.code(500).send({ error: 'Failed to fetch live metrics' });
+      }
+    }
+  );
+
+  // ── Execution log streaming (internal POST) ──────────────────────────────
+  app.post<{
+    Params: { testId: string };
+    Body: { level: string; line: string };
+  }>('/results/:testId/log-line', async (request, reply) => {
+    const { testId } = request.params;
+    const { level, line } = request.body;
+    reply.send({ success: true });
+    setImmediate(() => broadcast({ type: 'test:log', testId, level, line }));
+    return reply;
+  });
+
+  // ── Execution log retrieval (project-scoped, user-facing) ────────────────
+  app.get<{ Params: { testId: string } }>(
+    '/results/:testId/log',
+    async (request, reply) => {
+      const { testId } = request.params;
+      const projectId = request.projectId ?? null;
+      try {
+        const { rows } = await rPool.query(
+          `SELECT tr.execution_log AS "executionLog"
+           FROM test_results tr
+           WHERE tr.test_id = $1 AND ($2::uuid IS NULL OR tr.project_id = $2::uuid)`,
+          [testId, projectId]
+        );
+        if (rows.length === 0) return reply.code(404).send({ error: 'Not found' });
+        return { log: rows[0].executionLog ?? null };
+      } catch {
+        return reply.code(500).send({ error: 'Failed to fetch execution log' });
       }
     }
   );

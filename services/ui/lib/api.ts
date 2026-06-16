@@ -141,6 +141,12 @@ export const getLiveMetrics = async (testId: string): Promise<{ points: LiveMetr
   return res.json();
 };
 
+export const getExecutionLog = async (testId: string): Promise<{ log: string | null }> => {
+  const res = await f(`${RESULTS_URL}/results/${testId}/log`, { cache: 'no-store' });
+  if (!res.ok) return { log: null };
+  return res.json();
+};
+
 export const cancelTest = async (testId: string): Promise<void> => {
   await f(`${API_URL}/tests/${testId}/cancel`, { method: 'POST' });
 };
