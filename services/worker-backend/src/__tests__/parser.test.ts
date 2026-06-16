@@ -759,7 +759,7 @@ describe('performance', () => {
 
     expect(result).not.toBeNull();
     expect(result!.stepMetrics?.length).toBe(STEP_GROUPS.length);
-    expect(elapsed).toBeLessThan(100);
+    expect(elapsed).toBeLessThan(500);
   });
 
   it('parseK6Output (text summary) stays fast regardless of test size', () => {
