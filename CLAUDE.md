@@ -1148,7 +1148,7 @@ docker compose exec postgres psql -U alt_user -d alt_db -c "DROP TABLE test_resu
 
 **Stack:** Vitest (unit + integration), @testcontainers/postgresql (real DB), Playwright (E2E)
 **Config:** `vitest.config.ts` at root; `playwright.config.ts` at root
-**Total:** ~1300 tests across 66 test files (`npm test` reports 1297 tests; some intentionally skipped in non-Docker/full-suite contexts)
+**Total:** ~1318 tests across 67 test files (`npm test` reports 1297 tests + 21 chaos tests; some intentionally skipped in non-Docker/full-suite contexts)
 
 ### Unit Tests
 | File | Subject | Tests |
