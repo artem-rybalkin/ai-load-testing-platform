@@ -76,7 +76,7 @@ Browser / API client
 
 ```bash
 # 1. Clone
-git clone https://github.com/youruser/ai-load-testing-platform.git
+git clone https://github.com/artem-rybalkin/ai-load-testing-platform.git
 cd ai-load-testing-platform
 
 # 2. Configure

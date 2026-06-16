@@ -19,7 +19,8 @@ test-results/
 playwright-report/
 e2e/.auth/
 
-# Claude Code — local settings are personal overrides, never shared
+# Claude Code — internal context and local settings, not project artifacts
+CLAUDE.md
 .claude/settings.local.json
 
 # Rosetta — ephemeral flow-execution state files, not project artifacts

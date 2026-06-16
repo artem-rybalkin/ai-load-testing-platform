@@ -15,7 +15,7 @@ This guide takes you from zero to running your first load test in about 5 minute
 ## 1. Clone and configure
 
 ```bash
-git clone https://github.com/youruser/ai-load-testing-platform.git
+git clone https://github.com/artem-rybalkin/ai-load-testing-platform.git
 cd ai-load-testing-platform
 ```
 
