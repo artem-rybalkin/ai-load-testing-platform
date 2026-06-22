@@ -23,5 +23,11 @@ e2e/.auth/
 CLAUDE.md
 .claude/settings.local.json
 
-# Rosetta — ephemeral flow-execution state files, not project artifacts
+# Rosetta — tooling config (agent personas, skills, commands) and ephemeral
+# scratch/working state, not project artifacts
+.claude/agents/
+.claude/commands/
+.claude/skills/
+.claude/rules/
 agents/*-flow-state.md
+agents/TEMP/
