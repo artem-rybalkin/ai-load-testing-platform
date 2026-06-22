@@ -151,6 +151,26 @@ export interface ClientTestOptions {
   headers?: Record<string, string>; // custom headers set via page.setExtraHTTPHeaders
 }
 
+// ── Chat-based "one prompt" test creation ───────────────────────────────────
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ParsedTestIntent {
+  type: 'backend' | 'client-side';
+  targetUrl: string;
+  description: string;                            // human-readable summary; becomes TestRequest.description
+  options: BackendTestOptions | ClientTestOptions;
+  thresholds?: SLOThresholds;
+}
+
+export type ChatParseResponse =
+  | { status: 'needsClarification'; question: string }
+  | { status: 'ready'; config: ParsedTestIntent }
+  | { status: 'redirectToFlowBuilder'; reason: string }; // multi-step intent detected — flow inference is out of scope
+
 export interface AiInsights {
   narrative: string;
   anomalies: string[];

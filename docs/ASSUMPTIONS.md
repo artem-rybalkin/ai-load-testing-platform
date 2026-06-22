@@ -48,4 +48,4 @@ Assumptions, unknowns, and open decisions.
 | K2 | Optimal analyser-service prompt payload schema | Need typed AnalysisPromptPayload to cap tokens and normalize units |
 | K3 | Rate limiting strategy when Redis is wired up | @fastify/rate-limit vs custom middleware |
 | K4 | Mobile application performance testing approach | Appium vs WebDriverIO vs cloud device farms (AWS Device Farm, BrowserStack) |
-| K5 | Natural language one-prompt test creation | How to reliably infer test type, URL, steps, load profile, and SLOs from a single free-text prompt |
+| K5 | ~~Natural language one-prompt test creation~~ | **Resolved for backend/browser** — multi-turn chat (`POST /chat/parse`) handles type/URL/load profile/SLO extraction with clarifying follow-ups instead of a single-shot guess; see `docs/AI-FEATURES.md` § 13. Step/URL inference for multi-step flows from prose remains unsolved — chat redirects flow intent to the existing Flow Builder rather than guessing. |

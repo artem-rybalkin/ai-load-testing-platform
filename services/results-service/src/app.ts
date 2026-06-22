@@ -14,7 +14,7 @@ import { createSession, getSession, revokeSession, switchSessionTeam, hashApiKey
 import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, incrementGeminiUsage, getTeamUsage } from './quotas';
 import { redisClient } from './redis';
 import { recordAudit } from './audit';
-import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics, AiProviderName } from '@alt/shared';
+import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics, AiProviderName, ChatMessage } from '@alt/shared';
 import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText, validateSsrfSafeUrl } from '@alt/shared';
 import { analyzeResult } from './analyzer';
 import {
@@ -32,6 +32,96 @@ const aiGenerateText = async (pool: Pool, prompt: string): Promise<string> => {
 const isAiConfigured = async (pool: Pool): Promise<boolean> => {
   const setting = await getAiProviderSetting(pool);
   return [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
+};
+
+// ── Chat-based "one prompt" test creation ───────────────────────────────────
+
+/** Most recent N messages to include in the chat-parse prompt (oldest truncated first). */
+export const CHAT_HISTORY_LIMIT = 20;
+
+/**
+ * Builds the Gemini prompt for POST /chat/parse. Exported standalone (not inline in the
+ * route handler) for unit testability. Truncates to the last CHAT_HISTORY_LIMIT messages.
+ */
+export const buildChatParsePrompt = (messages: ChatMessage[]): string => {
+  const recent = messages.slice(-CHAT_HISTORY_LIMIT);
+  const transcript = recent.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
+
+  return `You are an assistant that turns a free-text conversation about a desired load/performance test into a structured test configuration.
+
+Conversation so far:
+${transcript}
+
+Decide which ONE of the following three outcomes applies, and return ONLY valid JSON matching exactly one of these shapes:
+
+1. If you have enough information to build a complete test configuration (a single target URL, and either backend load-test settings or browser/client-side settings), return:
+{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<human-readable one-sentence summary>", "options": { ... }, "thresholds": { ... } }}
+- For "backend": options must look like {"vus": <number>, "duration": "<e.g. 1m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"}.
+- For "client-side": options must look like {"sessions": <number>, "duration": "<e.g. 1m>", "collectWebVitals": true}.
+- "thresholds" is optional; include only fields the user actually mentioned (p95, avg, errorRate, lcp, fcp, ttfb, cls, inp, tbt). Every threshold value MUST be a plain JSON number with NO unit suffix — write {"p95": 1000}, NEVER {"p95": "1000ms"} or {"p95": "1000"}.
+
+2. If required information is missing or ambiguous (most importantly: no target URL, or test type cannot be determined), return:
+{"status": "needsClarification", "question": "<one short follow-up question to ask the user>"}
+
+3. If the user's intent clearly spans multiple sequential steps or endpoints (e.g. "log in, then add an item to cart, then checkout"), DO NOT attempt to infer the steps. Instead return:
+{"status": "redirectToFlowBuilder", "reason": "<one short sentence explaining why this needs the Flow Builder>"}
+
+Return ONLY the JSON object, nothing else.`;
+};
+
+/**
+ * Coerces a threshold value that may have arrived as a unit-suffixed string (e.g. "1000ms")
+ * into a plain number — confirmed live against a real Gemini call that the model doesn't always
+ * honor the prompt's "no units" instruction. Returns null if it can't be coerced to a finite number.
+ */
+const coerceThresholdValue = (v: unknown): number | null => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string') {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+};
+
+/**
+ * Normalizes config.thresholds in place (coerces string values to numbers). Returns false if
+ * thresholds is present but malformed/uncoercible — caller treats the whole response as invalid.
+ */
+const normalizeThresholdsInPlace = (config: Record<string, unknown>): boolean => {
+  if (config.thresholds === undefined) return true;
+  if (!config.thresholds || typeof config.thresholds !== 'object') return false;
+  const thresholds = config.thresholds as Record<string, unknown>;
+  for (const key of Object.keys(thresholds)) {
+    const coerced = coerceThresholdValue(thresholds[key]);
+    if (coerced === null) return false;
+    thresholds[key] = coerced;
+  }
+  return true;
+};
+
+/**
+ * Validates a parsed Gemini response actually matches ChatParseResponse before it's trusted
+ * downstream — the prompt only *instructs* the model to use 'backend'|'client-side' for
+ * config.type and never 'flow', but LLM output isn't guaranteed to honor that. Without this
+ * check a hallucinated config.type:'flow' (or any other malformed shape) would be forwarded
+ * to the UI unchanged and could reach createTest()/POST /tests as a flow test with no steps[].
+ */
+export const isValidChatParseResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (v.status === 'needsClarification') return typeof v.question === 'string' && v.question.length > 0;
+  if (v.status === 'redirectToFlowBuilder') return typeof v.reason === 'string' && v.reason.length > 0;
+  if (v.status === 'ready') {
+    const config = v.config as Record<string, unknown> | undefined;
+    if (!config || typeof config !== 'object') return false;
+    if (config.type !== 'backend' && config.type !== 'client-side') return false;
+    if (typeof config.targetUrl !== 'string' || config.targetUrl.length === 0) return false;
+    if (typeof config.description !== 'string') return false;
+    if (!config.options || typeof config.options !== 'object') return false;
+    if (!normalizeThresholdsInPlace(config)) return false;
+    return true;
+  }
+  return false;
 };
 
 // Augment Fastify request type with session info — must be at module level
@@ -1841,6 +1931,43 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         const match = text.match(/\[[\s\S]*\]/);
         if (!match) return { diagnoses: [], message: 'AI returned unexpected response' };
         return { diagnoses: JSON.parse(match[0]) };
+      } catch (err) {
+        return reply.code(500).send({ error: (err as Error).message });
+      }
+    }
+  );
+
+  // ── Chat-based "one prompt" test creation ───────────────────────────────
+  // Deliberate deviation from AI-9/AI-4 above: uses getEffectiveAiProviderSetting
+  // (per-team aware), not the global-only getAiProviderSetting that aiGenerateText() uses.
+  app.post<{ Body: { messages: ChatMessage[] } }>(
+    '/chat/parse',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    async (request, reply) => {
+      const { messages } = request.body ?? {};
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return reply.code(400).send({ error: 'messages is required' });
+      }
+
+      const setting = await getEffectiveAiProviderSetting(pool, request.projectId);
+      const configured = [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
+      if (!configured) return reply.code(503).send({ error: 'No AI provider configured' });
+
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
+
+      try {
+        const prompt = buildChatParsePrompt(messages);
+        const text = (await generateAIText(prompt, setting)).trim();
+        await incrementGeminiUsage(pool, request.projectId);
+
+        const match = text.match(/\{[\s\S]*\}/);
+        if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        const parsed = JSON.parse(match[0]);
+        if (!isValidChatParseResponse(parsed)) {
+          return reply.code(500).send({ error: 'AI returned unexpected response' });
+        }
+        return parsed;
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }

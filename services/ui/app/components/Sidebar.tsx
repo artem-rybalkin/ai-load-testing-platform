@@ -7,6 +7,7 @@ const ROLE_LABEL: Record<string, string> = { admin: 'Admin', member: 'Member', v
 
 const NAV = [
   { href: '/',          icon: '⊕', label: 'New Test'  },
+  { href: '/chat',      icon: '💬', label: 'Chat'      },
   { href: '/results',   icon: '≡', label: 'Results'   },
   { href: '/schedules', icon: '⏱', label: 'Schedules' },
   { href: '/presets', icon: '◫', label: 'Presets' },

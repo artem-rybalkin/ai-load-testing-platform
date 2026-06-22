@@ -1,6 +1,6 @@
-import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, SLOThresholds, AiProviderName } from '@alt/shared';
+import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, SLOThresholds, AiProviderName, ChatMessage, ChatParseResponse, ParsedTestIntent } from '@alt/shared';
 
-export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, AiProviderName };
+export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, AiProviderName, ChatMessage, ChatParseResponse, ParsedTestIntent };
 
 // Base paths — all routed through Vite proxy (same-origin, cookies work)
 const API_URL     = '/api';
@@ -449,6 +449,15 @@ export const diagnoseErrors = async (testId: string): Promise<{ diagnoses: Error
     const body = await res.json().catch(() => ({})) as { error?: string };
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
+  return res.json();
+};
+
+export const parseChatPrompt = async (messages: ChatMessage[]): Promise<ChatParseResponse> => {
+  const res = await f(`${RESULTS_URL}/chat/parse`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  });
+  if (!res.ok) { const b = await res.json().catch(() => ({})) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`); }
   return res.json();
 };
 

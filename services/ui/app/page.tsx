@@ -269,7 +269,7 @@ function HomeContent() {
       return;
     }
 
-    const type = searchParams.get('type') as 'backend' | 'client-side' | null;
+    const type = searchParams.get('type') as 'backend' | 'client-side' | 'flow' | null;
     const targetUrl = searchParams.get('targetUrl');
     const description = searchParams.get('description');
     const vus = searchParams.get('vus');

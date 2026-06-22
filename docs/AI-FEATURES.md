@@ -259,6 +259,38 @@ Tags:  e-commerce  load  authenticated
 
 ---
 
+## 13. Chat-Based Test Creation
+
+**Service:** `results-service` (`POST /chat/parse`)
+**Entry point:** "Chat" tab in the sidebar — a multi-turn conversation, not a single-shot form.
+
+The user describes a test in plain English; Gemini parses the running conversation into one of
+three outcomes on every turn:
+
+- **`ready`** — a complete `backend` or `client-side` test config (URL, VUs/sessions, duration,
+  profile, thresholds). Shown as a read-only preview card with **Run Test** / **Keep chatting**.
+  Confirming calls the existing `POST /tests` unchanged — this feature only adds a parsing step in
+  front of test creation, not a new way to run one.
+- **`needsClarification`** — a follow-up question when something required (most commonly the
+  target URL) is missing or ambiguous, shown as a normal assistant reply so the user can just answer.
+- **`redirectToFlowBuilder`** — when the conversation describes multiple sequential steps (e.g.
+  "log in, then check out"), the assistant does not attempt to infer step URLs from prose; it links
+  to the existing Flow Builder instead (`/?type=flow`). Multi-step inference from natural language
+  is intentionally out of scope for v1 — see `docs/TODO.md` for the deferred follow-up.
+
+Differs from every other AI feature in this doc in one respect: it resolves the **per-team** AI
+provider override (`getEffectiveAiProviderSetting`), not the global-only setting AI-9 (4a above)
+currently uses — a deliberate correction made when this feature was built, not a copy of that
+pre-existing gap.
+
+The server caps the conversation to the last 20 messages before building the prompt, regardless of
+how much history the UI is still showing — bounds both context-window risk and per-call token cost
+on a long back-and-forth. Each turn meters one Gemini call against the team's daily quota
+(`checkGeminiQuota`/`incrementGeminiUsage`), same as every other AI feature — a multi-turn
+conversation burns quota faster than a single-click "Suggest" button elsewhere in the app.
+
+---
+
 ## Infrastructure & Reliability
 
 ### Model configuration

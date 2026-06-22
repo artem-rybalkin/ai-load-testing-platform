@@ -12,6 +12,7 @@ import AIStatus from '@/app/components/AIStatus';
 import { lazy, Suspense } from 'react';
 
 const HomePage         = lazy(() => import('@/app/page'));
+const ChatPage         = lazy(() => import('@/app/chat/page'));
 const ResultsPage      = lazy(() => import('@/app/results/page'));
 const ResultDetailPage = lazy(() => import('@/app/results/testId/page'));
 const ComparePage      = lazy(() => import('@/app/results/compare/page'));
@@ -62,6 +63,7 @@ export default function App() {
               <Route element={<AuthGate />}>
                 <Route element={<RootLayout />}>
                   <Route path="/"                element={<HomePage />} />
+                  <Route path="/chat"            element={<ChatPage />} />
                   <Route path="/results"         element={<ResultsPage />} />
                   <Route path="/results/compare" element={<ComparePage />} />
                   <Route path="/results/:testId" element={<ResultDetailPage />} />
