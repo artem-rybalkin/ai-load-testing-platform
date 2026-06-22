@@ -22,11 +22,16 @@ const activeTasks = new Map<string, ScheduledTask>();
 const triggerSchedule = async (pool: Pool, schedule: Schedule): Promise<void> => {
   try {
     const apiKey = process.env.API_KEY || '';
+    const internalApiKey = process.env.INTERNAL_API_KEY || '';
     const res = await fetch(`${API_URL}/tests`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+        // Trusted internal channel — works even when no global API_KEY is
+        // configured (the documented production setup: Team/RBAC on, no
+        // separate global key for service-to-service calls).
+        ...(internalApiKey ? { 'X-Internal-Key': internalApiKey } : {}),
       },
       body: JSON.stringify({
         type: schedule.type,

@@ -143,9 +143,24 @@ const runClientTest = async (test: TestRequest): Promise<{ metrics: ClientMetric
     await browser.close().catch(() => {});
   }, MAX_TEST_DURATION_MS);
 
+  // Work around a lighthouse bug: its isBundledEnvironment() check (lighthouse/core/lib/page-functions.js)
+  // mis-detects a normal npm install as not needing an esbuild __name() polyfill in the page, but
+  // lighthouse's own published files ARE esbuild-bundled with keepNames, so functions it serializes
+  // and evaluates in the page (e.g. truncate, getNodeLabel) still reference __name and throw
+  // "ReferenceError: __name is not defined". Pre-define it on every page (current + future, since
+  // lighthouse closes our pages and opens its own) before lighthouse ever runs.
+  const NAME_POLYFILL = 'globalThis.__name = globalThis.__name || ((fn, value) => { try { Object.defineProperty(fn, "name", { value, configurable: true }); } catch { /* ignore */ } return fn; });';
+  browser.on('targetcreated', async (target) => {
+    const newPage = await target.page().catch(() => null);
+    if (newPage) await newPage.evaluateOnNewDocument(NAME_POLYFILL).catch(() => {});
+  });
+  for (const existingPage of await browser.pages()) {
+    await existingPage.evaluateOnNewDocument(NAME_POLYFILL).catch(() => {});
+  }
+
   try {
     const snapshots: WebVitalsSnapshot[] = [];
-    const options = test.options as { sessions: number; duration: string };
+    const options = test.options as { sessions: number; duration: string; headers?: Record<string, string> };
     const sessions = options.sessions || 1;
   
     let totalJsErrors = 0;
@@ -171,6 +186,10 @@ const runClientTest = async (test: TestRequest): Promise<{ metrics: ClientMetric
 
       const cdp = await page.createCDPSession();
       await cdp.send('Performance.enable');
+
+      if (options.headers && Object.keys(options.headers).length > 0) {
+        await page.setExtraHTTPHeaders(options.headers);
+      }
 
       await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT_MS });
       pageLoadCount++;
@@ -247,8 +266,15 @@ const runClientTest = async (test: TestRequest): Promise<{ metrics: ClientMetric
           else if (e.initiatorType === 'font' || /\.(woff2?|ttf|otf|eot)/i.test(e.name)) bd.fontSize += kb;
           else if (e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch') bd.xhrSize += kb;
         }
-        const round = (n: number): number => Math.round(n * 10) / 10;
-        return { jsSize: round(bd.jsSize), cssSize: round(bd.cssSize), imageSize: round(bd.imageSize), fontSize: round(bd.fontSize), xhrSize: round(bd.xhrSize), totalSize: round(bd.totalSize), requestCount: bd.requestCount };
+        return {
+          jsSize: Math.round(bd.jsSize * 10) / 10,
+          cssSize: Math.round(bd.cssSize * 10) / 10,
+          imageSize: Math.round(bd.imageSize * 10) / 10,
+          fontSize: Math.round(bd.fontSize * 10) / 10,
+          xhrSize: Math.round(bd.xhrSize * 10) / 10,
+          totalSize: Math.round(bd.totalSize * 10) / 10,
+          requestCount: bd.requestCount,
+        };
       });
   
       totalJsErrors += sessionJsErrors;

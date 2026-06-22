@@ -74,12 +74,11 @@ Focus on memory leaks and degradation over time. Set a strict p(95) < 500ms thre
 };
 
 const BACKEND_PROMPT = (test: TestRequest): string => {
-  const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; http2?: boolean; discardResponseBodies?: boolean }; headers?: Record<string, string> };
+  const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; discardResponseBodies?: boolean }; headers?: Record<string, string> };
   const fallback = profileInstructions(opts);
   const http = opts.httpOptions;
   const httpSection = http ? `
 HTTP options to apply:
-${http.http2 ? '- Set options.http2 = true (force HTTP/2)' : ''}
 ${http.discardResponseBodies ? '- Set options.discardResponseBodies = true (skip response body parsing)' : ''}
 ${http.timeout ? `- Use const params = { timeout: '${http.timeout}' }; pass params to every http.request() call` : ''}
 ${http.keepAlive === false ? '- Add header Connection: close to params.headers to disable keep-alive' : ''}

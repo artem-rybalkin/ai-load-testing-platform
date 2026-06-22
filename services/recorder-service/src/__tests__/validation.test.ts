@@ -19,11 +19,8 @@ describe('validateRecorderUrl', () => {
       expect(validateRecorderUrl('http://127.0.0.1/')).toMatch(/private\/internal IP range/);
     });
 
-    it('0.0.0.0 is currently NOT matched by BLOCKED_HOSTNAME_RE or PRIVATE_IPV4_RE (known gap)', () => {
-      // Documents actual behavior: neither blocklist regex covers 0.0.0.0.
-      // Flagged as a potential SSRF gap — see PRIVATE_IPV4_RE in src/index.ts.
-      const result = validateRecorderUrl('http://0.0.0.0/');
-      expect(result).toBeNull();
+    it('blocks 0.0.0.0', () => {
+      expect(validateRecorderUrl('http://0.0.0.0/')).toMatch(/private\/internal IP range/);
     });
 
     it('blocks *.local hostnames', () => {

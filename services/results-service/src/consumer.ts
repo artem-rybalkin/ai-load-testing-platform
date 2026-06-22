@@ -158,10 +158,10 @@ const buildWebhookPayload = (
   return { body, contentType: 'application/json' };
 };
 
-const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string): Promise<void> => {
+const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string, projectId: string | null): Promise<void> => {
   const { rows } = await p.query(
-    `SELECT url, secret, format FROM webhooks WHERE $1 = ANY(events)`,
-    [perfStatus]
+    `SELECT url, secret, format FROM webhooks WHERE $1 = ANY(events) AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+    [perfStatus, projectId]
   );
   const deliveries = rows.map(({ url, secret, format }: { url: string; secret: string | null; format: string | null }) => {
     const fmt = format ?? 'generic';
@@ -272,7 +272,7 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
   }
 
   if (analysis.perfStatus === 'failed' || analysis.perfStatus === 'degraded') {
-    fireWebhooks(p, result, analysis.perfStatus).catch(() => {});
+    fireWebhooks(p, result, analysis.perfStatus, projectId).catch(() => {});
   }
 
   // Push real-time updates to all connected UI clients

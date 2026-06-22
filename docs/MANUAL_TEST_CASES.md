@@ -14,20 +14,129 @@
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
-| AUTH-01 | Login creates a new project | `SESSION_SECRET` set; project name not yet used | 1. Go to `/login` 2. Enter username + new project name 3. Submit | Redirected to home; `alt_session` HttpOnly cookie set; `GET /auth/me` returns the session payload | P1 |
-| AUTH-02 | Login joins an existing project | A project with name X already exists | 1. Login with a different username, same project name X | Login succeeds; user is associated with the same `projectId` as the first user | P1 |
-| AUTH-03 | Login validation — empty fields | — | 1. Submit login form with empty username and/or project name | Inline validation error shown; no POST sent / 400 returned | P2 |
-| AUTH-04 | Login validation — whitespace-only fields | — | 1. Enter only spaces in username/project name, submit | Rejected as invalid (trimmed empty) | P3 |
-| AUTH-05 | Logout clears session | Logged in | 1. Click logout | `alt_session` cookie cleared; subsequent `GET /auth/me` returns 401; redirected to `/login` | P1 |
-| AUTH-06 | Unauthenticated access redirects to login | Not logged in, `SESSION_SECRET` set | 1. Navigate directly to `/results/compare` (or any protected route) | Redirected to `/login`; original destination not rendered | P1 |
-| AUTH-07 | Session persists across reload | Logged in | 1. Refresh the browser | User remains authenticated; no redirect to login | P2 |
-| AUTH-08 | Dev mode (no SESSION_SECRET) bypasses auth | `SESSION_SECRET=""` | 1. Navigate to any page without logging in | All pages accessible; `/auth/login` returns `{ dev: true }` with no cookie | P2 |
-| AUTH-09 | Project data isolation | Two distinct projects/users created | 1. Log in as project A, create a test/preset/webhook 2. Log out, log in as project B | Project B does not see project A's resources (results, scripts, presets, schedules, webhooks, log sources) | P1 |
-| AUTH-10 | Tampered session cookie is rejected | Logged in | 1. Edit the `alt_session` cookie value (flip a character) 2. Reload | Treated as unauthenticated; redirected to `/login` | P2 |
+| AUTH-01 | Register creates a new account + team | `SESSION_SECRET` set; email/team name not yet used | 1. Go to `/login`, switch to register mode 2. Enter email, password, name, team name 3. Submit | `POST /auth/register` returns `SessionUser` with `currentTeamId` set and `role: 'admin'`; `alt_session` HttpOnly cookie set; redirected to home | P1 |
+| AUTH-02 | Register — duplicate email rejected | Account with that email exists | 1. Register again with the same email, different team name | `409`; no new user/team created | P1 |
+| AUTH-03 | Register — duplicate team name rejected | A team with that name exists | 1. Register a new account using an existing team name | `409`; no new user/team created | P2 |
+| AUTH-04 | Login with correct credentials | Registered account exists | 1. Go to `/login` 2. Enter correct email + password | `200`; cookie set; `SessionUser` returned with the user's teams/orgs | P1 |
+| AUTH-05 | Login — wrong password | Registered account exists | 1. Submit correct email, wrong password | `401`; no cookie set; generic error (does not reveal whether the email exists) | P1 |
+| AUTH-06 | Login — unknown email | — | 1. Submit an email with no account | `401`; same generic error as AUTH-05 | P2 |
+| AUTH-07 | `GET /auth/me` reflects current session | Logged in | 1. Call `GET /auth/me` | Returns `SessionUser` matching the logged-in account | P1 |
+| AUTH-08 | `GET /auth/me` — no/expired/revoked session | Logged out, or cookie cleared | 1. Call `GET /auth/me` | `401` | P1 |
+| AUTH-09 | Logout clears session | Logged in | 1. Click "Sign out" | Session row's `revoked_at` set; `alt_session` cookie cleared; subsequent `GET /auth/me` → `401`; redirected to `/login` | P1 |
+| AUTH-10 | Switch team | User belongs to ≥2 teams | 1. Use the sidebar team-switcher `<select>` to pick a different team | `POST /auth/switch-team` updates session's current team; `SessionUser.currentTeamId` changes; subsequent requests scoped to the new team's data | P1 |
+| AUTH-11 | Switch team — not a member | A team ID the user does not belong to | 1. Call `POST /auth/switch-team` with that team's ID directly | `403` | P2 |
+| AUTH-12 | Session with no current team | User removed from their only team (or a session predating any team) | 1. Make any request other than `/teams` or `/orgs` | `403` on all of them | P3 |
+| AUTH-13 | Unauthenticated access redirects to login | Not logged in, `SESSION_SECRET` set | 1. Navigate directly to `/results/compare` (or any protected route) | Redirected to `/login`; original destination not rendered | P1 |
+| AUTH-14 | Session persists across reload | Logged in | 1. Refresh the browser | User remains authenticated; no redirect to login | P2 |
+| AUTH-15 | Dev mode (no SESSION_SECRET) bypasses auth | `SESSION_SECRET=""` | 1. Navigate to any page without logging in | All pages accessible; `/auth/*` return the fixed dev user with no cookie; `request.user/projectId/role` are `null`/`undefined` server-side | P2 |
+| AUTH-16 | Tampered session cookie is rejected | Logged in | 1. Edit the `alt_session` cookie value (flip a character) 2. Reload | Hash lookup fails; treated as unauthenticated; redirected to `/login` | P2 |
+| AUTH-17 | Cross-team data isolation | Two distinct teams/users created | 1. Log in as team A, create a test/preset/webhook 2. Log out, log in as team B | Team B does not see team A's resources (results, scripts, presets, schedules, webhooks, log sources) | P1 |
 
 ---
 
-## 2. Test Creation — Backend (k6)
+## 2. Team & RBAC Management
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| TEAM-01 | View team members | Logged in | 1. Go to `/team` | `GET /teams/:id/members` lists `{ userId, email, name, role }` for the caller's current team | P1 |
+| TEAM-02 | Add a member (admin) | Admin role; target user has an existing account | 1. Enter their email + role 2. Submit | `POST /teams/:id/members` adds them with the chosen role (default `member`); appears in the list | P1 |
+| TEAM-03 | Add member — unknown email | Admin role | 1. Submit an email with no account | `404` | P2 |
+| TEAM-04 | Add member — already a member | Admin role; target is already on the team | 1. Submit their email again | `409` | P2 |
+| TEAM-05 | Change a member's role (admin) | Admin role; ≥2 members incl. another admin | 1. Change a member's role via the dropdown | `PUT /teams/:id/members/:userId` persists; UI reflects new role | P1 |
+| TEAM-06 | Change role — invalid role string | Admin role | 1. Call the endpoint directly with `role: "superadmin"` | `400` | P3 |
+| TEAM-07 | Last-admin protection — role change | Exactly one admin on the team | 1. Try demoting the sole admin to member/viewer | `409`; role unchanged | P1 |
+| TEAM-08 | Remove a member (admin) | Admin role; ≥2 members | 1. Click remove on a non-admin member | `DELETE /teams/:id/members/:userId` succeeds; member disappears from list | P1 |
+| TEAM-09 | Last-admin protection — removal | Exactly one admin on the team | 1. Try removing the sole admin | `409`; member remains | P1 |
+| TEAM-10 | Non-admin cannot mutate membership | Logged in as `member` or `viewer` | 1. Attempt to add/change-role/remove via UI or direct API call | `403`; UI renders a read-only member list (no controls) for non-admins | P1 |
+| TEAM-11 | Viewer role is read-only platform-wide | Logged in as `viewer` | 1. Attempt to create a test, delete a script, save a preset, etc. | `403` on every mutating request across resource routes, not just team membership | P2 |
+| TEAM-12 | Create a new team | Logged in (any role) | 1. Use "+ New team" (Org page) or `POST /teams` directly with `{ name }` | New team created; caller becomes its `admin`; appears in `user.teams` | P1 |
+| TEAM-13 | Create team — duplicate name | A team with that name exists | 1. Submit the same name | `409` | P2 |
+| TEAM-14 | Team-switcher visibility | User belongs to exactly 1 team vs ≥2 | 1. Compare sidebar in both cases | `<select>` switcher is hidden for 1 team, shown for ≥2 | P3 |
+
+---
+
+## 3. Organizations
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| ORG-01 | Create an organization | Logged in (any role) | 1. `POST /orgs { name }` | Org created; caller becomes `owner` in `org_members`; "Org" nav item now visible | P1 |
+| ORG-02 | Create org — duplicate name | An org with that name exists | 1. Submit the same name | `409` | P2 |
+| ORG-03 | View an org | Caller is a member of the org | 1. Go to `/org` | `GET /orgs/:id` returns `{ org, members, teams }`; each team shows a usage summary | P1 |
+| ORG-04 | Add an org member (owner/admin) | Caller is owner/admin; target has an account | 1. Add by email + role | `POST /orgs/:id/members` succeeds; `404` unknown email, `409` already a member | P1 |
+| ORG-05 | Change an org member's role (owner/admin) | ≥2 org members incl. another owner | 1. Change role via UI/API | `PUT /orgs/:id/members/:userId` persists | P2 |
+| ORG-06 | Last-owner protection | Exactly one owner | 1. Try demoting or removing the sole owner | `409` on both `PUT` and `DELETE .../members/:userId` | P1 |
+| ORG-07 | Remove an org member (owner/admin) | ≥2 members | 1. Remove a non-owner member | `DELETE` succeeds; member disappears | P2 |
+| ORG-08 | Non-owner/admin cannot mutate org membership | Caller role = `member` in the org | 1. Attempt add/role-change/remove | `403` | P2 |
+| ORG-09 | Create a team inside an org | Caller is owner/admin | 1. Use "+ New team" on the Org page | `POST /orgs/:id/teams { name }` creates a team with `org_id` set; caller becomes its team `admin`; listed under the org's teams | P1 |
+| ORG-10 | Ungrouped teams unaffected | A team created before/without an org | 1. Verify it still functions normally | `org_id` is `NULL`; no "Org" nav item forced; team behaves identically to an org-grouped one | P3 |
+
+---
+
+## 4. Team Quotas
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| QUOTA-01 | View quota & usage | Any team member | 1. Go to `/team` → "Usage & Limits" | `GET /teams/:id/quotas` returns `{ quota, usage }`; `DEFAULT_TEAM_QUOTA` shown when no `team_quotas` row exists yet | P1 |
+| QUOTA-02 | Edit quota (admin) | Admin role | 1. Change a limit (e.g. `maxConcurrentTests`) 2. Save | `PUT /teams/:id/quotas` upserts the row with the partial update | P2 |
+| QUOTA-03 | Non-admin cannot edit quota | Member/viewer role | 1. Attempt to save a quota change | `403` | P2 |
+| QUOTA-04 | Exceeding `maxConcurrentTests` | Quota set low (e.g. 1); one test already running | 1. Submit another test | `POST /tests` → `429` | P1 |
+| QUOTA-05 | Exceeding `maxVusPerTest` | Quota set low | 1. Submit a test requesting more VUs than the cap | `429` | P2 |
+| QUOTA-06 | Exceeding `maxTestDurationSeconds` | Quota set low | 1. Submit a test with a longer duration than the cap | `429` | P2 |
+| QUOTA-07 | Exceeding `maxScheduledTests` | Quota set low; at the schedule limit | 1. Create (or re-enable) one more schedule | `429` | P2 |
+| QUOTA-08 | Exceeding `maxGeminiCallsPerDay` | Quota exhausted for the day | 1. Call an explicit `/ai/*` endpoint (e.g. "✨ Suggest settings") | `429` | P2 |
+| QUOTA-08a | Core pipeline Gemini calls are NOT metered | Same exhausted daily quota as QUOTA-08 | 1. Run a test that needs AI script generation | Succeeds normally — script generation, recording correlation, and PDF summaries bypass the per-team daily counter | P2 |
+| QUOTA-09 | `teamId == null` bypasses quota checks | Dev mode (`SESSION_SECRET` empty) | 1. Submit tests/schedules well past any quota numbers | All succeed — quota checks are skipped entirely when there's no team context | P3 |
+
+---
+
+## 5. Team API Keys
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| KEY-01 | Generate an API key (admin) | Admin role | 1. On `/team` → "API Keys", click generate, name it | `POST /teams/:id/api-keys` returns `{ id, name, key, createdAt }`; raw `key` shown once in the UI | P1 |
+| KEY-02 | List API keys | ≥1 key generated | 1. View the API Keys list | `GET /teams/:id/api-keys` shows `{ id, name, createdAt, lastUsedAt, revoked }` — no key material | P1 |
+| KEY-03 | Revoke a key | An active key exists | 1. Click revoke | `DELETE .../api-keys/:keyId` sets `revoked_at`; key disappears or shows revoked in the list | P1 |
+| KEY-04 | Use an API key to scope a request | A valid, unrevoked key | 1. `POST /tests` with `X-API-Key: <key>` and no session cookie | Succeeds; scoped to that team (`request.projectId = team_id`, `role = 'admin'`); `last_used_at` updates | P1 |
+| KEY-05 | Revoked/unknown key rejected | A revoked key, or a made-up string | 1. Use it as `X-API-Key` | `401`; does not fall through to the global-key/session checks | P2 |
+| KEY-06 | Non-admin cannot manage keys | Member/viewer role | 1. Attempt to generate or revoke a key | `403` | P2 |
+
+---
+
+## 6. AI Provider Configuration — Global & Per-Team
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| AIP-01 | View available providers (public) | — | 1. `GET /system/ai-provider` (no auth) | Returns `{ provider, fallbacks, available: { gemini, openai, anthropic } }` reflecting which keys are configured in env | P2 |
+| AIP-02 | Update global default provider (admin) | Admin role | 1. On `/team` → "AI Provider", change the primary provider dropdown 2. Save | `PUT /system/ai-provider` persists to `app_settings`; reflected on next `GET` | P1 |
+| AIP-03 | Invalid provider name rejected | Admin role | 1. Call the endpoint directly with `provider: "chatgpt"` | `400` | P3 |
+| AIP-04 | Per-team override | Admin role | 1. Change the team's AI Provider section to differ from the platform default 2. Save | `PUT /teams/:id/ai-provider` upserts `team_ai_providers`; `GET /system/ai-provider?teamId=<id>` now returns `isOverride: true` | P1 |
+| AIP-05 | Revert to platform default | A team override exists | 1. Click "Revert to platform default" | `DELETE /teams/:id/ai-provider` removes the override row; subsequent `GET ?teamId=` shows `isOverride: false` and the global setting | P2 |
+| AIP-06 | UI badge reflects override state | Team page, AI Provider section | 1. Toggle between overridden and default | Badge reads "Custom for this team" vs "Using platform default" accordingly | P3 |
+| AIP-07 | Fallback chain works end-to-end | Primary provider unconfigured (no API key), one fallback configured | 1. Set that combination 2. Run a test needing AI generation | Generation succeeds via the fallback provider, not the unconfigured primary | P2 |
+| AIP-08 | "(not configured)" label | A provider with no API key set in env | 1. Open the provider dropdown/checkboxes | That provider is labeled "(not configured)" | P3 |
+| AIP-09 | Non-admin cannot change AI provider settings | Member/viewer role | 1. Attempt to change global or per-team provider settings | `403` (per-team); global `PUT /system/ai-provider` also requires admin of the caller's current team | P2 |
+
+---
+
+## 7. Audit Log & Data Erasure (GDPR)
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| AUDIT-01 | PDF export recorded | Completed result | 1. Download the PDF report | `audit_log` row inserted: `action='export_pdf'`, correct `resourceId` | P2 |
+| AUDIT-02 | CSV export recorded | Completed result | 1. Download the CSV report | `action='export_csv'` row inserted | P3 |
+| AUDIT-03 | Script delete recorded | Existing script | 1. Delete it | `action='delete'`, `resourceType='script'` row inserted | P3 |
+| AUDIT-04 | View audit log (admin only) | Admin role; ≥1 audited action occurred | 1. Go to `/team` → "Audit Log" | Most recent entries first, joined with the acting user's email | P2 |
+| AUDIT-05 | Non-admin cannot view audit log | Member/viewer role | 1. Attempt to view/call `GET /teams/:id/audit-log` | `403`; section absent from the Team page UI | P2 |
+| AUDIT-06 | Audit log `limit` param respected | ≥500 audited actions (or fewer, to test the default) | 1. Call with `?limit=500` and with no param | Default `100`; capped at max `500` even if a larger value is requested | P3 |
+| AUDIT-07 | Danger Zone two-click confirmation | Admin role | 1. Click "Erase all data" once | Button changes to "Click again to confirm"; no deletion yet on the first click | P1 |
+| AUDIT-08 | Data erasure (admin, confirmed) | Admin role; some team data exists | 1. Confirm the second click | `DELETE /teams/:id/data { confirm: true }` deletes test_results, live_metrics, test_scripts, schedules (cron unregistered), test_presets, webhooks, log_sources, audit_log; records a final `erase_team_data` audit entry; returns `{ success, deleted: {...} }` | P1 |
+| AUDIT-09 | Data erasure without confirm | Admin role | 1. Call the endpoint directly with no/false `confirm` | `400`; nothing deleted | P2 |
+| AUDIT-10 | Data erasure — non-admin | Member/viewer role | 1. Attempt the erasure | `403` | P2 |
+| AUDIT-11 | GDPR auto-purge | `TEST_RESULTS_RETENTION_DAYS > 0`; old `test_results` rows exist | 1. Wait for/trigger the 60s stale-cleanup tick | Rows (and their `live_metrics`) older than N days are deleted; recent rows untouched | P3 |
+
+---
+
+## 8. Test Creation — Backend (k6)
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -51,12 +160,12 @@
 | BE-18 | Re-run a previous test | A completed backend result exists | 1. From results list, click "Re-run" | Navigated to `/?rerun=<id>`; form pre-filled with original URL + description; dismissible banner shown | P2 |
 | BE-19 | Environment variables passed to k6 | — | 1. Provide `envVars` (if exposed in UI) with valid `KEY=VALUE` pairs | Variables passed to k6 as `--env`; not persisted to DB | P3 |
 | BE-20 | Inline test data table / CSV upload | — | 1. Add rows to the inline data table OR upload a CSV | Data passed to the worker as `testData`/`csvData`, used for parameterization, not stored in DB | P3 |
-| BE-21 | HTTP options — HTTP/2 and discard response bodies | — | 1. Open Advanced settings 2. Enable "HTTP/2" and/or "Discard response bodies" 3. Run | `httpOptions: { http2: true, discardResponseBodies: true }` included in the k6 options block of the generated/cached script (`buildK6Options`) | P3 |
+| BE-21 | HTTP options — discard response bodies | — | 1. Open Advanced settings 2. Enable "Discard response bodies" 3. Run | `httpOptions: { discardResponseBodies: true }` included in the k6 options block of the generated/cached script (`buildK6Options`) | P3 |
 | BE-22 | Custom headers — backend test | — | 1. Open Advanced settings 2. Under "Custom Headers" click "+ add", set `X-Api-Key` / `secret123` 3. Run | `options.headers: { "X-Api-Key": "secret123" }` sent in `POST /tests`; generated k6 script merges the header into `params.headers` for every `http.*` call (verify in saved script) | P3 |
 
 ---
 
-## 3. Test Creation — Browser (Puppeteer)
+## 9. Test Creation — Browser (Puppeteer)
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -75,7 +184,7 @@
 
 ---
 
-## 4. Test Creation — Multi-step Flow
+## 10. Test Creation — Multi-step Flow
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -97,7 +206,7 @@
 
 ---
 
-## 5. Test Execution, Live Monitoring & Cancellation
+## 11. Test Execution, Live Monitoring & Cancellation
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -119,7 +228,7 @@
 
 ---
 
-## 6. Results — List, Detail, Compare, Trend, Baseline
+## 12. Results — List, Detail, Compare, Trend, Baseline
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -140,10 +249,24 @@
 | RES-15 | Empty states | No results / no active tests | 1. View results list / active tests strip on a fresh project | Sensible empty-state messaging, no errors | P3 |
 | RES-16 | Failed test shows "no metrics collected" | A test fails before producing metrics | 1. Open its detail | "Test failed — no metrics collected." message shown in place of metric cells; no stale status message lingers (see EX-05) | P1 |
 | RES-17 | Cancelled test detail view | A cancelled test | 1. Open its detail | "Test cancelled — no metrics collected." shown; status badge correct | P2 |
+| RES-18 | CSV report download | Completed result | 1. Click "↓ CSV" | Downloads a CSV with summary metrics + one row per step for flow tests | P2 |
+| RES-19 | Threshold preview against last run | SLO thresholds section open, target URL set, ≥1 completed result exists for that URL+type | 1. Adjust threshold values 2. Click "👁 Preview against last run" | `GET /results/preview-thresholds` returns pass/degraded/fail + violation details computed via `analyzeResult` against the most recent completed result — no new (potentially long) test is run | P2 |
 
 ---
 
-## 7. Scripts Management
+## 13. Execution Log Streaming
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| ELOG-01 | View execution log after completion | Completed test | 1. Open result detail, expand the execution log panel | `GET /results/:testId/log` returns the ANSI-stripped worker output; `{ log: null }` for tests run before this feature existed | P2 |
+| ELOG-02 | Real-time streaming during a live run | Test currently running | 1. Watch the log panel while it runs | Lines append live via `test:log` WebSocket events as the worker posts each one internally | P1 |
+| ELOG-03 | Internal log-line endpoint requires the internal key | `INTERNAL_API_KEY` set | 1. Call `POST /results/:testId/log-line` without `X-Internal-Key` | `401`; with the correct key, `{ success: true }` and the line is broadcast | P2 |
+| ELOG-04 | Log cap enforced | A script producing very verbose/looping output | 1. Run it to completion | Stored log is capped at 5000 lines / 100 KB, not unbounded | P3 |
+| ELOG-05 | Partial log retained on failure | A test that fails mid-run | 1. Open its detail | Whatever log was captured up to the failure point is present (not empty/discarded) | P2 |
+
+---
+
+## 14. Scripts Management
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -153,7 +276,18 @@
 
 ---
 
-## 8. Presets
+## 15. Script Library
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| LIB-01 | Browse built-in templates | — | 1. Go to `/library` | `SCRIPT_TEMPLATES` listed with name, description, tags | P2 |
+| LIB-02 | Preview a template | ≥1 template listed | 1. Toggle preview on one | Full script source shown inline | P3 |
+| LIB-03 | "Use this script" loads it into the form | A template's preview is open | 1. Click "Use this script" | Navigates to the home page with Custom Script mode pre-selected and the template's script pre-filled | P2 |
+| LIB-04 | `findScriptTemplate` lookup correctness | Templates with distinct tags/names | 1. If search/filter is exposed, search by a known tag or name | Correct subset of templates returned | P3 |
+
+---
+
+## 16. Presets
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -165,7 +299,7 @@
 
 ---
 
-## 9. Schedules
+## 17. Schedules
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -179,7 +313,7 @@
 
 ---
 
-## 10. Webhooks
+## 18. Webhooks
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -192,7 +326,7 @@
 
 ---
 
-## 11. Log Sources
+## 19. Log Sources
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -202,7 +336,7 @@
 
 ---
 
-## 12. System Health & Worker Monitoring
+## 20. System Health & Worker Monitoring
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -215,7 +349,7 @@
 
 ---
 
-## 13. Navigation, Layout & Responsiveness
+## 21. Navigation, Layout & Responsiveness
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -225,10 +359,24 @@
 | NAV-04 | Results list responsive layouts | Both desktop and mobile widths | 1. Resize browser | Table view on desktop, card list on mobile; both fully functional | P2 |
 | NAV-05 | Quick-stats panel on home page | Desktop, ≥1 result exists | 1. Load `/` | Panel shows today's count, avg p95, pass rate, active tests, recent runs, preset shortcuts | P3 |
 | NAV-06 | Charts render consistently | Any result with charts | 1. Inspect chart styling | Horizontal-only gridlines, monospace axis ticks, consistent tooltip style/colors per design tokens | P3 |
+| NAV-07 | Dark mode toggle | — | 1. Click "Dark mode" in the sidebar 2. Reload | Theme switches and persists across reload (`useDarkMode` hook); all pages remain legible (no white-on-white/black-on-black regressions) | P3 |
 
 ---
 
-## 14. Cross-Cutting / Non-Functional
+## 22. Rate Limiting
+
+| ID | Title | Pre | Steps | Expected | Pri |
+|----|-------|-----|-------|----------|-----|
+| RATE-01 | Global rate limit exceeded | `RATE_LIMIT_MAX` reachable in a short burst (or temporarily lowered) | 1. Fire more requests than the limit within `RATE_LIMIT_WINDOW_MS` from one IP | `429` with body `{"statusCode":429,"error":"Too Many Requests","message":"Rate limit exceeded, retry in N seconds"}` and a `Retry-After` header | P2 |
+| RATE-02 | `/health` exempt from rate limiting | Global limit otherwise exhausted | 1. Call `GET /health` repeatedly past the limit | Always succeeds — `/health` is in the `allowList` | P3 |
+| RATE-03 | Auth rate limit | `AUTH_RATE_LIMIT_MAX` (10/min) | 1. Submit `/auth/login` or `/auth/register` more than 10 times in a minute from one IP | `429`, independent of the global limit — brute-force protection | P2 |
+| RATE-04 | AI endpoint rate limit | `AI_RATE_LIMIT_MAX` (20/min) | 1. Call an explicit `/ai/*` or `suggest-*`/`diagnose` endpoint >20 times/min from one IP | `429`, independent of the per-team Gemini daily quota (see QUOTA-08) | P3 |
+| RATE-05 | Internal worker callbacks exempt | Global limit otherwise exhausted | 1. Hammer `/results/pending` or `/results/:id/running\|fail\|message\|live\|cancel` | Not subject to the global limit (`allowList`) | P3 |
+| RATE-06 | Rate limiter fails open if Redis is down | `REDIS_URL` set but Redis unreachable | 1. Stop the `redis` container 2. Make normal requests | Requests still succeed (`skipOnError: true`); `/health` reports `checks.redis: 'disconnected'` without flipping overall health to unhealthy | P3 |
+
+---
+
+## 23. Cross-Cutting / Non-Functional
 
 | ID | Title | Pre | Steps | Expected | Pri |
 |----|-------|-----|-------|----------|-----|
@@ -242,7 +390,7 @@
 
 ---
 
-## 15. Boundary, Negative & Security Input Validation
+## 24. Boundary, Negative & Security Input Validation
 
 Pulled into its own pass because the same handful of input-handling rules (length caps, type coercion, encoding, injection safety) recur across many forms — testing them once per field, systematically, finds more than re-deriving them per feature.
 
@@ -273,7 +421,7 @@ Pulled into its own pass because the same handful of input-handling rules (lengt
 
 ---
 
-## 16. AI-Assist & Productivity Features
+## 25. AI-Assist & Productivity Features
 
 These are Gemini-backed "✨" helper actions layered on top of the core flows — found by diffing this suite against `ai-endpoints.test.ts`, `translate.test.ts`, and the recorder `correlator.test.ts` automated coverage, which exercise the service-level logic in isolation. The cases below verify the **UI wiring, empty/error states, and end-to-end behavior** that those unit/integration tests can't see.
 
@@ -373,12 +521,79 @@ Ran SEC-03 / SEC-04 / SEC-19 against the live stack (post worker-backend redeplo
 
 ## Suggested Execution Order (smoke pass before full regression)
 
-1. AUTH-01, AUTH-05, AUTH-06 (can you get in/out and is it gated?)
-2. BE-01, BR-01, FL-01 (one happy path per test type)
-3. EX-01, EX-02, EX-05, EX-06 (lifecycle + the two bugs fixed this session)
-4. RES-01, RES-03, RES-07, RES-16 (can you see and compare results?)
-5. SYS-01 (does the platform tell you when something's wrong?)
-6. SEC-03, SEC-04, SEC-19 (the security checks most likely to catch a real hole fast)
-7. AIX-01, AIX-09, AIX-14 (one "✨" AI-assist control per major surface — settings, diagnosis, scheduling)
+1. AUTH-01, AUTH-04, AUTH-09 (can you register, log in, and log out?)
+2. TEAM-01, TEAM-02, TEAM-07 (team membership basics + last-admin protection)
+3. ORG-01, ORG-09 (org creation + creating a team inside it)
+4. BE-01, BR-01, FL-01 (one happy path per test type)
+5. EX-01, EX-02, EX-05, EX-06 (lifecycle + the two bugs fixed in the 2026-06-08 session)
+6. RES-01, RES-03, RES-07, RES-16, RES-19 (can you see, compare, and sanity-check results?)
+7. QUOTA-04, KEY-04 (a quota actually blocks something; an API key actually authenticates)
+8. AIP-02, AIP-04 (global + per-team AI provider override both take effect)
+9. SYS-01 (does the platform tell you when something's wrong?)
+10. SEC-03, SEC-04, SEC-19 (the security checks most likely to catch a real hole fast)
+11. AIX-01, AIX-09, AIX-14 (one "✨" AI-assist control per major surface — settings, diagnosis, scheduling)
+12. AUDIT-07, AUDIT-08 (Danger Zone confirmation gate actually gates, and erasure actually erases)
 
 Then proceed through the remaining sections by priority (P1 → P2 → P3) for full regression coverage.
+
+---
+
+## Using This Suite with the claude-in-chrome Extension
+
+When asked to execute these scenarios via the Claude Chrome plugin against this app:
+
+1. Log in as the dedicated agent account (see memory: Chrome plugin account) rather than a real user account — `claude-chrome@ai-load-testing.local` / team `claude-chrome-agent` — so test data doesn't pollute anyone's personal team.
+2. For cases requiring a *second* team/user (AUTH-17, TEAM-10/11, ORG-08, KEY-05, QUOTA-09, etc.), register a second throwaway account in the same session (e.g. `claude-chrome-2@ai-load-testing.local`) rather than reusing a real one.
+3. For cases requiring `admin`/`owner` API access directly (role-enforcement negatives, quota/rate-limit boundary cases), it's faster to drive them with `curl`/`Bash` alongside the browser than to fight the UI into an invalid state.
+4. Cases tagged P3 involving infrastructure changes (`docker compose --scale`, stopping a container, editing `.env`) are out of scope for pure browser-driven execution — note them as "requires infra change, not run" rather than skipping silently.
+5. Record actual results inline (pass/fail + a one-line note) rather than just running through silently — this file doubles as a living execution log (see the dated "Execution Log" sections below for the format).
+
+---
+
+## Execution Log — Full 25-Section Run (2026-06-21)
+
+Ran all 25 sections end-to-end against the live `docker compose` stack via `claude-chrome-agent`, mixing real browser interaction (claude-in-chrome) with direct API calls. ~230 of ~264 cases executed; the remainder need infra changes (worker scaling, `.env` edits, 10+ minute waits) or heavy recorder/HAR interaction and were explicitly logged as not-run rather than skipped silently. Nine real bugs found; two fixed live during the run (with permission) because they blocked further sections.
+
+**Fixed live:**
+1. **CORS blank-page bug** (pre-existing from an earlier session, re-confirmed here) — `ALLOWED_ORIGIN=*` + `credentials:true` breaks all credentialed browser requests once `SESSION_SECRET` is set. Fixed via `.env` (`ALLOWED_ORIGIN=http://localhost:3006`).
+2. **`services/worker-client/src/index.ts:250`** — every browser/client-side test failed 100% of the time with `ReferenceError: __name is not defined`. Root cause: a `const round = (n) => ...` helper nested inside a `page.evaluate()` callback gets wrapped by tsx/esbuild's name-preservation transform (`__name(fn, "round")`) purely because of nesting depth (confirmed empirically — type annotations are irrelevant; any named `const` function nested inside another function triggers it). Puppeteer serializes the outer callback via `.toString()` to run in the browser's isolated page context, where `__name` doesn't exist. Fixed by inlining the rounding (no nested named function) instead of extracting a helper.
+
+**Found, not fixed (reported for follow-up):**
+3. **[FIXED 2026-06-22] BR-06 / Lighthouse** — `lighthouse()` itself threw the same `__name is not defined` class of error (caught non-fatally; logged as `[WARN] Lighthouse audit failed`). Root cause fully isolated this time, in the third-party `lighthouse` package itself (confirmed present in both the installed 12.8.2 and the latest 13.4.0): `lighthouse/core/lib/page-functions.js`'s `isBundledEnvironment()` decides whether to inject an esbuild `__name` polyfill into the page before evaluating its own gatherer functions (`truncate`, `getNodeLabel`, etc.) — which are themselves esbuild-bundled with `keepNames` even in a normal npm install. Its heuristic (`require.resolve('lighthouse-logger')` succeeding ⇒ "not bundled" ⇒ skip the polyfill) is wrong for this setup, since lighthouse's own files need the polyfill regardless. The documented escape hatches (`global.isDevtools`/`global.isLightrider`) get past that check but hit a *second* internal bug (`Could not determine esbuild function wrapper name`). Worked around entirely in our own code instead: `runClientTest` now injects the `__name` polyfill into every page (current and future, via `browser.on('targetcreated', ...)` + `page.evaluateOnNewDocument`) before lighthouse ever runs — no node_modules patching required. Verified live: `lighthouseScore` now populates (`{performance:100, accessibility:100, bestPractices:96, seo:80}`), plus `TBT=73ms` in the execution log, with zero errors. This also fixes BR-09 (TBT/TTI/dom-size all derive from Lighthouse).
+4. **[FIXED 2026-06-22] BR-12 — custom headers for browser tests were completely non-functional.** `worker-client/src/index.ts` had zero references to `test.options.headers` anywhere — it always ran its own fixed Puppeteer automation regardless of what `CLIENT_PROMPT` generates (the AI-script-generation pathway for `client-side` tests remains otherwise unused — `generatedScript` is still never read; that's a larger architectural item left as-is). Fixed narrowly: added a `page.setExtraHTTPHeaders(options.headers)` call before navigation, directly applying the configured headers without depending on AI-generated code. Verified live with a real in-network listener — the actual Puppeteer request arrived with the configured `X-Test-Header` present.
+5. **[FIXED 2026-06-22] BE-21 — "Force HTTP/2" was a no-op.** `buildK6Options` (`services/api-service/src/options.ts:9`) and the AI prompt (`services/ai-service/src/generator.ts:82`) wrote `options.http2 = true` into the generated k6 script, but k6 has no such option. Confirmed via a live run's own log: `level=warning msg="There were unknown fields in the options exported in the script" error="json: unknown field \"http2\""`. k6 silently ignored it — the checkbox had no effect on whether HTTP/2 is used. Removed the dead option entirely (UI checkbox, `HttpOptions.http2` type, `buildK6Options`, the AI prompt line, and the corresponding tests/docs) rather than fake-implementing a control k6 doesn't support.
+6. **[FIXED 2026-06-22] AUDIT-03 / SCR-02 — `DELETE /scripts/:id` could never succeed for any real script.** `test_results.script_id REFERENCES test_scripts(id)` had no `ON DELETE` clause (defaulted to RESTRICT), and a script only exists once it's been referenced by at least one result. So every delete attempt 500'd with a raw, unhandled Postgres FK-violation error (`code 23503`) leaking internal schema details to the client instead of a clean error. Fixed via migration #13 (`script_id_on_delete_set_null`) — the FK now `ON DELETE SET NULL`, so deleting a script unlinks it from historical results instead of being blocked by them; the route also now catches any remaining `23503` defensively and returns a clean `409` instead of a raw `500`. Verified live: deleted a referenced script → `204`, the referencing result survived with `script_id: null`.
+7. **[FIXED 2026-06-22] Schedules silently no-op'd once Team/RBAC was enabled without a global `API_KEY`.** `POST /schedules/:id/run` (`services/results-service/src/app.ts`) and the cron auto-trigger (`scheduler.ts`) called api-service's `POST /tests` with no session cookie and no `X-API-Key`. api-service correctly rejected with "Not authenticated" — but `app.ts`'s handler updated `last_run_at = NOW()` unconditionally, never checking the fetch response status (`scheduler.ts` itself already gated on `res.ok` correctly — only the manual-trigger route had that half of the bug). Fixed with two changes: (1) api-service's `onRequest` hook now recognizes a trusted `X-Internal-Key` (when `INTERNAL_API_KEY` is configured) as an authenticated internal caller that can pass `projectId` in the body to scope the test, mirroring the existing global-`API_KEYS` override path; (2) both `scheduler.ts` and the manual-trigger route now send `X-Internal-Key` and only mark `last_run_at` on an actually-successful response. Verified live: set `INTERNAL_API_KEY` in `.env`, restarted both services, manually triggered a schedule — `200` (was `401`), `last_run_at` updated, and a real test was created at the matching timestamp.
+8. **[FIXED 2026-06-22] Webhooks fired cross-tenant.** `fireWebhooks`'s query (`services/results-service/src/consumer.ts:162-165`) was `SELECT url, secret, format FROM webhooks WHERE $1 = ANY(events)` — no `project_id` filter, despite the column existing (migration #5) and every other query in the codebase consistently scoping by it. Any team's webhook fired on every other team's test failures/degradations platform-wide. Fixed by threading `projectId` from `handleResult` into `fireWebhooks` and adding the standard `($2::uuid IS NULL OR project_id = $2::uuid)` scoping clause. Added two regression tests in `consumer.test.ts` (cross-tenant webhook does NOT fire; same-tenant webhook does).
+9. **[FIXED 2026-06-22] Webhook URLs accepted SSRF targets with zero validation.** `POST /webhooks` happily created a webhook pointing at `169.254.169.254` (cloud metadata endpoint). Combined with #8, any team member could plant a webhook targeting internal infrastructure and have it fire reliably whenever *any* team's test failed. Fixed by extracting recorder-service's existing SSRF blocklist (`validateRecorderUrl`) into `@alt/shared` as `validateSsrfSafeUrl` and applying it to `POST /webhooks` too — also closed a `0.0.0.0` gap the recorder's own test suite had explicitly documented as unblocked. Recorder-service now re-exports the shared function so its own tests/behavior are unchanged (verified: all 22 pass, including the now-fixed `0.0.0.0` case). Verified live: `POST /webhooks` with `http://169.254.169.254/` now returns `400`.
+
+**Section-by-section pass tally** (✅ pass / ❌ fail-confirmed-bug / ⚪ N/A in this env / ⏭ not run):
+| Section | Pass | Fail/Bug | N/A | Not run |
+|---|---|---|---|---|
+| 1 Auth | 15 | 0 | 1 | 1 |
+| 2 Team & RBAC | 14 | 0 | 0 | 0 |
+| 3 Organizations | 10 | 0 | 0 | 0 |
+| 4 Team Quotas | 9 | 0 | 1 | 0 |
+| 5 Team API Keys | 6 | 0 | 0 | 0 |
+| 6 AI Provider Config | 9 | 0 | 0 | 0 |
+| 7 Audit Log & Erasure | 10 | 1 (#6) | 1 | 0 |
+| 8 Backend Test Creation | 20 | 1 (#5) | 0 | 1 (BE-16 inconclusive, target throttled) |
+| 9 Browser Test Creation | 5 | 3 (#3,#4 + BR-09) | 0 | 3 |
+| 10 Multi-step Flow | 7 | 0 | 0 | 7 (recorder/HAR-dependent) |
+| 11 Execution & Monitoring | 9 | 0 | 0 | 6 |
+| 12 Results | ~14 | 0 | 0 | ~5 |
+| 13 Execution Log | 2 | 0 | 1 | 2 |
+| 14 Scripts Management | 2 | 1 (#6) | 0 | 0 |
+| 15 Script Library | 3 | 0 | 0 | 1 |
+| 16 Presets | 5 | 0 | 0 | 0 |
+| 17 Schedules | 5 | 1 (#7) | 0 | 1 |
+| 18 Webhooks | 5 | 1 (#8) | 0 | 1 |
+| 19 Log Sources | 2 | 0 | 0 | 1 |
+| 20 System Health | 5 | 0 | 0 | 1 |
+| 21 Navigation/Responsive | 6 | 0 | 0 | 0 |
+| 22 Rate Limiting | 5 | 0 | 0 | 1 |
+| 23 Cross-Cutting | 3 | 0 | 0 | 4 |
+| 24 Security Validation | 14 | 1 (#9) | 0 | 7 |
+| 25 AI-Assist | 11 | 0 | 0 | 13 (mostly recorder-dependent) |
+
+**Environment note:** this run hit serious local infra instability ~5 hours in — Docker Desktop port-forwarding flakiness and eventually the WSL2 VM itself stopped responding, requiring `wsl --shutdown` + relaunch. Per the user, restart/recover the stack from a WSL terminal going forward, not Windows-side PowerShell/Git Bash (see memory: Docker via WSL).

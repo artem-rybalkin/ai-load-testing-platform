@@ -15,7 +15,7 @@ import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, in
 import { redisClient } from './redis';
 import { recordAudit } from './audit';
 import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics, AiProviderName } from '@alt/shared';
-import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText } from '@alt/shared';
+import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText, validateSsrfSafeUrl } from '@alt/shared';
 import { analyzeResult } from './analyzer';
 import {
   getAiProviderSetting, setAiProviderSetting,
@@ -1265,7 +1265,14 @@ export const buildApp = async (
     async (request, reply) => {
       const { id } = request.params;
       const projectId = request.projectId ?? null;
-      await pool.query('DELETE FROM test_scripts WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)', [id, projectId]);
+      try {
+        await pool.query('DELETE FROM test_scripts WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)', [id, projectId]);
+      } catch (err) {
+        if ((err as { code?: string }).code === '23503') {
+          return reply.code(409).send({ error: 'Cannot delete: this script is still referenced elsewhere' });
+        }
+        throw err;
+      }
       await recordAudit(pool, { teamId: projectId, userId: request.user?.id, action: 'delete', resourceType: 'script', resourceId: id });
       return reply.code(204).send();
     }
@@ -1372,6 +1379,8 @@ export const buildApp = async (
     async (request, reply) => {
       const { url, events = ['failed', 'degraded'], secret, format = 'generic' } = request.body;
       if (!url) return reply.code(400).send({ error: 'url is required' });
+      const ssrfError = validateSsrfSafeUrl(url);
+      if (ssrfError) return reply.code(400).send({ error: ssrfError });
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
         `INSERT INTO webhooks (url, events, secret, format, project_id) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -1981,16 +1990,34 @@ Return ONLY valid JSON array. Include only categories with count > 0:
       const s = rows[0];
       const apiUrl = process.env.API_URL || 'http://api-service:3000';
       const apiKey = process.env.API_KEY || '';
+      const internalApiKeyForCall = process.env.INTERNAL_API_KEY || '';
       const res = await fetch(`${apiUrl}/tests`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+          // Trusted internal channel — works even when no global API_KEY is
+          // configured (the documented production setup: Team/RBAC on, no
+          // separate global key for service-to-service calls).
+          ...(internalApiKeyForCall ? { 'X-Internal-Key': internalApiKeyForCall } : {}),
         },
-        body: JSON.stringify({ type: s.type, targetUrl: s.target_url, description: s.description ?? `Scheduled: ${s.name}`, options: s.options, thresholds: s.thresholds ?? undefined }),
+        body: JSON.stringify({
+          type: s.type,
+          targetUrl: s.target_url,
+          description: s.description ?? `Scheduled: ${s.name}`,
+          options: s.options,
+          thresholds: s.thresholds ?? undefined,
+          projectId: s.project_id ?? undefined,
+        }),
       });
       const body = await res.json();
-      await pool.query(`UPDATE schedules SET last_run_at = NOW() WHERE id = $1`, [s.id]);
+      // Only mark the schedule as having run when api-service actually accepted
+      // the test — previously this updated unconditionally, so a rejected
+      // (e.g. unauthenticated) trigger would still report success and update
+      // last_run_at while creating zero tests.
+      if (res.ok) {
+        await pool.query(`UPDATE schedules SET last_run_at = NOW() WHERE id = $1`, [s.id]);
+      }
       return reply.code(res.status).send(body);
     }
   );

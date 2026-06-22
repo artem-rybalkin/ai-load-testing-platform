@@ -13,7 +13,7 @@ import { redisClient } from './redis';
 
 // Augment Fastify request type — must be at module level
 declare module 'fastify' {
-  interface FastifyRequest { projectId: string | undefined; role: TeamRole | null; }
+  interface FastifyRequest { projectId: string | undefined; role: TeamRole | null; isInternalTrusted?: boolean; }
 }
 
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
@@ -94,6 +94,18 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   app.addHook('onRequest', async (request, reply) => {
     if (request.url === '/health') return;
 
+    // Trusted internal service-to-service caller (e.g. results-service's
+    // scheduler triggering a scheduled test). Bypasses session/API_KEYS
+    // entirely — the route handler resolves the team from the request body's
+    // `projectId`. Only takes effect when INTERNAL_API_KEY is configured.
+    const internalKeyHeader = request.headers['x-internal-key'] as string | undefined;
+    const internalApiKeyForAuth = process.env.INTERNAL_API_KEY || '';
+    if (internalApiKeyForAuth && internalKeyHeader === internalApiKeyForAuth) {
+      request.isInternalTrusted = true;
+      request.role = 'admin';
+      return;
+    }
+
     const apiKeyHeader = request.headers['x-api-key'] as string | undefined;
 
     // Per-team API key — scopes the request to one team regardless of global
@@ -167,11 +179,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     async (request, reply) => {
       const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript, projectId: bodyProjectId } = request.body;
 
-      // Internal callers authenticated via the global API_KEYS list (e.g. the
-      // scheduler) may scope a test to a specific team by passing `projectId`.
+      // Internal callers authenticated via the global API_KEYS list or the
+      // trusted INTERNAL_API_KEY channel (e.g. the scheduler) may scope a
+      // test to a specific team by passing `projectId`.
       const apiKeyHeader = request.headers['x-api-key'] as string | undefined;
       const isGlobalKeyAuth = apiKeys.length > 0 && !!apiKeyHeader && apiKeys.includes(apiKeyHeader);
-      const effectiveProjectId = (isGlobalKeyAuth && bodyProjectId) ? bodyProjectId : request.projectId;
+      const isTrustedInternalAuth = request.isInternalTrusted === true;
+      const effectiveProjectId = ((isGlobalKeyAuth || isTrustedInternalAuth) && bodyProjectId) ? bodyProjectId : request.projectId;
 
       const validTypes: TestType[] = ['backend', 'client-side', 'flow'];
       if (!validTypes.includes(type)) {

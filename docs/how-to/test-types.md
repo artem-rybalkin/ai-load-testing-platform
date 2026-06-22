@@ -26,7 +26,6 @@ Backend tests use [k6](https://k6.io/) to send HTTP requests at scale. They meas
   "httpOptions": {
     "keepAlive": true,
     "timeout": "30s",
-    "http2": false,
     "discardResponseBodies": false
   }
 }
@@ -41,7 +40,6 @@ Backend tests use [k6](https://k6.io/) to send HTTP requests at scale. They meas
 | `peakVus` | number | Max VUs for spike/capacity profiles. Default: `vus × 10` |
 | `httpOptions.keepAlive` | boolean | Reuse TCP connections. Default: `true` |
 | `httpOptions.timeout` | string | Per-request timeout. Default: k6's default (60s) |
-| `httpOptions.http2` | boolean | Force HTTP/2. Default: `false` |
 | `httpOptions.discardResponseBodies` | boolean | Don't parse response bodies — reduces memory. Default: `false` |
 | `headers` | object | Custom headers (e.g. API keys, auth tokens) sent with every request. Set via "Custom Headers" in Advanced settings; merged into `params.headers` for every `http.*` call in the generated k6 script |
 

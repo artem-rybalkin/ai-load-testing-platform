@@ -131,7 +131,6 @@ export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak';
 export interface HttpOptions {
   keepAlive?: boolean;             // default true in k6
   timeout?: string;                // per-request timeout, e.g. "30s"
-  http2?: boolean;                 // force HTTP/2 where server supports
   discardResponseBodies?: boolean; // skip body parsing — saves memory on large responses
 }
 
@@ -571,3 +570,22 @@ export async function connectWithBackoff<T>(connect: () => Promise<T>, options: 
     }
   }
 }
+
+// ── SSRF guard ──────────────────────────────────────────────────────────────
+// RFC-1918 + link-local + loopback + Docker-internal SSRF blocklist.
+// Shared by recorder-service (recording target URLs) and results-service
+// (webhook URLs) — anywhere a server-side fetch/navigation is driven by a
+// user-supplied URL.
+const SSRF_BLOCKED_HOSTNAME_RE = /^(localhost|.*\.local|host\.docker\.internal|.*\.internal|metadata\.google\.internal)$/i;
+const SSRF_PRIVATE_IPV4_RE = /^(0\.0\.0\.0|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|169\.254\.\d+\.\d+)$/;
+
+/** Returns an error message if `raw` is unsafe to fetch/navigate to server-side (private/internal/link-local target), or null if it's safe. */
+export const validateSsrfSafeUrl = (raw: string): string | null => {
+  let parsed: URL;
+  try { parsed = new URL(raw); } catch { return 'Invalid URL'; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'URL must use http or https';
+  const host = parsed.hostname.toLowerCase();
+  if (SSRF_BLOCKED_HOSTNAME_RE.test(host)) return 'URL targets a blocked internal hostname';
+  if (SSRF_PRIVATE_IPV4_RE.test(host)) return 'URL targets a private/internal IP range';
+  return null;
+};

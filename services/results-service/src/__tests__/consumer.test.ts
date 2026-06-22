@@ -374,6 +374,32 @@ describe('handleResult — webhook firing', () => {
     const callWithoutSecret = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
     expect(callWithoutSecret![1].headers['X-Webhook-Signature']).toBeUndefined();
   });
+
+  it('does not fire a webhook belonging to a different team (cross-tenant isolation, regression)', async () => {
+    const teamA = crypto.randomUUID();
+    const teamB = crypto.randomUUID();
+    await pool.query(`INSERT INTO projects (id, name) VALUES ($1, $2), ($3, $4)`, [teamA, `team-a-${teamA}`, teamB, `team-b-${teamB}`]);
+    await pool.query(
+      `INSERT INTO webhooks (url, events, project_id) VALUES ('https://other-team.example.com/notify', '{failed,degraded}', $1)`,
+      [teamA]
+    );
+    const result = makeResult({ metrics: failedMetrics, projectId: teamB });
+    await handleResult(pool, result);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mockFetch).not.toHaveBeenCalledWith('https://other-team.example.com/notify', expect.anything());
+  });
+
+  it('fires a webhook scoped to the matching team', async () => {
+    const teamC = crypto.randomUUID();
+    await pool.query(`INSERT INTO projects (id, name) VALUES ($1, $2)`, [teamC, `team-c-${teamC}`]);
+    await pool.query(
+      `INSERT INTO webhooks (url, events, project_id) VALUES ('https://same-team.example.com/notify', '{failed,degraded}', $1)`,
+      [teamC]
+    );
+    const result = makeResult({ metrics: failedMetrics, projectId: teamC });
+    await handleResult(pool, result);
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('https://same-team.example.com/notify', expect.anything()), { timeout: 1000 });
+  });
 });
 
 // ─── Webhook payload formats ───────────────────────────────────────────────

@@ -6,7 +6,6 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
 
   // HTTP-level k6 options derived from httpOptions
   const httpK6 = {
-    ...(httpOptions?.http2               ? { http2: true }                    : {}),
     ...(httpOptions?.discardResponseBodies ? { discardResponseBodies: true } : {}),
   };
 

@@ -29,7 +29,6 @@ export interface TestRequest {
     httpOptions?: {
       keepAlive?: boolean;
       timeout?: string;
-      http2?: boolean;
       discardResponseBodies?: boolean;
     };
   };

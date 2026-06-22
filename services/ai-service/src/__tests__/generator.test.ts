@@ -247,13 +247,6 @@ describe('BACKEND_PROMPT — basic content', () => {
     expect(await getLastPrompt()).toContain('Return ONLY the JavaScript code');
   });
 
-  it('includes httpOptions section when http2 is enabled', async () => {
-    const test = baseBackend();
-    (test.options as never as Record<string, unknown>).httpOptions = { http2: true };
-    await generateScript(test);
-    expect(await getLastPrompt()).toContain('http2');
-  });
-
   it('includes httpOptions section when discardResponseBodies is enabled', async () => {
     const test = baseBackend();
     (test.options as never as Record<string, unknown>).httpOptions = { discardResponseBodies: true };

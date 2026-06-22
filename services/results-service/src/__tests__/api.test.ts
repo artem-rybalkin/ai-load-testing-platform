@@ -339,6 +339,23 @@ describe('webhooks', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('rejects a webhook URL targeting a link-local/metadata address (SSRF, regression)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/webhooks', payload: { url: 'http://169.254.169.254/latest/meta-data/' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/private\/internal IP range/);
+  });
+
+  it('rejects a webhook URL targeting localhost (SSRF, regression)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/webhooks', payload: { url: 'http://localhost:5432/' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/blocked internal hostname/);
+  });
+
+  it('rejects a webhook URL using a non-http(s) scheme', async () => {
+    const res = await app.inject({ method: 'POST', url: '/webhooks', payload: { url: 'file:///etc/passwd' } });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('lists all webhooks', async () => {
     await app.inject({ method: 'POST', url: '/webhooks', payload: { url: 'https://a.com' } });
     await app.inject({ method: 'POST', url: '/webhooks', payload: { url: 'https://b.com' } });
@@ -435,6 +452,33 @@ describe('schedules', () => {
   it('returns 404 when running non-existent schedule', async () => {
     const res = await app.inject({ method: 'POST', url: '/schedules/00000000-0000-0000-0000-000000000099/run' });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('does NOT update last_run_at when api-service rejects the trigger (regression — previously updated unconditionally)', async () => {
+    const create = await app.inject({ method: 'POST', url: '/schedules', payload: schedulePayload });
+    const id = create.json().schedule.id;
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 401, json: async () => ({ error: 'Not authenticated' }),
+    });
+    const res = await app.inject({ method: 'POST', url: `/schedules/${id}/run` });
+    expect(res.statusCode).toBe(401);
+    const { rows } = await pool.query('SELECT last_run_at FROM schedules WHERE id = $1', [id]);
+    expect(rows[0].last_run_at).toBeNull();
+  });
+
+  it('passes the schedule project_id through to api-service in the request body', async () => {
+    const create = await app.inject({ method: 'POST', url: '/schedules', payload: schedulePayload });
+    const id = create.json().schedule.id;
+    const teamId = crypto.randomUUID();
+    await pool.query(`INSERT INTO projects (id, name) VALUES ($1, $2)`, [teamId, `proj-${teamId}`]);
+    await pool.query(`UPDATE schedules SET project_id = $1 WHERE id = $2`, [teamId, id]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, json: async () => ({ success: true, test: { id: 'new-test-id' } }),
+    });
+    await app.inject({ method: 'POST', url: `/schedules/${id}/run` });
+    const call = mockFetch.mock.calls.find(([url]) => String(url).includes('/tests'));
+    const body = JSON.parse(call![1].body);
+    expect(body.projectId).toBe(teamId);
   });
 });
 
@@ -1000,6 +1044,23 @@ describe('DELETE /scripts/:id', () => {
     expect(res.statusCode).toBe(204);
     const { rows: after } = await pool.query('SELECT id FROM test_scripts WHERE id = $1', [id]);
     expect(after).toHaveLength(0);
+  });
+
+  it('deletes a script still referenced by a test result, unlinking it rather than 500ing (regression)', async () => {
+    const { rows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script)
+       VALUES ('http://referenced.com', 'backend', 'export default function(){}')
+       RETURNING id`
+    );
+    const scriptId: string = rows[0].id;
+    const testId = await insertResult({ targetUrl: 'http://referenced.com' });
+    await pool.query('UPDATE test_results SET script_id = $1 WHERE test_id = $2', [scriptId, testId]);
+
+    const res = await app.inject({ method: 'DELETE', url: `/scripts/${scriptId}` });
+    expect(res.statusCode).toBe(204);
+
+    const { rows: result } = await pool.query('SELECT script_id FROM test_results WHERE test_id = $1', [testId]);
+    expect(result[0].script_id).toBeNull();
   });
 });
 

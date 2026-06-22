@@ -1,7 +1,7 @@
 import './tracing';
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
-import { RecordingSession, FlowStep } from '@alt/shared';
+import { RecordingSession, FlowStep, validateSsrfSafeUrl } from '@alt/shared';
 import { startSession, stopSession, toFlowSteps, computeThinkTimes, compileIgnorePatterns, RecordingSessionInternal } from './recorder';
 import { detectCorrelations, suggestStepNames, suggestIgnorePatterns, detectDuplicateSteps, correlatorRateLimited, DeduplicationSuggestion } from './correlator';
 import { log } from './logger';
@@ -14,19 +14,9 @@ const NOVNC_URL = process.env.NOVNC_URL || `http://localhost:6080/vnc.html?autoc
 const RECORDER_MAX_DURATION_MS = Number(process.env.RECORDER_MAX_DURATION_MS) || 30 * 60 * 1000; // 30 min
 const RECORDER_IDLE_TIMEOUT_MS = Number(process.env.RECORDER_IDLE_TIMEOUT_MS) || 10 * 60 * 1000; // 10 min
 
-// RFC-1918 + link-local + loopback + Docker-internal SSRF blocklist
-const BLOCKED_HOSTNAME_RE = /^(localhost|.*\.local|host\.docker\.internal|.*\.internal|metadata\.google\.internal)$/i;
-const PRIVATE_IPV4_RE = /^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|169\.254\.\d+\.\d+)$/;
-
-export const validateRecorderUrl = (raw: string): string | null => {
-  let parsed: URL;
-  try { parsed = new URL(raw); } catch { return 'Invalid URL'; }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'URL must use http or https';
-  const host = parsed.hostname.toLowerCase();
-  if (BLOCKED_HOSTNAME_RE.test(host)) return 'URL targets a blocked internal hostname';
-  if (PRIVATE_IPV4_RE.test(host)) return 'URL targets a private/internal IP range';
-  return null;
-};
+// SSRF blocklist — see @alt/shared's validateSsrfSafeUrl for the shared implementation
+// (also used by results-service for webhook URLs).
+export const validateRecorderUrl = validateSsrfSafeUrl;
 
 // Active sessions: sessionId → internal state
 const sessions = new Map<string, RecordingSessionInternal>();

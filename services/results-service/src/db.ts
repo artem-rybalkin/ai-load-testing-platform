@@ -45,7 +45,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
           target_url    TEXT NOT NULL,
           status        VARCHAR(20) NOT NULL,
           metrics       JSONB,
-          script_id     UUID REFERENCES test_scripts(id),
+          script_id     UUID REFERENCES test_scripts(id) ON DELETE SET NULL,
           reused_script BOOLEAN DEFAULT FALSE,
           perf_status   VARCHAR(20),
           analysis      JSONB,
@@ -331,6 +331,19 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
     name: 'execution_log',
     up: async (p): Promise<void> => {
       await p.query(`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS execution_log TEXT`);
+    },
+  },
+  {
+    version: 13,
+    name: 'script_id_on_delete_set_null',
+    up: async (p): Promise<void> => {
+      // test_results.script_id had no ON DELETE clause, so DELETE /scripts/:id always
+      // 500'd with a raw FK-violation once a script had ever been used (i.e. always,
+      // since a script row only exists after a test references it). Switch to
+      // SET NULL so deleting a script unlinks it from historical results instead of
+      // being permanently blocked by them.
+      await p.query(`ALTER TABLE test_results DROP CONSTRAINT IF EXISTS test_results_script_id_fkey`);
+      await p.query(`ALTER TABLE test_results ADD CONSTRAINT test_results_script_id_fkey FOREIGN KEY (script_id) REFERENCES test_scripts(id) ON DELETE SET NULL`);
     },
   },
 ];

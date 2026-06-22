@@ -164,7 +164,6 @@ function HomeContent() {
     profile: 'load' as 'load' | 'spike' | 'capacity' | 'soak',
     httpKeepAlive: true,
     httpTimeout: '',
-    httpHttp2: false,
     httpDiscardBodies: false,
   });
   const [flowSteps, setFlowSteps] = useState<FlowStep[]>([]);
@@ -377,7 +376,6 @@ function HomeContent() {
     const opts: Record<string, unknown> = {};
     if (!form.httpKeepAlive) opts.keepAlive = false;
     if (form.httpTimeout)    opts.timeout = form.httpTimeout;
-    if (form.httpHttp2)      opts.http2 = true;
     if (form.httpDiscardBodies) opts.discardResponseBodies = true;
     return Object.keys(opts).length > 0 ? opts : undefined;
   };
@@ -890,13 +888,6 @@ function HomeContent() {
                               className="rounded-sm border-[#d0d7de]"
                             />
                             Keep-alive connections
-                          </label>
-                          <label className="flex items-center gap-2 text-[12px] text-[#24292f] cursor-pointer">
-                            <input type="checkbox" checked={form.httpHttp2}
-                              onChange={e => setForm(f => ({ ...f, httpHttp2: e.target.checked }))}
-                              className="rounded-sm border-[#d0d7de]"
-                            />
-                            Force HTTP/2
                           </label>
                           <label className="flex items-center gap-2 text-[12px] text-[#24292f] cursor-pointer">
                             <input type="checkbox" checked={form.httpDiscardBodies}

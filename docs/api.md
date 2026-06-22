@@ -404,7 +404,6 @@ Create and start a new test.
 |-------|------|---------|-------------|
 | `keepAlive` | boolean | `true` | Keep TCP connections alive between requests |
 | `timeout` | string | — | Per-request timeout, e.g. `"30s"` |
-| `http2` | boolean | `false` | Force HTTP/2 |
 | `discardResponseBodies` | boolean | `false` | Skip body parsing — saves memory on large responses |
 
 **Browser options (`options` for `type: "client-side"`):**

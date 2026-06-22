@@ -206,3 +206,36 @@ describe('triggerSchedule — API_KEY header', () => {
     expect(headers['X-API-Key']).toBe('test-api-key');
   });
 });
+
+describe('triggerSchedule — X-Internal-Key header (regression)', () => {
+  const originalInternalKey = process.env.INTERNAL_API_KEY;
+
+  afterEach(() => {
+    if (originalInternalKey === undefined) delete process.env.INTERNAL_API_KEY;
+    else process.env.INTERNAL_API_KEY = originalInternalKey;
+  });
+
+  it('does not send an X-Internal-Key header when INTERNAL_API_KEY is unset', async () => {
+    delete process.env.INTERNAL_API_KEY;
+    await insertSchedule();
+    await startScheduler(pool);
+    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    await callback();
+
+    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    expect(headers).not.toHaveProperty('X-Internal-Key');
+  });
+
+  it('sends the X-Internal-Key header when INTERNAL_API_KEY is set, so scheduled triggers work under RBAC without a global API_KEY', async () => {
+    delete process.env.API_KEY;
+    process.env.INTERNAL_API_KEY = 'test-internal-key';
+    await insertSchedule();
+    await startScheduler(pool);
+    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    await callback();
+
+    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    expect(headers['X-Internal-Key']).toBe('test-internal-key');
+    expect(headers).not.toHaveProperty('X-API-Key');
+  });
+});

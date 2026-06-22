@@ -491,6 +491,63 @@ describe('POST /tests — session and quota enforcement', () => {
   });
 });
 
+// ─── POST /tests — X-Internal-Key trusted channel (regression) ───────────────
+// Covers the documented production config: SESSION_SECRET set (RBAC on) but no
+// separate global API_KEY for service-to-service callers like the scheduler.
+// Previously, a scheduled-test trigger with no session and no API_KEY got
+// rejected with 401 "Not authenticated" — silently, since the caller
+// (results-service) didn't check the response status before marking success.
+
+describe('POST /tests — X-Internal-Key trusted channel', () => {
+  let internalApp: FastifyInstance;
+
+  beforeAll(async () => {
+    process.env.SESSION_SECRET = 'test-secret';
+    process.env.INTERNAL_API_KEY = 'test-internal-key';
+    internalApp = await buildApp();
+  });
+
+  afterAll(async () => {
+    delete process.env.SESSION_SECRET;
+    delete process.env.INTERNAL_API_KEY;
+    await internalApp.close();
+  });
+
+  beforeEach(() => {
+    mockCheckTestQuota.mockReset().mockResolvedValue(null);
+  });
+
+  it('rejects with 401 when neither a session cookie nor X-Internal-Key is present (the bug scenario)', async () => {
+    mockGetApiSession.mockResolvedValueOnce(null);
+    const res = await internalApp.inject({ method: 'POST', url: '/tests', payload: validBody });
+    expect(res.statusCode).toBe(401);
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+
+  it('accepts the request via X-Internal-Key with no session cookie, scoped to the body projectId', async () => {
+    const res = await internalApp.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...validBody, projectId: 'scheduled-team-456' },
+      headers: { 'x-internal-key': 'test-internal-key' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().test.projectId).toBe('scheduled-team-456');
+    expect(mockGetApiSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects an incorrect X-Internal-Key', async () => {
+    mockGetApiSession.mockResolvedValueOnce(null);
+    const res = await internalApp.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: { ...validBody, projectId: 'scheduled-team-456' },
+      headers: { 'x-internal-key': 'wrong-key' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 // ─── POST /tests — duration validation ────────────────────────────────────────
 
 describe('POST /tests — duration validation', () => {
