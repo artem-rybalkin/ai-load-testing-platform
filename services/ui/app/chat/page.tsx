@@ -15,6 +15,7 @@ interface PreviewMsg {
   kind: 'preview';
   config: ParsedTestIntent;
   dismissed: boolean;
+  started: boolean;
 }
 
 interface RedirectMsg {
@@ -90,7 +91,7 @@ export default function ChatPage() {
       } else if (response.status === 'redirectToFlowBuilder') {
         appendEntry({ role: 'assistant', kind: 'redirect', reason: response.reason });
       } else if (response.status === 'ready') {
-        appendEntry({ role: 'assistant', kind: 'preview', config: response.config, dismissed: false });
+        appendEntry({ role: 'assistant', kind: 'preview', config: response.config, dismissed: false, started: false });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to parse your message');
@@ -103,15 +104,22 @@ export default function ChatPage() {
     setEntries(prev => prev.map(e => (e === entry ? { ...e, dismissed: true } : e)));
   };
 
-  const handleRunTest = async (config: ParsedTestIntent) => {
+  const handleRunTest = async (entry: PreviewMsg, index: number) => {
+    if (entry.started) return; // already submitted (or in flight) — ignore a duplicate click
     setError(null);
+    // Mark started synchronously, before the request even goes out, so a fast double-click
+    // (or clicking again after the response comes back) can't create a second test. Matched by
+    // index, not object identity — this same entry gets mutated twice (started:true, then
+    // possibly started:false on failure), and `entry === e` would go stale after the first
+    // mutation since that produces a new object reference in state.
+    setEntries(prev => prev.map((e, i) => (i === index ? { ...e, started: true } : e)));
     try {
       const result = await createTest({
-        type: config.type,
-        targetUrl: config.targetUrl,
-        description: config.description,
-        options: config.options,
-        thresholds: config.thresholds,
+        type: entry.config.type,
+        targetUrl: entry.config.targetUrl,
+        description: entry.config.description,
+        options: entry.config.options,
+        thresholds: entry.config.thresholds,
       });
       const testId: string = result?.test?.id ?? result?.id;
       if (!testId) throw new Error('Test created but no id was returned');
@@ -119,6 +127,8 @@ export default function ChatPage() {
       appendEntry({ role: 'assistant', kind: 'status', testId, status: 'pending' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create test');
+      // Creation failed — no test was actually started, so allow the user to retry.
+      setEntries(prev => prev.map((e, i) => (i === index ? { ...e, started: false } : e)));
     }
   };
 
@@ -194,6 +204,15 @@ export default function ChatPage() {
                 </div>
               );
             }
+            if (entry.started) {
+              return (
+                <div key={i} className="flex justify-start">
+                  <div className="max-w-[80%] rounded-md px-3 py-2 text-[13px] bg-white border border-[#d0d7de] text-[#57606a] italic">
+                    ✓ Test started — see status below.
+                  </div>
+                </div>
+              );
+            }
             return (
               <div key={i} className="flex justify-start">
                 <div className="max-w-[90%] rounded-md border border-[#d0d7de] bg-white overflow-hidden">
@@ -233,7 +252,7 @@ export default function ChatPage() {
                   <div className="px-3 py-2 border-t border-[#d0d7de] bg-[#f6f8fa] flex gap-2">
                     <button
                       type="button"
-                      onClick={() => handleRunTest(entry.config)}
+                      onClick={() => handleRunTest(entry, i)}
                       className="px-3 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[12px] font-medium transition-colors"
                     >
                       Run Test

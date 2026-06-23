@@ -138,6 +138,81 @@ describe('ChatPage', () => {
     expect(screen.getByText(/pending/i)).toBeInTheDocument();
   });
 
+  it('removes the Run Test button after a successful submission, preventing a duplicate test (regression)', async () => {
+    mockParseChatPrompt.mockResolvedValue({
+      status: 'ready',
+      config: {
+        type: 'backend',
+        targetUrl: 'https://api.example.com',
+        description: 'Load test the API',
+        options: { vus: 50, duration: '2m' },
+      },
+    });
+    mockCreateTest.mockResolvedValue({ success: true, test: { id: 'test-abc-123' } });
+
+    render(<ChatPage />);
+    await sendMessage('Load test https://api.example.com with 50 VUs for 2 minutes');
+    await waitFor(() => expect(screen.getByRole('button', { name: /run test/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /run test/i }));
+    await waitFor(() => expect(mockCreateTest).toHaveBeenCalledTimes(1));
+
+    // The button must be gone (not just disabled) so there's no way to trigger a second createTest call.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /run test/i })).not.toBeInTheDocument());
+    expect(screen.getByText(/test started/i)).toBeInTheDocument();
+    expect(mockCreateTest).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call createTest twice on a rapid double-click (regression)', async () => {
+    mockParseChatPrompt.mockResolvedValue({
+      status: 'ready',
+      config: {
+        type: 'backend',
+        targetUrl: 'https://api.example.com',
+        description: 'Load test the API',
+        options: { vus: 50, duration: '2m' },
+      },
+    });
+    let resolveCreateTest: (v: unknown) => void = () => {};
+    mockCreateTest.mockReturnValue(new Promise(resolve => { resolveCreateTest = resolve; }));
+
+    render(<ChatPage />);
+    await sendMessage('Load test https://api.example.com with 50 VUs for 2 minutes');
+    await waitFor(() => expect(screen.getByRole('button', { name: /run test/i })).toBeInTheDocument());
+
+    const button = screen.getByRole('button', { name: /run test/i });
+    fireEvent.click(button);
+    // Second click before the first createTest() call has resolved — button should already be gone.
+    expect(screen.queryByRole('button', { name: /run test/i })).not.toBeInTheDocument();
+
+    resolveCreateTest({ success: true, test: { id: 'test-abc-123' } });
+    await waitFor(() => expect(screen.getByText(/test-abc-123/)).toBeInTheDocument());
+    expect(mockCreateTest).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-enables Run Test if test creation fails, so the user can retry', async () => {
+    mockParseChatPrompt.mockResolvedValue({
+      status: 'ready',
+      config: {
+        type: 'backend',
+        targetUrl: 'https://api.example.com',
+        description: 'Load test the API',
+        options: { vus: 50, duration: '2m' },
+      },
+    });
+    mockCreateTest.mockRejectedValueOnce(new Error('quota exceeded'));
+
+    render(<ChatPage />);
+    await sendMessage('Load test https://api.example.com with 50 VUs for 2 minutes');
+    await waitFor(() => expect(screen.getByRole('button', { name: /run test/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /run test/i }));
+    await waitFor(() => expect(screen.getByText(/quota exceeded/i)).toBeInTheDocument());
+
+    // Creation failed — no test was actually started, so the button should come back for a retry.
+    expect(screen.getByRole('button', { name: /run test/i })).toBeInTheDocument();
+  });
+
   it('updates the status bubble text when a test:status WS event fires for the watched test', async () => {
     mockParseChatPrompt.mockResolvedValue({
       status: 'ready',
