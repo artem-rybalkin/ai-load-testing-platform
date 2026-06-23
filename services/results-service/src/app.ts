@@ -15,7 +15,7 @@ import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, in
 import { redisClient } from './redis';
 import { recordAudit } from './audit';
 import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics, AiProviderName, ChatMessage } from '@alt/shared';
-import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText, validateSsrfSafeUrl } from '@alt/shared';
+import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText, validateSsrfSafeUrl, coerceNumericValue, extractAndParseAIJson } from '@alt/shared';
 import { analyzeResult } from './analyzer';
 import {
   getAiProviderSetting, setAiProviderSetting,
@@ -70,20 +70,6 @@ Return ONLY the JSON object, nothing else.`;
 };
 
 /**
- * Coerces a threshold value that may have arrived as a unit-suffixed string (e.g. "1000ms")
- * into a plain number — confirmed live against a real Gemini call that the model doesn't always
- * honor the prompt's "no units" instruction. Returns null if it can't be coerced to a finite number.
- */
-const coerceThresholdValue = (v: unknown): number | null => {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'string') {
-    const n = parseFloat(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-};
-
-/**
  * Normalizes config.thresholds in place (coerces string values to numbers). Returns false if
  * thresholds is present but malformed/uncoercible — caller treats the whole response as invalid.
  */
@@ -92,7 +78,7 @@ const normalizeThresholdsInPlace = (config: Record<string, unknown>): boolean =>
   if (!config.thresholds || typeof config.thresholds !== 'object') return false;
   const thresholds = config.thresholds as Record<string, unknown>;
   for (const key of Object.keys(thresholds)) {
-    const coerced = coerceThresholdValue(thresholds[key]);
+    const coerced = coerceNumericValue(thresholds[key]);
     if (coerced === null) return false;
     thresholds[key] = coerced;
   }
@@ -122,6 +108,93 @@ export const isValidChatParseResponse = (value: unknown): boolean => {
     return true;
   }
   return false;
+};
+
+/** Validates the AI's /ai/cron response: {"cron": "...", "preview": "..."}. */
+export const isValidCronResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.cron === 'string' && v.cron.length > 0 && typeof v.preview === 'string' && v.preview.length > 0;
+};
+
+/** Validates the AI's /ai/trend-narrative response: {"narrative": "..."}. */
+export const isValidTrendNarrativeResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.narrative === 'string' && v.narrative.length > 0;
+};
+
+/**
+ * Validates (and coerces) the AI's /results/suggest-settings response:
+ * {"vus": <number>, "duration": "...", "profile": "load|spike|soak|capacity", "reasoning": "..."}.
+ * Mutates `value.vus` in place when it arrives as a coercible numeric string.
+ */
+export const isValidSuggestSettingsResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  const vus = coerceNumericValue(v.vus);
+  if (vus === null) return false;
+  v.vus = vus;
+  if (typeof v.duration !== 'string' || v.duration.length === 0) return false;
+  if (v.profile !== 'load' && v.profile !== 'spike' && v.profile !== 'soak' && v.profile !== 'capacity') return false;
+  if (typeof v.reasoning !== 'string') return false;
+  return true;
+};
+
+/** Validates the AI's /ai/webhook-noise response: {"level": "noisy|ok|silent", "message": "..."}. */
+export const isValidWebhookNoiseResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (v.level !== 'noisy' && v.level !== 'ok' && v.level !== 'silent') return false;
+  return typeof v.message === 'string';
+};
+
+/** Validates the AI's /ai/preset-name response: {"name": "...", "tags": ["...", ...]}. */
+export const isValidPresetNameResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.name !== 'string' || v.name.length === 0) return false;
+  return Array.isArray(v.tags) && v.tags.every(t => typeof t === 'string');
+};
+
+/** Validates the AI's /ai/param-suggestions response: {"columns": ["...", ...], "reasoning": "..."}. */
+export const isValidParamSuggestionsResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.columns) || v.columns.length === 0 || !v.columns.every(c => typeof c === 'string')) return false;
+  return typeof v.reasoning === 'string';
+};
+
+/**
+ * Validates (and coerces) the AI's /results/suggest-thresholds response:
+ * {"p95": <number>, "avg": <number>, "errorRate": <number>, "reasoning": "..."}.
+ * Mutates p95/avg/errorRate in place when they arrive as coercible numeric strings.
+ */
+export const isValidSuggestThresholdsResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  for (const key of ['p95', 'avg', 'errorRate'] as const) {
+    const coerced = coerceNumericValue(v[key]);
+    if (coerced === null) return false;
+    v[key] = coerced;
+  }
+  return typeof v.reasoning === 'string';
+};
+
+/**
+ * Validates the AI's /results/:testId/diagnose response: a JSON array of
+ * {"category": "serverError|clientError|timeout|networkError", "count": <number>, "likelyCause": "...", "nextStep": "..."}.
+ */
+export const isValidDiagnoseResponse = (value: unknown): boolean => {
+  if (!Array.isArray(value)) return false;
+  return value.every(item => {
+    if (!item || typeof item !== 'object') return false;
+    const v = item as Record<string, unknown>;
+    if (v.category !== 'serverError' && v.category !== 'clientError' && v.category !== 'timeout' && v.category !== 'networkError') return false;
+    if (typeof v.count !== 'number') return false;
+    if (typeof v.likelyCause !== 'string') return false;
+    return typeof v.nextStep === 'string';
+  });
 };
 
 // Augment Fastify request type with session info — must be at module level
@@ -1575,9 +1648,9 @@ Description: "${phrase}"
 Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
         )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
-        return JSON.parse(match[0]);
+        const parsed = extractAndParseAIJson(text);
+        if (!parsed || !isValidCronResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        return parsed;
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
@@ -1609,9 +1682,9 @@ ${JSON.stringify(summary, null, 2)}
 
 Return ONLY valid JSON: {"narrative": "<2 sentences>"}`
         )).trim();
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
-        return JSON.parse(match[0]);
+        const parsed = extractAndParseAIJson(text);
+        if (!parsed || !isValidTrendNarrativeResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        return parsed;
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
@@ -1649,9 +1722,9 @@ Return ONLY valid JSON:
 {"vus": <number>, "duration": "<e.g. 1m>", "profile": "load|spike|soak|capacity", "reasoning": "<one sentence>"}`
         )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
-        return JSON.parse(match[0]);
+        const parsed = extractAndParseAIJson(text);
+        if (!parsed || !isValidSuggestSettingsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        return parsed;
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
@@ -1688,10 +1761,10 @@ Return ONLY valid JSON:
 {"level": "noisy|ok|silent", "message": "<one sentence warning or confirmation>"}`
         )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return { warning: null };
-        const parsed = JSON.parse(match[0]) as { level: string; message: string };
-        return { level: parsed.level, warning: parsed.level !== 'ok' ? parsed.message : null, message: parsed.message };
+        const parsed = extractAndParseAIJson(text);
+        if (!parsed || !isValidWebhookNoiseResponse(parsed)) return { warning: null };
+        const { level, message } = parsed as { level: string; message: string };
+        return { level, warning: level !== 'ok' ? message : null, message };
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
@@ -1718,9 +1791,9 @@ Tags should be lowercase, single words or hyphenated (e.g. "e2e", "smoke", "auth
 Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
         )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
-        return JSON.parse(match[0]);
+        const parsed = extractAndParseAIJson(text);
+        if (!parsed || !isValidPresetNameResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        return parsed;
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
@@ -1749,9 +1822,9 @@ Return ONLY valid JSON:
 {"columns": ["column_name_1", "column_name_2"], "reasoning": "<one sentence>"}`
         )).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
-        return JSON.parse(match[0]);
+        const parsed = extractAndParseAIJson(text);
+        if (!parsed || !isValidParamSuggestionsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        return parsed;
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
@@ -1811,11 +1884,10 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
 
         const text = (await aiGenerateText(pool, prompt)).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        const parsed = extractAndParseAIJson(text);
+        if (!parsed || !isValidSuggestThresholdsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
 
-        const suggestions = JSON.parse(jsonMatch[0]);
-        return { suggestions, runsAnalysed: rows.length };
+        return { suggestions: parsed, runsAnalysed: rows.length };
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
@@ -1928,9 +2000,9 @@ Return ONLY valid JSON array. Include only categories with count > 0:
 
         const text = (await aiGenerateText(pool, prompt)).trim();
         await incrementGeminiUsage(pool, request.projectId);
-        const match = text.match(/\[[\s\S]*\]/);
-        if (!match) return { diagnoses: [], message: 'AI returned unexpected response' };
-        return { diagnoses: JSON.parse(match[0]) };
+        const parsed = extractAndParseAIJson(text, 'array');
+        if (!parsed || !isValidDiagnoseResponse(parsed)) return { diagnoses: [], message: 'AI returned unexpected response' };
+        return { diagnoses: parsed };
       } catch (err) {
         return reply.code(500).send({ error: (err as Error).message });
       }
