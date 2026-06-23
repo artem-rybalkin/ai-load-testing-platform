@@ -345,6 +345,24 @@ When Gemini quota is exceeded, the platform:
 2. Posts a `status_message` on affected test results: *"Gemini quota exceeded — AI insights unavailable until quota resets (midnight UTC)"*
 3. Continues working for all non-AI features — tests with cached scripts still run, deterministic analysis still executes
 
+### LLM tracing (Langfuse, optional)
+
+Every `generateAIText()` call — script generation, the chat endpoint, AI insights, recorder
+correlation — is traced via [Langfuse](https://langfuse.com) when configured: prompt, completion,
+and which provider in the fallback chain served the request, all visible in one dashboard across
+every AI feature in this doc. Disabled by default and fully optional:
+
+```bash
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com   # default; set your own URL if self-hosting
+```
+
+Free Cloud tier (no card required) covers dev use: 50k trace units/month, 30-day retention. Leaving
+both keys empty disables tracing entirely — it's a single OTel span processor added alongside the
+existing Tempo exporter (see [Grafana Integration](how-to/grafana-integration.md) for Tempo), so
+there's no separate service to run and no performance cost when unconfigured.
+
 ### Service summary
 
 | Service | AI responsibilities | Fallback |
