@@ -1,6 +1,7 @@
 import {
   FlowStep, RecordedRequest, ExtractRule, ExtractSource, redactPII,
   AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, isProviderConfigured,
+  fenceUserContent, USER_DATA_INSTRUCTION,
 } from '@alt/shared';
 import { log } from './logger';
 
@@ -58,7 +59,7 @@ interface CorrelationResult {
 }
 
 const CORRELATION_PROMPT = (requestSummary: string): string => `
-You are an expert in HTTP traffic analysis and load testing.
+You are an expert in HTTP traffic analysis and load testing. ${USER_DATA_INSTRUCTION}
 Analyze the following HTTP request/response pairs from a recorded user session.
 Identify "correlation points": places where a value from a response body or header
 appears in a later request body or header.
@@ -85,7 +86,7 @@ Return ONLY valid JSON:
 If no correlations found: {"correlations":[]}
 
 HTTP traffic:
-${requestSummary}
+${fenceUserContent('http_traffic', requestSummary)}
 `.trim();
 
 /** True if `contentType` indicates a textual body safe to send to Gemini (and to run redactPII over). */
@@ -275,11 +276,11 @@ export async function suggestIgnorePatterns(requests: RecordedRequest[], teamId?
     .sort((a, b) => b[1] - a[1])
     .map(([host, count]) => ({ host, count }));
 
-  const prompt = `You are an expert in HTTP traffic analysis.
+  const prompt = `You are an expert in HTTP traffic analysis. ${USER_DATA_INSTRUCTION}
 These domains were captured during a browser recording session. Identify which ones are analytics, tracking, CDN, or background noise that should be ignored in a load test (not the application being tested).
 
 Domains:
-${JSON.stringify(domains, null, 2)}
+${fenceUserContent('captured_domains', JSON.stringify(domains, null, 2))}
 
 Return ONLY valid JSON array of domain strings to ignore. Use exact hostnames only, no wildcards, no regexes:
 ["domain1.com", "domain2.com", ...]
@@ -352,12 +353,12 @@ export async function suggestStepNames(steps: FlowStep[], teamId?: string | null
   if (!isAnyProviderConfigured(setting) || steps.length === 0) return steps;
 
   const input = steps.map((s, i) => ({ index: i, method: s.method, url: s.url }));
-  const prompt = `You are an expert in web APIs and load testing.
+  const prompt = `You are an expert in web APIs and load testing. ${USER_DATA_INSTRUCTION}
 Rename these HTTP steps with short, human-readable labels describing what each step does.
 Examples: "Authenticate — get bearer token", "Load homepage", "Search for products", "Add item to cart", "Checkout".
 
 Steps:
-${JSON.stringify(input, null, 2)}
+${fenceUserContent('recorded_steps', JSON.stringify(input, null, 2))}
 
 Return ONLY valid JSON array with one name string per step (same order, same count):
 ["name for step 0", "name for step 1", ...]`;

@@ -15,7 +15,7 @@ import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, checkGeminiQuota, in
 import { redisClient } from './redis';
 import { recordAudit } from './audit';
 import type { SessionUser, TeamMembership, TeamRole, TeamQuota, OrgMembership, OrgRole, SLOThresholds, BackendMetrics, ClientMetrics, AiProviderName, ChatMessage } from '@alt/shared';
-import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText, validateSsrfSafeUrl, coerceNumericValue, extractAndParseAIJson } from '@alt/shared';
+import { AI_PROVIDER_NAMES, isProviderConfigured, generateAIText, validateSsrfSafeUrl, coerceNumericValue, extractAndParseAIJson, fenceUserContent, USER_DATA_INSTRUCTION } from '@alt/shared';
 import { analyzeResult } from './analyzer';
 import {
   getAiProviderSetting, setAiProviderSetting,
@@ -45,9 +45,9 @@ export const CHAT_HISTORY_LIMIT = 20;
  */
 export const buildChatParsePrompt = (messages: ChatMessage[]): string => {
   const recent = messages.slice(-CHAT_HISTORY_LIMIT);
-  const transcript = recent.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
+  const transcript = recent.map(m => `${m.role.toUpperCase()}: ${fenceUserContent('user_message', m.content)}`).join('\n');
 
-  return `You are an assistant that turns a free-text conversation about a desired load/performance test into a structured test configuration.
+  return `You are an assistant that turns a free-text conversation about a desired load/performance test into a structured test configuration. ${USER_DATA_INSTRUCTION}
 
 Conversation so far:
 ${transcript}
@@ -1641,9 +1641,9 @@ export const buildApp = async (
       try {
         const text = (await aiGenerateText(pool,
           `Convert this plain-English schedule description to a standard cron expression (5 fields: minute hour day month weekday).
-Also provide a short human-readable preview confirming when it runs.
+Also provide a short human-readable preview confirming when it runs. ${USER_DATA_INSTRUCTION}
 
-Description: "${phrase}"
+Description: "${fenceUserContent('schedule_description', phrase)}"
 
 Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
         )).trim();
@@ -1782,8 +1782,8 @@ Return ONLY valid JSON:
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const text = (await aiGenerateText(pool,
-          `Suggest a short, descriptive name and 2-3 tags for a load test preset with these settings:
-URL: ${url || 'n/a'}, Type: ${type}, VUs: ${vus ?? 'n/a'}, Duration: ${duration ?? 'n/a'}, Profile: ${profile ?? 'load'}${stepCount ? `, Steps: ${stepCount}` : ''}
+          `Suggest a short, descriptive name and 2-3 tags for a load test preset with these settings. ${USER_DATA_INSTRUCTION}
+URL: ${fenceUserContent('url', url || 'n/a')}, Type: ${type}, VUs: ${vus ?? 'n/a'}, Duration: ${duration ?? 'n/a'}, Profile: ${profile ?? 'load'}${stepCount ? `, Steps: ${stepCount}` : ''}
 
 Name should be concise (max 50 chars), human-readable, and describe what is being tested.
 Tags should be lowercase, single words or hyphenated (e.g. "e2e", "smoke", "auth-flow").
@@ -1812,11 +1812,11 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const text = (await aiGenerateText(pool,
-          `You are an expert in load testing. Analyse these HTTP steps and identify any hardcoded values in URLs or request bodies that should be parameterised (user IDs, emails, product IDs, search terms, session tokens, etc.).
+          `You are an expert in load testing. ${USER_DATA_INSTRUCTION} Analyse these HTTP steps and identify any hardcoded values in URLs or request bodies that should be parameterised (user IDs, emails, product IDs, search terms, session tokens, etc.).
 Suggest test-data column names for a CSV/JSON data file.
 
 Steps:
-${JSON.stringify(steps.slice(0, 20), null, 2)}
+${fenceUserContent('flow_steps', JSON.stringify(steps.slice(0, 20), null, 2))}
 
 Return ONLY valid JSON:
 {"columns": ["column_name_1", "column_name_2"], "reasoning": "<one sentence>"}`

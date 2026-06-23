@@ -1,4 +1,4 @@
-import { TestRequest, ExtractRule, AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText } from '@alt/shared';
+import { TestRequest, ExtractRule, AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, fenceUserContent, USER_DATA_INSTRUCTION } from '@alt/shared';
 import { log } from './logger';
 
 const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
@@ -90,10 +90,10 @@ ${http.keepAlive === false ? '- Add header Connection: close to params.headers t
     : '';
 
   return `
-You are a performance testing expert. Generate a k6 load test script.
+You are a performance testing expert. Generate a k6 load test script. ${USER_DATA_INSTRUCTION}
 
-URL: ${test.targetUrl}
-User request: "${test.description}"
+URL: ${fenceUserContent('target_url', test.targetUrl)}
+User request: "${fenceUserContent('description', test.description)}"
 
 IMPORTANT: If the user request above describes a specific test type, load shape, or parameters
 (e.g. "spike test", "ramp to 200 VUs", "soak for 10 minutes", "capacity test until failure"),
@@ -140,10 +140,10 @@ const CLIENT_PROMPT = (test: TestRequest): string => {
     : '';
 
   return `
-You are a performance testing expert. Generate a Puppeteer script for browser performance testing:
+You are a performance testing expert. Generate a Puppeteer script for browser performance testing: ${USER_DATA_INSTRUCTION}
 
-URL: ${test.targetUrl}
-Description: ${test.description}
+URL: ${fenceUserContent('target_url', test.targetUrl)}
+Description: ${fenceUserContent('description', test.description)}
 Sessions: ${opts.sessions}
 ${headersSection}
 Requirements:
@@ -300,9 +300,9 @@ Variable placeholders:
 ` : '';
 
   return `
-You are a performance testing expert. Generate a k6 multi-step flow test script.
+You are a performance testing expert. Generate a k6 multi-step flow test script. ${USER_DATA_INSTRUCTION}
 
-User request: "${test.description}"
+User request: "${fenceUserContent('description', test.description)}"
 
 ${fallback}
 ${paramSection}
