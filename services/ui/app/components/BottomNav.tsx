@@ -12,7 +12,7 @@ export default function BottomNav() {
   const { pathname } = useLocation();
 
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-40 lg:hidden bg-white border-t border-[#d0d7de] flex">
+    <nav className="fixed bottom-0 inset-x-0 z-40 md:hidden bg-white border-t border-[#d0d7de] flex">
       {NAV.map(({ href, icon, label }) => {
         const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
         return (

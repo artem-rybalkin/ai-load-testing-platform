@@ -20,6 +20,11 @@ const mockToggleDark   = vi.hoisted(() => vi.fn());
 const mockUseDarkMode  = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/useDarkMode', () => ({ useDarkMode: mockUseDarkMode }));
 
+// Defaults to desktop (lg+) width so existing tests exercise the expand/collapse-by-choice
+// behavior; tablet-width (md-only) tests below override this to simulate < lg.
+const mockUseMediaQuery = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/useMediaQuery', () => ({ useMediaQuery: mockUseMediaQuery }));
+
 const baseUser: SessionUser = {
   id: 'u1', email: 'alice@example.com', name: 'Alice',
   teams: [{ id: 't1', name: 'team-alpha', role: 'admin' }],
@@ -32,6 +37,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockLogout.mockResolvedValue(undefined);
   mockUseDarkMode.mockReturnValue({ dark: false, toggle: mockToggleDark });
+  mockUseMediaQuery.mockReturnValue(true);
   mockUseAuth.mockReturnValue({ user: baseUser, logout: mockLogout, switchTeam: mockSwitchTeam });
   try { localStorage.clear(); } catch {}
 });
@@ -111,5 +117,24 @@ describe('Sidebar', () => {
     mockUseAuth.mockReturnValue({ user: null, logout: mockLogout, switchTeam: mockSwitchTeam });
     renderSidebar();
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('Sidebar — tablet width (md: but below lg:)', () => {
+  it('forces the collapsed icon-rail and hides the expand/collapse toggle', () => {
+    mockUseMediaQuery.mockReturnValue(false);
+    renderSidebar();
+    expect(screen.queryByTitle('Collapse sidebar')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Expand sidebar')).not.toBeInTheDocument();
+    expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument();
+    // Nav links remain reachable (accessible name still includes the sr-only label)
+    expect(screen.getByRole('link', { name: /new test/i })).toBeInTheDocument();
+  });
+
+  it('ignores a stored lg+ "open" preference when below lg', () => {
+    localStorage.setItem('sidebar-open', 'true');
+    mockUseMediaQuery.mockReturnValue(false);
+    renderSidebar();
+    expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument();
   });
 });

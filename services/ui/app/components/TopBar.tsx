@@ -18,7 +18,7 @@ export default function TopBar() {
     'AI Load Testing';
 
   return (
-    <header className="lg:hidden sticky top-0 z-40 bg-white border-b border-[#d0d7de] flex items-center justify-between h-10 px-3">
+    <header className="md:hidden sticky top-0 z-40 bg-white border-b border-[#d0d7de] flex items-center justify-between h-10 px-3">
       <span className="text-[13px] font-semibold text-[#24292f]">⚡ {label}</span>
       <Link
         to="/"

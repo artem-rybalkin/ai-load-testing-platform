@@ -41,7 +41,7 @@ function RootLayout() {
         <WorkerHealth />
         <AIStatus />
         <SystemHealth />
-        <main className="flex-1 pb-14 lg:pb-0">
+        <main className="flex-1 pb-14 md:pb-0">
           <Suspense fallback={null}>
             <Outlet />
           </Suspense>
