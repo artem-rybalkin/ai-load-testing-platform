@@ -291,6 +291,45 @@ conversation burns quota faster than a single-click "Suggest" button elsewhere i
 
 ---
 
+## 14. Output Validation & Prompt Injection Mitigation
+
+**Service:** `@alt/shared` (`packages/shared/src/aiValidation.ts`) — shared helpers used across
+results-service, ai-service, and recorder-service.
+
+Two guardrails, added after a live-testing session found Gemini returning malformed JSON on the
+chat endpoint (a hallucinated `flow` type, and threshold values as unit-suffixed strings like
+`"1000ms"` instead of plain numbers):
+
+**Output schema validation** — every AI-backed endpoint that returns structured JSON now validates
+the parsed response before trusting it, not just regex-extracts + `JSON.parse()`s it:
+- `extractAndParseAIJson(text, kind?)` — extracts a `{...}` or `[...]` block and parses it, returning
+  `null` (never throwing) on no match or invalid JSON.
+- `coerceNumericValue(v)` — coerces a unit-suffixed string (`"1000ms"`) to a plain number, returning
+  `null` if it can't be coerced — confirmed live that Gemini doesn't always honor a prompt's "return
+  a plain number" instruction.
+- A per-endpoint type-guard validator (e.g. `isValidChatParseResponse`, `isValidCronResponse`,
+  `isValidSuggestThresholdsResponse`, `isValidDiagnoseResponse`, etc. — one per AI endpoint in
+  `results-service/app.ts`) checks the exact fields that endpoint's prompt promises. On a `false`,
+  each endpoint falls back to **its own pre-existing failure response** — most return
+  `500 { error: 'AI returned unexpected response' }`, but `/ai/webhook-noise` returns its existing
+  soft `{ warning: null }` and `/results/:testId/diagnose` returns its existing soft
+  `{ diagnoses: [], message: ... }` — validation only catches malformed output, it doesn't change
+  any endpoint's error-handling UX.
+
+**Prompt injection fencing** — `fenceUserContent(label, value)` wraps user-supplied free text in
+`<user_data label="...">...</user_data>` before it's interpolated into a prompt, paired with one
+`USER_DATA_INSTRUCTION` line per prompt telling the model to treat fenced content as data only,
+never as instructions. This is a lightweight, delimiter-based mitigation (not a classifier) —
+applied at every site where genuinely user-controlled text enters a prompt: chat messages, schedule
+descriptions (`/ai/cron`), script-generation `targetUrl`/`description` (all 3 prompt variants in
+`ai-service/generator.ts`), recorder-service's correlation prompt (actual recorded HTTP body/header
+content — the highest-risk site, since a user can record traffic from any website), captured
+domains, recorded step data, and flow-step parameterization data. Deliberately **not** applied to
+fixed-enum fields (webhook events) or system-computed data (trend metrics, error summaries), where
+fencing adds no value.
+
+---
+
 ## Infrastructure & Reliability
 
 ### Model configuration

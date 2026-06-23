@@ -19,6 +19,7 @@ A distributed, AI-powered load testing platform. Describe what you want to test 
 - 📬 **Webhooks** — Fire on `failed` or `degraded` results with optional HMAC signatures
 - 📄 **PDF reports** — Downloadable report per test result
 - 🔒 **API key auth + CORS** — Production-ready security out of the box
+- 🛡️ **LLM guardrails** — Every AI response is schema-validated before use; user-supplied text is fenced against prompt injection before reaching a prompt
 - 🚀 **HTTPS via Caddy** — Automatic TLS certificates in production
 
 ---
