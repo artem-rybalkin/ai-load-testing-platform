@@ -6,6 +6,8 @@
 // pipeline. Each provider reads its own API key/model from env vars and is
 // skipped (treated as "not configured") when its API key is unset.
 
+import { observe, updateActiveObservation } from '@langfuse/tracing';
+
 export type AiProviderName = 'gemini' | 'openai' | 'anthropic';
 
 export const AI_PROVIDER_NAMES: AiProviderName[] = ['gemini', 'openai', 'anthropic'];
@@ -83,16 +85,28 @@ export interface GenerateAITextOptions {
  * configured fallback providers if the primary fails or isn't configured.
  * Throws the last encountered error (preserving e.g. `.status` for 429
  * handling) if every provider in the chain fails.
+ *
+ * Wrapped with observe() so every call from every service (script generation,
+ * the chat endpoint, AI insights, recorder correlation, etc.) is traced as an
+ * LLM "generation" node in one place, instead of instrumenting ~20 call sites
+ * individually. observe() is a no-op when no OTel SDK/LangfuseSpanProcessor is
+ * registered (e.g. in tests, or when LANGFUSE_* env vars are unset) — see each
+ * service's tracing.ts for where the processor is conditionally added.
  */
-export async function generateAIText(prompt: string, opts: GenerateAITextOptions): Promise<string> {
-  const chain = [opts.provider, ...(opts.fallbacks ?? [])];
-  let lastErr: unknown = new Error('No AI provider configured');
-  for (const provider of chain) {
-    try {
-      return await PROVIDER_CALLS[provider](prompt);
-    } catch (err) {
-      lastErr = err;
+export const generateAIText = observe(
+  async function generateAIText(prompt: string, opts: GenerateAITextOptions): Promise<string> {
+    const chain = [opts.provider, ...(opts.fallbacks ?? [])];
+    let lastErr: unknown = new Error('No AI provider configured');
+    for (const provider of chain) {
+      try {
+        const text = await PROVIDER_CALLS[provider](prompt);
+        updateActiveObservation({ metadata: { provider, fallbacksConfigured: opts.fallbacks ?? [] } });
+        return text;
+      } catch (err) {
+        lastErr = err;
+      }
     }
-  }
-  throw lastErr;
-}
+    throw lastErr;
+  },
+  { name: 'generateAIText', asType: 'generation' }
+);
