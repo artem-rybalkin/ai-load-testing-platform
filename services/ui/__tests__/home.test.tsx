@@ -249,6 +249,25 @@ describe('Home page — applyDescriptionParams (description blur)', () => {
     // (duration "2m" is selected in the dropdown, so this match is unambiguous)
     expect(screen.getByDisplayValue('30s')).toBeInTheDocument();
   });
+
+  // Keeps this regex's signal words in sync with the chat-parse prompt
+  // (services/results-service/src/app.ts buildChatParsePrompt) — they were
+  // found to disagree on "performance test" (backend) and "endpoint"/"page".
+  it('detects "endpoint" as a backend signal', () => {
+    render(<Home />);
+    fireEvent.click(screen.getByRole('button', { name: /browser/i }));
+    blurDescription('test this endpoint with 10 users');
+    fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
+    // Browser-only thresholds disappear once the description flips type back to backend
+    expect(screen.queryByText('INP ms max')).not.toBeInTheDocument();
+  });
+
+  it('detects "page" as a browser signal', () => {
+    render(<Home />);
+    blurDescription('test this page with 10 users');
+    fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
+    expect(screen.getByText('INP ms max')).toBeInTheDocument();
+  });
 });
 
 describe('Home page — browser SLO threshold inputs', () => {

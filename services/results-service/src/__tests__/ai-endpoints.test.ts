@@ -372,6 +372,18 @@ describe('buildChatParsePrompt', () => {
     expect(prompt).toMatch(/test type is not explicitly signaled/i);
     expect(prompt).toMatch(/ambiguous/i);
   });
+
+  // Keeps this prompt's signal words in sync with the home page's applyDescriptionParams
+  // regex (services/ui/app/page.tsx) — they were found to disagree on "performance test".
+  it('lists the same backend/client-side signal words as the home page auto-detect regex', () => {
+    const prompt = buildChatParsePrompt([{ role: 'user', content: 'placeholder' }]);
+    for (const word of ['API', 'backend', 'load test', 'http test', 'k6', 'performance test', 'endpoint']) {
+      expect(prompt).toContain(word);
+    }
+    for (const word of ['browser', 'real browser', 'page', 'web vitals', 'Lighthouse', 'Puppeteer', 'client-side']) {
+      expect(prompt).toContain(word);
+    }
+  });
 });
 
 describe('POST /chat/parse', () => {

@@ -183,8 +183,8 @@ function HomeContent() {
     const updates: Partial<typeof form> = {};
 
     // ── Test type detection ──────────────────────────────────────────────────
-    const isBrowser = /\b(browser|puppeteer|real\s+browser|web\s+vitals?|lighthouse|client[\s-]?side)\b/i.test(desc);
-    const isBackend  = /\b(backend|api\s+test|load\s+test|http\s+test|k6|performance\s+test)\b/i.test(desc);
+    const isBrowser = /\b(browser|puppeteer|real\s+browser|web\s+vitals?|lighthouse|client[\s-]?side|page)\b/i.test(desc);
+    const isBackend  = /\b(backend|api\s+test|load\s+test|http\s+test|k6|performance\s+test|endpoint)\b/i.test(desc);
     if (isBrowser && !isBackend) {
       updates.type = 'client-side';
       // For flow tab: also flip the runner to browser
