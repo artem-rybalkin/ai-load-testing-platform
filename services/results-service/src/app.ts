@@ -60,8 +60,10 @@ Decide which ONE of the following three outcomes applies, and return ONLY valid 
 - For "client-side": options must look like {"sessions": <number>, "duration": "<e.g. 1m>", "collectWebVitals": true}.
 - "thresholds" is optional; include only fields the user actually mentioned (p95, avg, errorRate, lcp, fcp, ttfb, cls, inp, tbt). Every threshold value MUST be a plain JSON number with NO unit suffix — write {"p95": 1000}, NEVER {"p95": "1000ms"} or {"p95": "1000"}.
 
-2. If required information is missing or ambiguous (most importantly: no target URL, or test type cannot be determined), return:
+2. If required information is missing or ambiguous, return:
 {"status": "needsClarification", "question": "<one short follow-up question to ask the user>"}
+- Always ask if there is no target URL.
+- Always ask if the test type is not explicitly signaled. Words like "user(s)", "session(s)", a number, or "for N minutes" do NOT by themselves indicate which type — a backend test counts "users" as virtual users (VUs) and a browser test counts "users" as browser sessions, so these words alone are ambiguous. Only infer "backend" from explicit signals like "API", "backend", "load test", "k6", "endpoint". Only infer "client-side" from explicit signals like "browser", "page", "web vitals", "Lighthouse", "Puppeteer". If neither signal is present, ask which type the user wants rather than guessing.
 
 3. If the user's intent clearly spans multiple sequential steps or endpoints (e.g. "log in, then add an item to cart, then checkout"), DO NOT attempt to infer the steps. Instead return:
 {"status": "redirectToFlowBuilder", "reason": "<one short sentence explaining why this needs the Flow Builder>"}
@@ -86,6 +88,37 @@ const normalizeThresholdsInPlace = (config: Record<string, unknown>): boolean =>
 };
 
 /**
+ * Normalizes config.targetUrl in place — confirmed live that Gemini sometimes extracts a bare
+ * domain from natural language (e.g. "football.com" from "test football.com") with no scheme.
+ * POST /tests requires a fully-qualified URL (new URL() with http/https), so a bare domain would
+ * pass this validator's old "non-empty string" check, render a normal-looking preview card, and
+ * then fail confusingly at createTest() time with "Invalid targetUrl — must be a valid URL" — the
+ * user has no obvious way to fix it short of re-typing the URL themselves. Browsers do the same
+ * thing when you type a bare domain in the address bar, so defaulting to https:// here matches
+ * user expectations rather than rejecting otherwise-good output. Returns false only if the URL is
+ * unusable even after trying that.
+ */
+const normalizeTargetUrlInPlace = (config: Record<string, unknown>): boolean => {
+  const raw = (config.targetUrl as string).trim();
+  try {
+    const parsed = new URL(raw);
+    // Parsed fine but with a non-http(s) scheme (mailto:, ftp://, etc.) — reject outright rather
+    // than mangling it further; only a missing scheme gets the https:// default below.
+    config.targetUrl = raw;
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    // No scheme at all (the common case — Gemini extracted a bare domain) — default to https://,
+    // same as what every browser does when you type a bare domain in the address bar.
+    try {
+      config.targetUrl = new URL(`https://${raw}`).toString();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+/**
  * Validates a parsed Gemini response actually matches ChatParseResponse before it's trusted
  * downstream — the prompt only *instructs* the model to use 'backend'|'client-side' for
  * config.type and never 'flow', but LLM output isn't guaranteed to honor that. Without this
@@ -104,6 +137,7 @@ export const isValidChatParseResponse = (value: unknown): boolean => {
     if (typeof config.targetUrl !== 'string' || config.targetUrl.length === 0) return false;
     if (typeof config.description !== 'string') return false;
     if (!config.options || typeof config.options !== 'object') return false;
+    if (!normalizeTargetUrlInPlace(config)) return false;
     if (!normalizeThresholdsInPlace(config)) return false;
     return true;
   }

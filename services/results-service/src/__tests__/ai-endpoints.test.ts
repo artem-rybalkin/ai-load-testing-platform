@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import { Pool } from 'pg';
 import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
-import { buildApp } from '../app';
+import { buildApp, buildChatParsePrompt } from '../app';
 import { createSchema } from '../db';
 
 // ── AI provider mock ─────────────────────────────────────────────────────────
@@ -366,6 +366,14 @@ describe('GET /results/:testId/diagnose', () => {
 
 // ─── POST /chat/parse ─────────────────────────────────────────────────────────
 
+describe('buildChatParsePrompt', () => {
+  it('instructs the model to ask rather than guess the test type when no explicit signal is present (regression — found live: "football.com 1 user 1 min" silently resolved to backend instead of asking browser vs. backend)', () => {
+    const prompt = buildChatParsePrompt([{ role: 'user', content: 'football.com 1 user 1 min' }]);
+    expect(prompt).toMatch(/test type is not explicitly signaled/i);
+    expect(prompt).toMatch(/ambiguous/i);
+  });
+});
+
 describe('POST /chat/parse', () => {
   it('returns a ready config on a clear, well-formed prompt', async () => {
     mockGenerateAIText.mockResolvedValueOnce(jsonResponse({
@@ -387,6 +395,59 @@ describe('POST /chat/parse', () => {
     expect(body.config.type).toBe('backend');
     expect(body.config.targetUrl).toBe('https://api.example.com');
     expect(body.config.options.vus).toBe(50);
+  });
+
+  it('normalizes a bare domain (no scheme) to https:// (regression — found live: Gemini extracted "football.com" from natural language, which passed the old string-only check but then failed createTest()/POST /tests confusingly)', async () => {
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({
+      status: 'ready',
+      config: {
+        type: 'backend',
+        targetUrl: 'football.com',
+        description: 'Backend load test against football.com with 1 user for 1 minute.',
+        options: { vus: 1, duration: '1m', profile: 'load' },
+      },
+    }));
+    const res = await app.inject({
+      method: 'POST', url: '/chat/parse',
+      payload: { messages: [{ role: 'user', content: 'test football.com with 1 user for 1 minute' }] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().config.targetUrl).toBe('https://football.com/');
+  });
+
+  it('leaves an already-schemed targetUrl untouched', async () => {
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({
+      status: 'ready',
+      config: {
+        type: 'backend',
+        targetUrl: 'http://api.example.com',
+        description: 'Backend load test.',
+        options: { vus: 1, duration: '1m' },
+      },
+    }));
+    const res = await app.inject({
+      method: 'POST', url: '/chat/parse',
+      payload: { messages: [{ role: 'user', content: 'test http://api.example.com' }] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().config.targetUrl).toBe('http://api.example.com');
+  });
+
+  it('returns 500 when targetUrl has a non-http(s) scheme', async () => {
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({
+      status: 'ready',
+      config: {
+        type: 'backend',
+        targetUrl: 'mailto:test@example.com',
+        description: 'Backend load test.',
+        options: { vus: 1, duration: '1m' },
+      },
+    }));
+    const res = await app.inject({
+      method: 'POST', url: '/chat/parse',
+      payload: { messages: [{ role: 'user', content: 'test mailto:test@example.com' }] },
+    });
+    expect(res.statusCode).toBe(500);
   });
 
   it('returns needsClarification when the prompt is missing required info', async () => {
