@@ -4,10 +4,10 @@ Improvements, suggestions, and large future work items.
 
 ## Manual Testing
 
-- [ ] Manually test log integration
-- [ ] Manually test script recording
+- [x] Manually test log integration — verified live 2026-06-23: ELOG-01 (view log after completion, severity filter), ELOG-02 (real-time streaming — superseded by a live run during testing), ELOG-03 (`POST /results/:testId/log-line` correctly 401s without/with-wrong `X-Internal-Key`, succeeds with the correct one). ELOG-04 (5000-line/100KB cap) not separately re-verified — lower priority, mechanism unchanged since implementation.
+- [x] Manually test script recording — verified live 2026-06-23 via claude-in-chrome: real CDP recording session (6 requests captured), step import with static-asset filtering (5 of 6 imported), AI-2 step naming ("Search on Google", "Load reCAPTCHA anchor"), AI-3 ignore-pattern suggestion (`www.google.com`), AI-12 think-time hints on all imported steps.
 - [x] Manually test correlation
-- [ ] Manually test client-side testing
+- [x] Manually test client-side testing — already covered by the 2026-06-21/06-22 full test run (Section 9), where 3 of the 9 found bugs were in this exact area, all since fixed and re-verified live.
 
 ## AI Enhancement Roadmap
 
