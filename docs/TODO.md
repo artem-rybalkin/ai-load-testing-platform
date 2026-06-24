@@ -19,7 +19,7 @@ Improvements, suggestions, and large future work items.
 
 ### 🟡 Medium impact — implement next
 - [x] **AI-5: Cron natural-language assistant** — Text input + `✨ Convert` button under cron field in Schedules; `POST /ai/cron` → Gemini → fills cron expression + preview
-- [x] **AI-6: Playwright → k6 translator** — `✨ Translate Playwright` file-upload button in Custom Script mode; `POST /translate` on ai-service → Gemini → drops k6 script into textarea
+- [x] **AI-6: Playwright → k6 translator** — `✨ Translate Playwright` file-upload button in Custom Script mode; `POST /ai/translate` on results-service → Gemini → drops k6 script into textarea. (Originally lived in ai-service as a raw Gemini SDK call the UI's `/api` proxy could never actually reach — moved to results-service 2026-06-24, following the same `generateAIText`/quota/rate-limit pattern as every other `/ai/*` endpoint; see "High Priority (Tech Debt)" below.)
 - [x] **AI-7: Regression narrative across runs** — `✨ Summarise trend` button on Trend chart card; `POST /ai/trend-narrative` → Gemini → 2-sentence summary shown below chart
 - [x] **AI-8: PDF executive summary** — Auto-generated 3-sentence executive paragraph at top of every PDF report; non-fatal if Gemini unavailable
 - [x] **AI-9: Optimal VU/duration recommendation** — `✨ Suggest settings` link below URL field; `GET /results/suggest-settings` → Gemini → fills VUs, duration, profile in Advanced settings
@@ -40,9 +40,14 @@ Improvements, suggestions, and large future work items.
 
 ## High Priority (Tech Debt)
 
+- [x] **Security/correctness fixes from a senior fullstack+PM readiness review (2026-06-24)** — found via independent audit (not the manual test suite), all fixed and tested same day:
+  - **`log_sources` SSRF + cross-tenant credential leak** — `fetchExternalMetrics` (the server-side fetch behind `GET /results/:testId/diagnose`'s external-observability lookup) had zero `project_id` scoping and zero SSRF validation on `metrics_endpoint_template`, despite the sibling `webhooks` feature having both. Fixed: `validateSsrfSafeUrl` now applied to `urlTemplate`/`metricsEndpointTemplate` on `POST`/`PUT /log-sources`; `fetchExternalMetrics` scoped by `project_id`; `GET /log-sources` no longer returns `auth_header` to any team member (it held a raw bearer/API token).
+  - **Raw internal errors leaking on all 9 AI endpoints** — every `/ai/*`, `/chat/parse`, `suggest-settings`, `suggest-thresholds`, `diagnose` route returned `(err as Error).message` straight to the client on any unhandled exception. Fixed with a shared `sendInternalError` helper (logs server-side, returns a fixed generic message) — same fix already applied once for `DELETE /scripts/:id`, now generalized.
+  - **`/translate` (AI-6) was unreachable from the browser** — the UI called `${API_URL}/translate` (api-service, which never registered the route) instead of `${RESULTS_URL}` like every other AI-assist call; the route only existed in ai-service, with no proxy path to it. Also bypassed the pluggable AI provider abstraction (raw Gemini SDK call). Moved to `results-service` as `POST /ai/translate`, following the standard `generateAIText`/quota/rate-limit pattern; removed the orphaned route + its standalone test file from ai-service; fixed `translatePlaywright()` in `lib/api.ts`.
+  - **Investigated, no action needed**: `analyzer.ts` in `results-service` and `analyser-service` were flagged as "byte-for-byte duplicated business logic" — turned out both are already 2-line re-exports of `@alt/shared`'s single `analyzeResult` (deduplicated in an earlier phase); false positive, left as-is.
 - [x] **Rate limiting (Redis — priority #1)** — Wire up Redis; add `@fastify/rate-limit` to api-service and results-service to protect Gemini API and REST endpoints
 - [x] **Recorder-service test coverage** — recorder.test.ts (262 lines), correlator.test.ts (302 lines), api.test.ts (385 lines)
-- [x] **Playwright → k6 converter (AI-6)** — `POST /translate` in ai-service (Gemini-based) + "✨ Translate Playwright" file upload in the home page's Custom Script mode (`translatePlaywright()` in `lib/api.ts`)
+- [x] **Playwright → k6 converter (AI-6)** — `POST /ai/translate` in results-service (Gemini-based, via the shared AI provider abstraction) + "✨ Translate Playwright" file upload in the home page's Custom Script mode (`translatePlaywright()` in `lib/api.ts`)
 - [x] **Lint cleanup — remaining `no-unused-vars` errors (15)** — found while auditing lint output; mostly trivial (unused imports/catch-block bindings), left as-is to avoid unrelated scope creep on other features:
   - `ai-service/src/__tests__/generator.test.ts:1` — unused `beforeEach` import
   - `recorder-service/src/__tests__/api.test.ts:1` — unused `afterAll` import

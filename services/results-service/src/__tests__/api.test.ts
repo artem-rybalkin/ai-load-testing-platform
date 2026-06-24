@@ -684,6 +684,59 @@ describe('log-sources', () => {
     const res = await app.inject({ method: 'DELETE', url: '/log-sources/00000000-0000-0000-0000-000000000099' });
     expect(res.statusCode).toBe(204);
   });
+
+  it('GET /log-sources never includes auth_header (regression — credential exposure to any team member)', async () => {
+    await app.inject({
+      method: 'POST', url: '/log-sources',
+      payload: { name: 'Grafana', urlTemplate: 'https://grafana.example.com', authHeader: 'Bearer super-secret-token' },
+    });
+    const res = await app.inject({ method: 'GET', url: '/log-sources' });
+    expect(res.json().logSources).toHaveLength(1);
+    expect(res.json().logSources[0].auth_header).toBeUndefined();
+  });
+
+  it('POST /log-sources rejects an SSRF-unsafe urlTemplate (regression)', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/log-sources',
+      payload: { name: 'Bad', urlTemplate: 'http://169.254.169.254/latest/meta-data/' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /log-sources rejects an SSRF-unsafe metricsEndpointTemplate (regression)', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/log-sources',
+      payload: { name: 'Bad', urlTemplate: 'https://logs.example.com', metricsEndpointTemplate: 'http://127.0.0.1:5432/' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('PUT /log-sources/:id rejects an SSRF-unsafe urlTemplate (regression)', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/log-sources',
+      payload: { name: 'Ok for now', urlTemplate: 'https://logs.example.com' },
+    });
+    const id = create.json().logSource.id;
+    const res = await app.inject({
+      method: 'PUT', url: `/log-sources/${id}`,
+      payload: { urlTemplate: 'http://169.254.169.254/' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('PUT /log-sources/:id updates fields when valid', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/log-sources',
+      payload: { name: 'Old name', urlTemplate: 'https://logs.example.com' },
+    });
+    const id = create.json().logSource.id;
+    const res = await app.inject({
+      method: 'PUT', url: `/log-sources/${id}`,
+      payload: { name: 'New name' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().logSource.name).toBe('New name');
+  });
 });
 
 // ─── GET /results/:testId/report.pdf ─────────────────────────────────────────

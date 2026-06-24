@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import { Pool } from 'pg';
 import { createTestDatabase } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
-import { buildApp, buildChatParsePrompt } from '../app';
+import { buildApp, buildChatParsePrompt, fetchExternalMetrics } from '../app';
 import { createSchema } from '../db';
 
 // ── AI provider mock ─────────────────────────────────────────────────────────
@@ -101,6 +101,14 @@ describe('POST /ai/cron', () => {
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe('AI returned unexpected response');
   });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({ method: 'POST', url: '/ai/cron', payload: { phrase: 'every weekday at 9am' } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
+    expect(res.json().error).not.toContain('10.0.0.5');
+  });
 });
 
 // ─── POST /ai/trend-narrative ─────────────────────────────────────────────────
@@ -129,6 +137,13 @@ describe('POST /ai/trend-narrative', () => {
     const res = await app.inject({ method: 'POST', url: '/ai/trend-narrative', payload: { trend } });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe('AI returned unexpected response');
+  });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({ method: 'POST', url: '/ai/trend-narrative', payload: { trend } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
   });
 });
 
@@ -177,6 +192,15 @@ describe('GET /results/suggest-thresholds', () => {
     expect(body.suggestions.p95).toBe(500);
     expect(typeof body.suggestions.p95).toBe('number');
   });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    await insertCompletedResult(400);
+    await insertCompletedResult(500);
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({ method: 'GET', url: '/results/suggest-thresholds?url=http://test.example.com&type=backend' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
+  });
 });
 
 // ─── GET /results/suggest-settings ───────────────────────────────────────────
@@ -206,6 +230,13 @@ describe('GET /results/suggest-settings', () => {
     const body = res.json();
     expect(body.vus).toBe(50);
     expect(typeof body.vus).toBe('number');
+  });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({ method: 'GET', url: '/results/suggest-settings?url=https://api.example.com' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
   });
 });
 
@@ -242,6 +273,14 @@ describe('POST /ai/webhook-noise', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ warning: null });
   });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    await insertCompletedResult();
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({ method: 'POST', url: '/ai/webhook-noise', payload: { events: ['failed'] } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
+  });
 });
 
 // ─── POST /ai/param-suggestions ──────────────────────────────────────────────
@@ -271,6 +310,85 @@ describe('POST /ai/param-suggestions', () => {
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe('AI returned unexpected response');
   });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({
+      method: 'POST', url: '/ai/param-suggestions',
+      payload: { steps: [{ url: 'https://api.example.com/products/12345', method: 'GET' }] },
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
+  });
+});
+
+// ─── POST /ai/translate ───────────────────────────────────────────────────────
+// Regression coverage: this endpoint used to live in ai-service (raw Gemini SDK call,
+// bypassing the pluggable AI provider abstraction) at a route the UI's
+// translatePlaywright() never actually reached (it called api-service's /api proxy,
+// which never registered /translate). Moved here, following the same
+// generateAIText/quota/rate-limit pattern as every other /ai/* endpoint.
+
+const PLAYWRIGHT_SCRIPT = `
+import { test, expect } from '@playwright/test';
+test('login', async ({ page }) => {
+  await page.goto('https://example.com/login');
+  await page.fill('#email', 'user@test.com');
+  await page.click('button[type=submit]');
+  await expect(page).toHaveURL('/dashboard');
+});
+`.trim();
+
+describe('POST /ai/translate', () => {
+  it('returns a k6 script on success', async () => {
+    mockGenerateAIText.mockResolvedValueOnce("import http from 'k6/http';\nexport default function() { http.get('https://example.com'); }");
+    const res = await app.inject({ method: 'POST', url: '/ai/translate', payload: { script: PLAYWRIGHT_SCRIPT } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().k6Script).toContain('import http');
+  });
+
+  it('strips markdown code fences from the AI response', async () => {
+    mockGenerateAIText.mockResolvedValueOnce("```javascript\nimport http from 'k6/http';\n```");
+    const res = await app.inject({ method: 'POST', url: '/ai/translate', payload: { script: PLAYWRIGHT_SCRIPT } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().k6Script).not.toContain('```');
+    expect(res.json().k6Script).toContain('import http');
+  });
+
+  it('passes targetUrl into the prompt', async () => {
+    mockGenerateAIText.mockResolvedValueOnce("import http from 'k6/http';");
+    await app.inject({
+      method: 'POST', url: '/ai/translate',
+      payload: { script: PLAYWRIGHT_SCRIPT, targetUrl: 'https://myapp.example.com' },
+    });
+    const promptArg = mockGenerateAIText.mock.calls[0][0] as string;
+    expect(promptArg).toContain('https://myapp.example.com');
+  });
+
+  it('returns 400 when script is missing', async () => {
+    const res = await app.inject({ method: 'POST', url: '/ai/translate', payload: {} });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when script exceeds 256 KB', async () => {
+    const oversized = 'x'.repeat(256 * 1024 + 1);
+    const res = await app.inject({ method: 'POST', url: '/ai/translate', payload: { script: oversized } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 503 when no AI provider is configured', async () => {
+    delete process.env.GEMINI_API_KEY;
+    const res = await app.inject({ method: 'POST', url: '/ai/translate', payload: { script: PLAYWRIGHT_SCRIPT } });
+    expect(res.statusCode).toBe(503);
+    process.env.GEMINI_API_KEY = 'test-key';
+  });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({ method: 'POST', url: '/ai/translate', payload: { script: PLAYWRIGHT_SCRIPT } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
+  });
 });
 
 // ─── POST /ai/preset-name ────────────────────────────────────────────────────
@@ -296,6 +414,16 @@ describe('POST /ai/preset-name', () => {
     });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe('AI returned unexpected response');
+  });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({
+      method: 'POST', url: '/ai/preset-name',
+      payload: { url: 'https://example.com', type: 'backend', vus: 10, duration: '1m', profile: 'load' },
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
   });
 });
 
@@ -361,6 +489,78 @@ describe('GET /results/:testId/diagnose', () => {
     const res = await app.inject({ method: 'GET', url: `/results/${testId}/diagnose` });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ diagnoses: [], message: 'AI returned unexpected response' });
+  });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    const testId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status, perf_status, metrics)
+       VALUES ($1,'backend','http://test.example.com','completed','failed',$2)`,
+      [testId, JSON.stringify({
+        type: 'backend', requestsTotal: 100, requestsFailed: 30,
+        avgResponseTime: 800, p95ResponseTime: 1500, rps: 10,
+        errorBreakdown: { success: 70, clientError: 10, serverError: 15, timeout: 5, networkError: 0 },
+      })]
+    );
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({ method: 'GET', url: `/results/${testId}/diagnose` });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
+  });
+});
+
+// ─── fetchExternalMetrics (used by GET /results/:testId/diagnose) ─────────────
+// Regression coverage for two bugs found in a security audit: fetchExternalMetrics
+// had zero project_id scoping (cross-tenant credential/config leak) and the AI
+// diagnose endpoint's external-metrics fetch had no SSRF protection on the stored
+// metrics_endpoint_template. Tested directly (like consumer.test.ts's fireWebhooks)
+// since this file's harness runs in dev-mode (no SESSION_SECRET), where
+// request.projectId is always null and HTTP-level cross-tenant checks can't fire.
+
+describe('fetchExternalMetrics', () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  beforeAll(() => {
+    mockFetch = vi.fn().mockResolvedValue({ ok: true, text: async () => '{"ok":true}' });
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  afterAll(() => { vi.unstubAllGlobals(); });
+
+  beforeEach(() => { mockFetch.mockClear(); });
+
+  const insertLogSource = (metricsEndpointTemplate: string, projectId: string | null): Promise<unknown> =>
+    pool.query(
+      `INSERT INTO log_sources (name, url_template, metrics_endpoint_template, project_id)
+       VALUES ('Source', 'https://example.com/{testId}', $1, $2)`,
+      [metricsEndpointTemplate, projectId]
+    );
+
+  it('only fetches log sources belonging to the given project (cross-tenant isolation, regression)', async () => {
+    const teamA = crypto.randomUUID();
+    const teamB = crypto.randomUUID();
+    await pool.query(`INSERT INTO projects (id, name) VALUES ($1, $2), ($3, $4)`, [teamA, `team-a-${teamA}`, teamB, `team-b-${teamB}`]);
+    await insertLogSource('https://team-a-metrics.example.com/', teamA);
+
+    const result = await fetchExternalMetrics(pool, 'http://test.example.com', null, null, teamB);
+    expect(result).toEqual([]);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('fetches a log source scoped to the matching project', async () => {
+    const teamC = crypto.randomUUID();
+    await pool.query(`INSERT INTO projects (id, name) VALUES ($1, $2)`, [teamC, `team-c-${teamC}`]);
+    await insertLogSource('https://team-c-metrics.example.com/', teamC);
+
+    const result = await fetchExternalMetrics(pool, 'http://test.example.com', null, null, teamC);
+    expect(result).toHaveLength(1);
+    expect(mockFetch).toHaveBeenCalledWith('https://team-c-metrics.example.com/', expect.anything());
+  });
+
+  it('fetches all log sources when projectId is null (dev-mode convention, unchanged behavior)', async () => {
+    await insertLogSource('https://no-team-metrics.example.com/', null);
+    const result = await fetchExternalMetrics(pool, 'http://test.example.com', null, null, null);
+    expect(result).toHaveLength(1);
   });
 });
 
@@ -724,6 +924,16 @@ describe('POST /chat/parse', () => {
     expect(promptArg).not.toContain('message-4');
     expect(promptArg).toContain('message-5');
     expect(promptArg).toContain('message-24');
+  });
+
+  it('returns a generic 500 (not the raw error message) when generateAIText throws (regression — internal errors must never leak to the client)', async () => {
+    mockGenerateAIText.mockRejectedValueOnce(new Error('connection to db at 10.0.0.5:5432 refused'));
+    const res = await app.inject({
+      method: 'POST', url: '/chat/parse',
+      payload: { messages: [{ role: 'user', content: 'run a test' }] },
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('Internal error — please try again');
   });
 });
 

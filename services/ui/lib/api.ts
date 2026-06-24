@@ -489,7 +489,7 @@ export const suggestParamColumns = async (steps: FlowStep[]): Promise<{ columns:
 };
 
 export const translatePlaywright = async (script: string, targetUrl?: string): Promise<{ k6Script: string }> => {
-  const res = await f(`${API_URL}/translate`, {
+  const res = await f(`${RESULTS_URL}/ai/translate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ script, targetUrl }),
   });

@@ -1,4 +1,4 @@
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
@@ -269,6 +269,81 @@ const loadUserOrgs = async (p: Pool, userId: string): Promise<OrgMembership[]> =
   );
   return rows.map(r => ({ id: r.id, name: r.name, role: r.role }));
 };
+
+/**
+ * Logs the real error server-side and returns a generic message to the client —
+ * an unhandled exception inside an AI/DB call (provider timeout, transient Postgres
+ * error, JSON.parse throw) must never leak raw internal error text/stack traces to
+ * the caller. Mirrors the fix already applied once for DELETE /scripts/:id; this
+ * generalizes it across every endpoint that previously did
+ * `reply.code(500).send({ error: (err as Error).message })`.
+ */
+const sendInternalError = (request: FastifyRequest, reply: FastifyReply, err: unknown, context: string): FastifyReply => {
+  request.log.error({ err }, `${context} failed`);
+  return reply.code(500).send({ error: 'Internal error — please try again' });
+};
+
+/**
+ * For each log source (scoped to projectId, or every source when projectId is null —
+ * the dev-mode/no-auth convention used throughout this file) that has a
+ * metrics_endpoint_template configured, interpolate the test timestamps, fetch the
+ * API, and return truncated JSON. Never throws — returns [] on any error so AI
+ * analysis is never blocked. Exported standalone (like consumer.ts's fireWebhooks)
+ * so cross-tenant scoping is directly testable without a session/RBAC harness.
+ */
+export async function fetchExternalMetrics(
+  pool: Pool,
+  targetUrl: string,
+  startedAt: string | null,
+  completedAt: string | null,
+  projectId: string | null,
+): Promise<Array<{ sourceName: string; platform: string | null; data: string }>> {
+  const { rows } = await pool.query(
+    `SELECT name, platform, metrics_endpoint_template, auth_header
+     FROM log_sources
+     WHERE metrics_endpoint_template IS NOT NULL
+       AND ($1::uuid IS NULL OR project_id = $1::uuid)`,
+    [projectId]
+  );
+  if (rows.length === 0) return [];
+
+  const started  = startedAt  ? new Date(startedAt)  : new Date(Date.now() - 3_600_000);
+  const completed = completedAt ? new Date(completedAt) : new Date();
+
+  const interpolate = (template: string): string =>
+    template
+      .replaceAll('{startedAtMs}',      String(started.getTime()))
+      .replaceAll('{completedAtMs}',    String(completed.getTime()))
+      .replaceAll('{startedAtS}',       String(Math.floor(started.getTime() / 1000)))
+      .replaceAll('{completedAtS}',     String(Math.floor(completed.getTime() / 1000)))
+      .replaceAll('{startedAtISO}',     started.toISOString())
+      .replaceAll('{completedAtISO}',   completed.toISOString())
+      .replaceAll('{targetUrl}',        targetUrl)
+      .replaceAll('{targetUrlEncoded}', encodeURIComponent(targetUrl));
+
+  const results: Array<{ sourceName: string; platform: string | null; data: string }> = [];
+
+  await Promise.allSettled(
+    rows.map(async (row: { name: string; platform: string | null; metrics_endpoint_template: string; auth_header: string | null }) => {
+      try {
+        const url = interpolate(row.metrics_endpoint_template);
+        const headers: Record<string, string> = { 'Accept': 'application/json' };
+        if (row.auth_header) headers['Authorization'] = row.auth_header;
+
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+        if (!res.ok) return;
+        const text = await res.text();
+        results.push({
+          sourceName: row.name,
+          platform: row.platform,
+          data: text.slice(0, 3000), // cap at 3 KB per source
+        });
+      } catch { /* non-fatal */ }
+    })
+  );
+
+  return results;
+}
 
 /** Dummy session user returned by /auth/* when SESSION_SECRET is empty (auth disabled). */
 const DEV_USER: SessionUser = {
@@ -1607,61 +1682,6 @@ export const buildApp = async (
     }
   );
 
-  // ── External metrics fetcher (used by AI insights + diagnose) ──────────────
-  /**
-   * For each log source that has a metrics_endpoint_template configured,
-   * interpolate the test timestamps, fetch the API, and return truncated JSON.
-   * Never throws — returns [] on any error so AI analysis is never blocked.
-   */
-  async function fetchExternalMetrics(
-    targetUrl: string,
-    startedAt: string | null,
-    completedAt: string | null,
-  ): Promise<Array<{ sourceName: string; platform: string | null; data: string }>> {
-    const { rows } = await pool.query(
-      `SELECT name, platform, metrics_endpoint_template, auth_header
-       FROM log_sources WHERE metrics_endpoint_template IS NOT NULL`
-    );
-    if (rows.length === 0) return [];
-
-    const started  = startedAt  ? new Date(startedAt)  : new Date(Date.now() - 3_600_000);
-    const completed = completedAt ? new Date(completedAt) : new Date();
-
-    const interpolate = (template: string): string =>
-      template
-        .replaceAll('{startedAtMs}',      String(started.getTime()))
-        .replaceAll('{completedAtMs}',    String(completed.getTime()))
-        .replaceAll('{startedAtS}',       String(Math.floor(started.getTime() / 1000)))
-        .replaceAll('{completedAtS}',     String(Math.floor(completed.getTime() / 1000)))
-        .replaceAll('{startedAtISO}',     started.toISOString())
-        .replaceAll('{completedAtISO}',   completed.toISOString())
-        .replaceAll('{targetUrl}',        targetUrl)
-        .replaceAll('{targetUrlEncoded}', encodeURIComponent(targetUrl));
-
-    const results: Array<{ sourceName: string; platform: string | null; data: string }> = [];
-
-    await Promise.allSettled(
-      rows.map(async (row: { name: string; platform: string | null; metrics_endpoint_template: string; auth_header: string | null }) => {
-        try {
-          const url = interpolate(row.metrics_endpoint_template);
-          const headers: Record<string, string> = { 'Accept': 'application/json' };
-          if (row.auth_header) headers['Authorization'] = row.auth_header;
-
-          const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return;
-          const text = await res.text();
-          results.push({
-            sourceName: row.name,
-            platform: row.platform,
-            data: text.slice(0, 3000), // cap at 3 KB per source
-          });
-        } catch { /* non-fatal */ }
-      })
-    );
-
-    return results;
-  }
-
   // ── AI-5: Cron natural-language assistant ───────────────────────────────
   app.post<{ Body: { phrase: string } }>(
     '/ai/cron',
@@ -1686,7 +1706,7 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
         if (!parsed || !isValidCronResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'POST /ai/cron');
       }
     }
   );
@@ -1720,7 +1740,7 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`
         if (!parsed || !isValidTrendNarrativeResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'POST /ai/trend-narrative');
       }
     }
   );
@@ -1760,7 +1780,7 @@ Return ONLY valid JSON:
         if (!parsed || !isValidSuggestSettingsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'GET /results/suggest-settings');
       }
     }
   );
@@ -1800,7 +1820,7 @@ Return ONLY valid JSON:
         const { level, message } = parsed as { level: string; message: string };
         return { level, warning: level !== 'ok' ? message : null, message };
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'POST /ai/webhook-noise');
       }
     }
   );
@@ -1829,7 +1849,7 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
         if (!parsed || !isValidPresetNameResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'POST /ai/preset-name');
       }
     }
   );
@@ -1860,7 +1880,52 @@ Return ONLY valid JSON:
         if (!parsed || !isValidParamSuggestionsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'POST /ai/param-suggestions');
+      }
+    }
+  );
+
+  // ── AI-6: Playwright → k6 translator ─────────────────────────────────────
+  // Moved here from ai-service (regression — found live: the UI's translatePlaywright()
+  // called ${API_URL}/translate (api-service, which never registered this route) instead
+  // of ${RESULTS_URL} like every other AI-assist call; ai-service's copy was unreachable
+  // from the browser and bypassed the pluggable AI provider abstraction (raw Gemini SDK
+  // call, ignoring the admin's configured provider/fallback chain). Now follows the same
+  // pattern as every other /ai/* endpoint in this file.
+  app.post<{ Body: { script: string; targetUrl?: string } }>(
+    '/ai/translate',
+    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    async (request, reply) => {
+      const { script, targetUrl } = request.body ?? {};
+      if (!script || script.length > 256 * 1024) {
+        return reply.code(400).send({ error: 'script is required and must be under 256 KB' });
+      }
+      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
+      try {
+        const text = (await aiGenerateText(pool,
+          `You are an expert in both Playwright and k6. Translate the following Playwright test script into a k6 load test script. ${USER_DATA_INSTRUCTION}
+
+Rules:
+- Replace Playwright page.goto/click/fill with k6 http.get/post requests
+- Use k6 check() for assertions on response status
+- Keep the URL structure and request bodies intact
+- Add realistic export const options = { vus: 5, duration: '1m' }
+- Use http.batch() for concurrent requests if the test has parallel operations
+- Replace page.waitFor with sleep() using realistic values
+- Return ONLY the k6 JavaScript code, no markdown fences
+${targetUrl ? `- Primary target URL: ${targetUrl}` : ''}
+
+Playwright script to translate:
+${fenceUserContent('playwright_script', script.slice(0, 8000))}`
+        )).trim();
+        await incrementGeminiUsage(pool, request.projectId);
+        const k6Script = text.replace(/^```(?:javascript|js)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        if (!k6Script) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        return { k6Script };
+      } catch (err) {
+        return sendInternalError(request, reply, err, 'POST /ai/translate');
       }
     }
   );
@@ -1923,7 +1988,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
 
         return { suggestions: parsed, runsAnalysed: rows.length };
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'GET /results/suggest-thresholds');
       }
     }
   );
@@ -1988,7 +2053,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
       if (rows.length === 0) return reply.code(404).send({ error: 'Result not found' });
 
       const { target_url, type, metrics, started_at, completed_at } = rows[0] as { target_url: string; type: string; metrics: Record<string, unknown>; started_at: string | null; completed_at: string | null };
-      const externalMetrics = await fetchExternalMetrics(target_url, started_at, completed_at);
+      const externalMetrics = await fetchExternalMetrics(pool, target_url, started_at, completed_at, projectId);
       const eb = metrics.errorBreakdown as Record<string, number> | undefined;
       const total = (metrics.requestsTotal as number) || 1;
 
@@ -2038,7 +2103,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         if (!parsed || !isValidDiagnoseResponse(parsed)) return { diagnoses: [], message: 'AI returned unexpected response' };
         return { diagnoses: parsed };
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'GET /results/:testId/diagnose');
       }
     }
   );
@@ -2075,7 +2140,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         }
         return parsed;
       } catch (err) {
-        return reply.code(500).send({ error: (err as Error).message });
+        return sendInternalError(request, reply, err, 'POST /chat/parse');
       }
     }
   );
@@ -2083,8 +2148,11 @@ Return ONLY valid JSON array. Include only categories with count > 0:
   // ── Log sources ──────────────────────────────────────────────────────────
   app.get('/log-sources', async (request) => {
     const projectId = request.projectId ?? null;
+    // auth_header deliberately excluded — it can hold a raw bearer/API token and this
+    // route is readable by any team member (viewer included), not just admins.
     const { rows } = await rPool.query(
-      `SELECT * FROM log_sources WHERE ($1::uuid IS NULL OR project_id = $1::uuid) ORDER BY created_at DESC`,
+      `SELECT id, name, platform, url_template, metrics_endpoint_template, project_id, created_at
+       FROM log_sources WHERE ($1::uuid IS NULL OR project_id = $1::uuid) ORDER BY created_at DESC`,
       [projectId]
     );
     return { logSources: rows };
@@ -2095,6 +2163,12 @@ Return ONLY valid JSON array. Include only categories with count > 0:
     async (request, reply) => {
       const { name, platform, urlTemplate, metricsEndpointTemplate, authHeader } = request.body;
       if (!name || !urlTemplate) return reply.code(400).send({ error: 'name and urlTemplate are required' });
+      const urlSsrfError = validateSsrfSafeUrl(urlTemplate);
+      if (urlSsrfError) return reply.code(400).send({ error: `urlTemplate: ${urlSsrfError}` });
+      if (metricsEndpointTemplate) {
+        const metricsSsrfError = validateSsrfSafeUrl(metricsEndpointTemplate);
+        if (metricsSsrfError) return reply.code(400).send({ error: `metricsEndpointTemplate: ${metricsSsrfError}` });
+      }
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
         `INSERT INTO log_sources (name, platform, url_template, metrics_endpoint_template, auth_header, project_id)
@@ -2110,6 +2184,14 @@ Return ONLY valid JSON array. Include only categories with count > 0:
     async (request, reply) => {
       const { id } = request.params;
       const updates = request.body;
+      if (updates.urlTemplate) {
+        const urlSsrfError = validateSsrfSafeUrl(updates.urlTemplate);
+        if (urlSsrfError) return reply.code(400).send({ error: `urlTemplate: ${urlSsrfError}` });
+      }
+      if (updates.metricsEndpointTemplate) {
+        const metricsSsrfError = validateSsrfSafeUrl(updates.metricsEndpointTemplate);
+        if (metricsSsrfError) return reply.code(400).send({ error: `metricsEndpointTemplate: ${metricsSsrfError}` });
+      }
       const sets: string[] = [];
       const vals: unknown[] = [];
       let i = 1;

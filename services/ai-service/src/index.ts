@@ -23,45 +23,6 @@ let reconnecting = false;
 
 const app = Fastify({ logger: true });
 
-// ── AI-6: Playwright → k6 translator ─────────────────────────────────────
-app.post<{ Body: { script: string; targetUrl?: string } }>('/translate', async (request, reply) => {
-  const { script, targetUrl } = request.body;
-  if (!script || script.length > 256 * 1024) {
-    return reply.code(400).send({ error: 'script is required and must be under 256 KB' });
-  }
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
-
-  const prompt = `You are an expert in both Playwright and k6. Translate the following Playwright test script into a k6 load test script.
-
-Rules:
-- Replace Playwright page.goto/click/fill with k6 http.get/post requests
-- Use k6 check() for assertions on response status
-- Keep the URL structure and request bodies intact
-- Add realistic export const options = { vus: 5, duration: '1m' }
-- Use http.batch() for concurrent requests if the test has parallel operations
-- Replace page.waitFor with sleep() using realistic values
-- Return ONLY the k6 JavaScript code, no markdown fences
-${targetUrl ? `- Primary target URL: ${targetUrl}` : ''}
-
-Playwright script to translate:
-\`\`\`
-${script.slice(0, 8000)}
-\`\`\``;
-
-  try {
-    const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite' });
-    const result = await model.generateContent(prompt);
-    let k6Script = result.response.text().trim();
-    // Strip markdown fences if present
-    k6Script = k6Script.replace(/^```(?:javascript|js)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    return { k6Script };
-  } catch (err) {
-    return reply.code(500).send({ error: (err as Error).message });
-  }
-});
-
 app.get('/health', async (_request, reply) => {
   const healthy = queueConnected;
   return reply.code(healthy ? 200 : 503).send({
