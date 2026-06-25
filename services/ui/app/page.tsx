@@ -604,11 +604,6 @@ function HomeContent() {
               {presets.map(t => <option key={t.id} value={t.id}>{t.name} ({t.type})</option>)}
             </select>
           )}
-          {!isViewer && (
-            <button onClick={handleSubmit} disabled={loading} className="flex items-center gap-2 bg-btn2 text-white rounded-control px-4 py-2.75 text-[13.5px] font-semibold disabled:opacity-50">
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="var(--accent)"><path d="M4 3l9 5-9 5z" /></svg> Quick run
-            </button>
-          )}
         </div>
       </div>
 
