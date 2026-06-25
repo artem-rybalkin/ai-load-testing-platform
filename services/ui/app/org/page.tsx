@@ -38,9 +38,9 @@ export default function OrgPage() {
 
   if (orgs.length === 0) {
     return (
-      <div className="p-4 lg:p-6">
-        <h1 className="text-[15px] font-semibold text-[#24292f] mb-4">Organization</h1>
-        <p className="text-[13px] text-[#57606a]">You are not a member of any organization.</p>
+      <div className="px-4 md:px-9 py-7.5">
+        <h1 className="font-display text-[28px] font-bold tracking-[-0.02em] mb-4">Organization</h1>
+        <p className="text-[13px] text-tx-3">You are not a member of any organization.</p>
       </div>
     );
   }
@@ -99,102 +99,106 @@ export default function OrgPage() {
   };
 
   return (
-    <div className="p-4 lg:p-6 space-y-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-[15px] font-semibold text-[#24292f]">
-          Organization{detail ? `: ${detail.org.name}` : ''}
-        </h1>
+    <div>
+      <div className="px-4 md:px-9 pt-7.5 flex items-center gap-3 flex-wrap">
+        <div>
+          <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Account</div>
+          <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">
+            Organization{detail ? `: ${detail.org.name}` : ''}
+          </h1>
+        </div>
         {orgs.length > 1 && (
           <select
             value={orgId}
             onChange={e => setOrgId(e.target.value)}
-            className="border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+            className="border border-border rounded-control px-2.5 py-1.5 text-[12.5px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
           >
             {orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
           </select>
         )}
       </div>
+      <div className="px-4 md:px-9 py-6 flex flex-col gap-4">
 
       {isAdmin && (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Add Member</span>
+        <div className="bg-surface border border-border rounded-card overflow-hidden">
+          <div className="px-6 py-4 border-b border-border">
+            <span className="font-display text-[16px] font-semibold">Add Member</span>
           </div>
-          <div className="p-4 flex gap-2 items-center">
+          <div className="p-5 flex gap-2 items-center">
             <input
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="teammate@example.com"
-              className="flex-1 border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]"
+              className="flex-1 border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
             />
             <select
               value={role}
               onChange={e => setRole(e.target.value as OrgRole)}
-              className="border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+              className="border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
             >
               {ORG_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
             <button
               onClick={handleAddMember}
               disabled={saving}
-              className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+              className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
             >
               {saving ? 'Adding…' : 'Add'}
             </button>
           </div>
-          {error && <p className="px-4 pb-3 text-[#cf222e] text-[12px]">{error}</p>}
+          {error && <p className="px-4 pb-3 text-red-fg text-[12px]">{error}</p>}
         </div>
       )}
 
-      {!isAdmin && error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+      {!isAdmin && error && <p className="text-red-fg text-[12px]">{error}</p>}
 
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
+      <div className="bg-surface border border-border rounded-card overflow-hidden divide-y divide-line">
         {!detail || detail.members.length === 0 ? (
-          <div className="p-8 text-center text-[13px] text-[#57606a]">No members</div>
+          <div className="p-8 text-center text-[13px] text-tx-3">No members</div>
         ) : (
           detail.members.map(m => (
-            <div key={m.userId} className="flex items-center justify-between px-4 py-3 hover:bg-[#f6f8fa]">
+            <div key={m.userId} className="flex items-center justify-between px-4 py-3 hover:bg-surface-2">
               <div className="min-w-0">
-                <p className="text-[13px] font-mono text-[#24292f] truncate">{m.email}</p>
-                {m.name && <p className="text-[11px] text-[#8c959f]">{m.name}</p>}
+                <p className="text-[13px] font-mono text-tx truncate">{m.email}</p>
+                {m.name && <p className="text-[11px] text-tx-4">{m.name}</p>}
               </div>
               {isAdmin ? (
                 <div className="flex items-center gap-3 flex-shrink-0">
                   <select
                     value={m.role}
                     onChange={e => handleRoleChange(m.userId, e.target.value as OrgRole)}
-                    className="border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+                    className="border border-border rounded-control px-2 py-1 text-[12px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
                   >
                     {ORG_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                   <button
                     onClick={() => handleRemove(m.userId)}
-                    className="text-[11px] text-[#cf222e] hover:underline"
+                    className="text-[11px] text-red-fg hover:underline"
                   >
                     Remove
                   </button>
                 </div>
               ) : (
-                <span className="text-[10px] uppercase tracking-wide text-[#8c959f] flex-shrink-0">{m.role}</span>
+                <span className="text-[10px] uppercase tracking-wide text-tx-4 flex-shrink-0">{m.role}</span>
               )}
             </div>
           ))
         )}
       </div>
 
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-        <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Teams</span>
+      <div className="bg-surface border border-border rounded-card overflow-hidden">
+        <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+          <span className="font-display text-[16px] font-semibold">Teams</span>
         </div>
         {!detail || detail.teams.length === 0 ? (
-          <div className="p-8 text-center text-[13px] text-[#57606a]">No teams</div>
+          <div className="p-8 text-center text-[13px] text-tx-3">No teams</div>
         ) : (
-          <div className="divide-y divide-[#eaeef2]">
+          <div className="divide-y divide-line">
             {detail.teams.map(t => (
-              <div key={t.id} className="flex items-center justify-between px-4 py-3 hover:bg-[#f6f8fa]">
-                <p className="text-[13px] font-mono text-[#24292f]">{t.name}</p>
-                <p className="text-[11px] text-[#8c959f] font-mono">
+              <div key={t.id} className="flex items-center justify-between px-4 py-3 hover:bg-surface-2">
+                <p className="text-[13px] font-mono text-tx">{t.name}</p>
+                <p className="text-[11px] text-tx-4 font-mono">
                   {t.usage.concurrentTests}/{t.quota.maxConcurrentTests} running ·{' '}
                   {t.usage.scheduledTests}/{t.quota.maxScheduledTests} schedules ·{' '}
                   {t.usage.geminiCallsToday}/{t.quota.maxGeminiCallsPerDay} AI calls today
@@ -204,24 +208,25 @@ export default function OrgPage() {
           </div>
         )}
         {isAdmin && (
-          <div className="p-4 flex gap-2 items-center border-t border-[#d0d7de]">
+          <div className="p-4 flex gap-2 items-center border-t border-border">
             <input
               type="text"
               value={teamName}
               onChange={e => setTeamName(e.target.value)}
               placeholder="New team name"
-              className="flex-1 border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]"
+              className="flex-1 border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
             />
             <button
               onClick={handleCreateTeam}
               disabled={savingTeam}
-              className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+              className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
             >
               {savingTeam ? 'Creating…' : '+ New team'}
             </button>
           </div>
         )}
-        {teamError && <p className="px-4 pb-3 text-[#cf222e] text-[12px]">{teamError}</p>}
+        {teamError && <p className="px-4 pb-3 text-red-fg text-[12px]">{teamError}</p>}
+      </div>
       </div>
     </div>
   );

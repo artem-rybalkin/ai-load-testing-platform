@@ -19,18 +19,19 @@ export const fmtElapsed = (iso: string, startedAt?: string | null): string => {
   return `${Math.floor(secs / 60)}m${secs % 60 > 0 ? String(secs % 60).padStart(2, '0') + 's' : ''}`;
 };
 
-const STEP_COLORS = ['#0969da', '#1f883d', '#9a6700', '#7c3aed', '#cf222e', '#0891b2', '#c2410c'];
+const STEP_COLORS = ['#ff5a2c', '#16a34a', '#ca8a04', '#7c3aed', '#dc2626', '#0891b2', '#c2410c'];
 
 const TOOLTIP_STYLE = {
-  background: '#fff',
-  border: '1px solid #d0d7de',
-  borderRadius: '6px',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: '8px',
   fontSize: 11,
-  fontFamily: 'monospace',
+  fontFamily: "'JetBrains Mono', monospace",
   boxShadow: 'none',
+  color: 'var(--tx)',
 };
 
-const TICK = { fill: '#57606a', fontSize: 11, fontFamily: 'monospace' };
+const TICK = { fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
 
 export const toKey = (name: string) => name.replace(/[^a-zA-Z0-9_]/g, '_');
 
@@ -55,7 +56,7 @@ function StepLegend({ stepNames, expanded, onToggle }: LegendProps) {
     <div className="mt-1.5">
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         {visible.map((name, i) => (
-          <span key={name} className="inline-flex items-center gap-1 text-[11px] font-mono text-[#24292f] whitespace-nowrap">
+          <span key={name} className="inline-flex items-center gap-1 text-[11px] font-mono text-tx whitespace-nowrap">
             <span
               className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
               style={{ backgroundColor: STEP_COLORS[i % STEP_COLORS.length] }}
@@ -67,7 +68,7 @@ function StepLegend({ stepNames, expanded, onToggle }: LegendProps) {
           <button
             type="button"
             onClick={onToggle}
-            className="text-[11px] font-mono text-[#0969da] hover:underline"
+            className="text-[11px] font-mono text-accent hover:underline"
           >
             {expanded ? '↑ show fewer' : `+ ${hiddenCount} more step${hiddenCount > 1 ? 's' : ''}…`}
           </button>
@@ -83,7 +84,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
   if (points.length === 0) {
     return (
       <div className="py-6 text-center">
-        <div className="animate-pulse text-[#8c959f] text-[12px] font-mono">Waiting for first data point…</div>
+        <div className="animate-pulse text-tx-4 text-[12px] font-mono">Waiting for first data point…</div>
       </div>
     );
   }
@@ -120,14 +121,14 @@ export default function RealtimeChart({ points, startedAt }: Props) {
       {/* ── Response time ─────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+          <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">
             {hasSteps ? 'Response Time per Step' : 'Response Time'}
           </span>
-          <span className="text-[10px] font-mono text-[#8c959f]">ms · 5s windows</span>
+          <span className="text-[10px] font-mono text-tx-4">ms · 5s windows</span>
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
-            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <CartesianGrid stroke="#f2ede2" vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit="ms" width={50} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
@@ -140,7 +141,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
                 dot={false} isAnimationActive={false} name={`avg_${toKey(name)}`} connectNulls />
             )) : (
               <Line type="monotone" dataKey="avgResponseTime"
-                stroke="#0969da" strokeWidth={1.5} dot={false} name="Avg response" />
+                stroke="#ff5a2c" strokeWidth={1.5} dot={false} name="Avg response" />
             )}
           </LineChart>
         </ResponsiveContainer>
@@ -150,16 +151,16 @@ export default function RealtimeChart({ points, startedAt }: Props) {
       {/* ── Error rate ────────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+          <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">
             {hasSteps ? 'Error Rate per Step' : 'VUs & Error Rate'}
           </span>
-          <span className="text-[10px] font-mono text-[#8c959f]">
+          <span className="text-[10px] font-mono text-tx-4">
             {hasSteps ? 'error %' : 'VUs left · error % right'}
           </span>
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
-            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <CartesianGrid stroke="#f2ede2" vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             {hasSteps ? (
               <YAxis tick={TICK} unit="%" width={42} domain={[0, (max: number) => Math.max(max, 1)]} axisLine={false} tickLine={false} />
@@ -183,9 +184,9 @@ export default function RealtimeChart({ points, startedAt }: Props) {
             )) : (
               <>
                 <Line yAxisId="vus" type="monotone" dataKey="vus"
-                  stroke="#1f883d" strokeWidth={1.5} dot={false} name="VUs" />
+                  stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />
                 <Line yAxisId="err" type="monotone" dataKey="errorRate"
-                  stroke="#cf222e" strokeWidth={1.5} dot={false} name="Error rate" />
+                  stroke="#dc2626" strokeWidth={1.5} dot={false} name="Error rate" />
               </>
             )}
           </LineChart>
@@ -196,14 +197,14 @@ export default function RealtimeChart({ points, startedAt }: Props) {
       {/* ── Throughput ────────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+          <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">
             {hasSteps ? 'Throughput per Step' : 'Throughput'}
           </span>
-          <span className="text-[10px] font-mono text-[#8c959f]">req/sec</span>
+          <span className="text-[10px] font-mono text-tx-4">req/sec</span>
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
-            <CartesianGrid stroke="#eaeef2" vertical={false} />
+            <CartesianGrid stroke="#f2ede2" vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit=" rps" width={52} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip

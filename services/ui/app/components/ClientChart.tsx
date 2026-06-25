@@ -43,9 +43,9 @@ export const getVitalStatus = (key: string, value: number): 'good' | 'needs-impr
 };
 
 const statusCls = {
-  'good':              'text-[#1a7f37] bg-[#dafbe1]',
-  'needs-improvement': 'text-[#9a6700] bg-[#fff8c5]',
-  'poor':              'text-[#cf222e] bg-[#ffebe9]',
+  'good':              'text-green-fg-2 bg-green-bg',
+  'needs-improvement': 'text-amber-badge-fg bg-amber-bg',
+  'poor':              'text-red-badge-fg bg-red-bg',
 };
 
 const statusLabel = { 'good': 'Good', 'needs-improvement': 'Needs work', 'poor': 'Poor' };
@@ -55,51 +55,51 @@ const VitalCard = ({ label, value, unit, metricKey }: {
 }) => {
   const status = getVitalStatus(metricKey, value);
   return (
-    <div className="bg-[#f6f8fa] border border-[#d0d7de] rounded-md p-3">
-      <div className="flex items-center justify-between mb-1">
-        <p className="text-[10px] font-semibold text-[#57606a] uppercase tracking-wide">{label}</p>
-        <span className={`text-[10px] px-1.5 rounded font-mono font-medium ${statusCls[status]}`}>
+    <div className="bg-bg border border-border rounded-control p-3.5">
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="font-mono text-[10px] tracking-[0.06em] text-tx-4 uppercase">{label}</p>
+        <span className={`text-[10px] px-1.5 rounded-chip font-mono font-medium ${statusCls[status]}`}>
           {statusLabel[status]}
         </span>
       </div>
-      <p className="text-[20px] font-mono font-bold text-[#24292f] leading-none">
+      <p className="font-display text-[20px] font-bold leading-none">
         {metricKey === 'cls' ? value.toFixed(3) : Math.round(value)}
-        <span className="text-[11px] font-normal text-[#57606a] ml-1">{unit}</span>
+        <span className="text-[11px] font-sans font-normal text-tx-4 ml-1">{unit}</span>
       </p>
     </div>
   );
 };
 
 const InfoRow = ({ label, value }: { label: string; value: string | number }) => (
-  <div className="flex items-center justify-between py-1.5 border-b border-[#eaeef2] last:border-0">
-    <span className="text-[11px] text-[#57606a]">{label}</span>
-    <span className="text-[11px] font-mono font-medium text-[#24292f]">{value}</span>
+  <div className="flex items-center justify-between py-2 border-b border-line last:border-0">
+    <span className="text-[12px] text-tx-3">{label}</span>
+    <span className="text-[12px] font-mono font-medium">{value}</span>
   </div>
 );
 
 export const lhColor = (score: number) =>
-  score >= 90 ? '#1f883d' : score >= 50 ? '#9a6700' : '#cf222e';
+  score >= 90 ? '#16a34a' : score >= 50 ? '#ca8a04' : '#dc2626';
 
 export const lhCls = (score: number) =>
-  score >= 90 ? 'text-[#1a7f37] bg-[#dafbe1]' : score >= 50 ? 'text-[#9a6700] bg-[#fff8c5]' : 'text-[#cf222e] bg-[#ffebe9]';
+  score >= 90 ? 'text-green-fg-2 bg-green-bg' : score >= 50 ? 'text-amber-badge-fg bg-amber-bg' : 'text-red-badge-fg bg-red-bg';
 
 const ScoreGauge = ({ score, label }: { score: number; label: string }) => {
   const color = lhColor(score);
   const c = 2 * Math.PI * 16;
   return (
-    <div className="flex flex-col items-center gap-1.5">
+    <div className="flex flex-col items-center gap-2">
       <div className="relative w-14 h-14">
         <svg viewBox="0 0 36 36" className="w-14 h-14 -rotate-90">
-          <circle cx="18" cy="18" r="16" fill="none" stroke="#eaeef2" strokeWidth="3" />
+          <circle cx="18" cy="18" r="16" fill="none" stroke="#f2ede2" strokeWidth="3" />
           <circle cx="18" cy="18" r="16" fill="none" stroke={color} strokeWidth="3"
             strokeDasharray={`${(score / 100) * c} ${c}`} strokeLinecap="round" />
         </svg>
-        <span className="absolute inset-0 flex items-center justify-center text-[13px] font-mono font-bold text-[#24292f]">
+        <span className="absolute inset-0 flex items-center justify-center font-mono text-[13px] font-bold">
           {score}
         </span>
       </div>
-      <span className="text-[10px] text-[#57606a] text-center leading-tight">{label}</span>
-      <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-medium ${lhCls(score)}`}>
+      <span className="text-[10.5px] text-tx-3 text-center leading-tight">{label}</span>
+      <span className={`text-[9px] px-1.5 py-0.5 rounded-chip font-mono font-medium ${lhCls(score)}`}>
         {score >= 90 ? 'Good' : score >= 50 ? 'Needs work' : 'Poor'}
       </span>
     </div>
@@ -107,12 +107,13 @@ const ScoreGauge = ({ score, label }: { score: number; label: string }) => {
 };
 
 const TOOLTIP_STYLE = {
-  background: '#fff',
-  border: '1px solid #d0d7de',
-  borderRadius: '6px',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: '8px',
   fontSize: 11,
-  fontFamily: 'monospace',
+  fontFamily: "'JetBrains Mono', monospace",
   boxShadow: 'none',
+  color: 'var(--tx)',
 };
 
 export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
@@ -128,26 +129,26 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
   const lh = metrics.lighthouseScore;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Overall score */}
-      <div className="flex items-center gap-4 p-3 bg-[#f6f8fa] border border-[#d0d7de] rounded-md">
+      <div className="flex items-center gap-4 p-4 bg-bg border border-border rounded-control">
         <div className="relative w-16 h-16 flex-shrink-0">
           <svg viewBox="0 0 36 36" className="w-16 h-16 -rotate-90">
-            <circle cx="18" cy="18" r="16" fill="none" stroke="#eaeef2" strokeWidth="3" />
+            <circle cx="18" cy="18" r="16" fill="none" stroke="#f2ede2" strokeWidth="3" />
             <circle cx="18" cy="18" r="16" fill="none"
-              stroke={overallScore >= 70 ? '#1f883d' : overallScore >= 50 ? '#9a6700' : '#cf222e'}
+              stroke={overallScore >= 70 ? '#16a34a' : overallScore >= 50 ? '#ca8a04' : '#dc2626'}
               strokeWidth="3"
               strokeDasharray={`${overallScore} 100`}
               strokeLinecap="round" />
           </svg>
-          <span className="absolute inset-0 flex items-center justify-center text-[15px] font-mono font-bold text-[#24292f]">
+          <span className="absolute inset-0 flex items-center justify-center font-mono text-[15px] font-bold">
             {overallScore}
           </span>
         </div>
         <div>
-          <p className="text-[13px] font-semibold text-[#24292f]">Web Vitals Score</p>
-          <p className="text-[11px] text-[#57606a] mt-0.5">Based on Core Web Vitals thresholds</p>
-          <p className="text-[11px] font-mono mt-1 text-[#57606a]">
+          <p className="text-[13.5px] font-semibold">Web Vitals Score</p>
+          <p className="text-[11.5px] text-tx-3 mt-0.5">Based on Core Web Vitals thresholds</p>
+          <p className="text-[11px] font-mono mt-1 text-tx-3">
             {overallScore >= 70 ? '● Good' : overallScore >= 50 ? '● Needs improvement' : '● Poor'}
           </p>
         </div>
@@ -155,12 +156,12 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
 
       {/* Radar */}
       <div>
-        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">Web Vitals Radar</span>
+        <span className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase block mb-2.5">Web Vitals Radar</span>
         <ResponsiveContainer width="100%" height={200}>
           <RadarChart data={radarData}>
-            <PolarGrid stroke="#eaeef2" />
-            <PolarAngleAxis dataKey="metric" tick={{ fill: '#57606a', fontSize: 11, fontFamily: 'monospace' }} />
-            <Radar dataKey="score" stroke="#0969da" fill="#0969da" fillOpacity={0.1} strokeWidth={1.5} />
+            <PolarGrid stroke="#f2ede2" />
+            <PolarAngleAxis dataKey="metric" tick={{ fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }} />
+            <Radar dataKey="score" stroke="#ff5a2c" fill="#ff5a2c" fillOpacity={0.12} strokeWidth={1.5} />
             <Tooltip
               formatter={(v) => [`${Math.round(Number(v))}`, 'Score']}
               contentStyle={TOOLTIP_STYLE}
@@ -171,8 +172,8 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
 
       {/* Core Web Vitals */}
       <div>
-        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">Core Web Vitals</span>
-        <div className="grid grid-cols-2 gap-2">
+        <span className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase block mb-2.5">Core Web Vitals</span>
+        <div className="grid grid-cols-2 gap-2.5">
           <VitalCard label="LCP"  value={metrics.lcp}  unit="ms" metricKey="lcp" />
           <VitalCard label="FCP"  value={metrics.fcp}  unit="ms" metricKey="fcp" />
           <VitalCard label="TTFB" value={metrics.ttfb} unit="ms" metricKey="ttfb" />
@@ -186,8 +187,8 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
       {/* Additional timing & page health */}
       {(metrics.tti != null || metrics.jsErrors != null || metrics.longTaskCount != null || metrics.domNodeCount != null || metrics.pageLoadCount != null) && (
         <div>
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">Page Health</span>
-          <div className="bg-[#f6f8fa] border border-[#d0d7de] rounded-md px-3 py-1">
+          <span className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase block mb-2.5">Page Health</span>
+          <div className="bg-bg border border-border rounded-control px-3.5 py-1">
             {metrics.tti        != null && <InfoRow label="Time to Interactive (TTI)" value={`${Math.round(metrics.tti)} ms`} />}
             {metrics.longTaskCount != null && <InfoRow label="Long Tasks (>50ms)"        value={metrics.longTaskCount} />}
             {metrics.jsErrors   != null && <InfoRow label="JS Errors"                  value={metrics.jsErrors} />}
@@ -200,13 +201,13 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
       {/* Resource breakdown */}
       {metrics.resourceBreakdown && (
         <div>
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide block mb-2">
+          <span className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase block mb-2.5">
             Resource Breakdown
-            <span className="ml-2 font-normal text-[#8c959f]">
+            <span className="ml-2 font-sans font-normal text-tx-4">
               {metrics.resourceBreakdown.requestCount} requests · {metrics.resourceBreakdown.totalSize.toFixed(1)} KB total
             </span>
           </span>
-          <div className="bg-[#f6f8fa] border border-[#d0d7de] rounded-md px-3 py-1">
+          <div className="bg-bg border border-border rounded-control px-3.5 py-1">
             <InfoRow label="JavaScript"  value={`${metrics.resourceBreakdown.jsSize.toFixed(1)} KB`} />
             <InfoRow label="CSS"         value={`${metrics.resourceBreakdown.cssSize.toFixed(1)} KB`} />
             <InfoRow label="Images"      value={`${metrics.resourceBreakdown.imageSize.toFixed(1)} KB`} />
@@ -219,9 +220,9 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
       {/* Lighthouse */}
       {lh && (
         <div>
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Lighthouse Audit</span>
-            <span className="text-[9px] font-mono text-[#8c959f] bg-[#f6f8fa] border border-[#d0d7de] px-1.5 rounded">Google Lighthouse</span>
+          <div className="flex items-center gap-2 mb-3.5">
+            <span className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">Lighthouse Audit</span>
+            <span className="text-[9px] font-mono text-tx-4 bg-bg border border-border px-1.5 rounded-chip">Google Lighthouse</span>
           </div>
           <div className="grid grid-cols-4 gap-3">
             <ScoreGauge score={lh.performance}   label="Performance" />
@@ -229,7 +230,7 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
             <ScoreGauge score={lh.bestPractices} label="Best Practices" />
             <ScoreGauge score={lh.seo}           label="SEO" />
           </div>
-          <p className="text-[10px] font-mono text-[#8c959f] mt-3 text-center">
+          <p className="text-[10px] font-mono text-tx-4 mt-3.5 text-center">
             0–49 Poor · 50–89 Needs improvement · 90–100 Good
           </p>
         </div>

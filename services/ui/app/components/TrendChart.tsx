@@ -13,15 +13,16 @@ interface Props {
 }
 
 const TOOLTIP_STYLE = {
-  background: '#fff',
-  border: '1px solid #d0d7de',
-  borderRadius: '6px',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: '8px',
   fontSize: 11,
-  fontFamily: 'monospace',
+  fontFamily: "'JetBrains Mono', monospace",
   boxShadow: 'none',
+  color: 'var(--tx)',
 };
 
-const TICK = { fill: '#57606a', fontSize: 11, fontFamily: 'monospace' };
+const TICK = { fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
 
 export default function TrendChart({ trend, metricKey = 'p95ResponseTime', label = 'p95 (ms)' }: Props) {
   const data = trend.map((p, i) => ({
@@ -32,14 +33,14 @@ export default function TrendChart({ trend, metricKey = 'p95ResponseTime', label
   }));
 
   const dotColor = (entry: { perf_status?: string }) =>
-    entry.perf_status === 'failed'   ? '#cf222e' :
-    entry.perf_status === 'degraded' ? '#9a6700' :
-    '#1f883d';
+    entry.perf_status === 'failed'   ? '#dc2626' :
+    entry.perf_status === 'degraded' ? '#ca8a04' :
+    '#16a34a';
 
   return (
     <ResponsiveContainer width="100%" height={160}>
       <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid stroke="#eaeef2" vertical={false} />
+        <CartesianGrid stroke="#f2ede2" vertical={false} />
         <XAxis dataKey="run" tick={TICK} axisLine={false} tickLine={false} />
         <YAxis tick={TICK} unit="ms" axisLine={false} tickLine={false} />
         <Tooltip
@@ -51,11 +52,11 @@ export default function TrendChart({ trend, metricKey = 'p95ResponseTime', label
           type="monotone"
           dataKey="value"
           name={label}
-          stroke="#0969da"
+          stroke="#ff5a2c"
           strokeWidth={1.5}
           dot={(props) => {
             const { cx, cy, payload } = props;
-            return <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={3.5} fill={dotColor(payload)} stroke="#fff" strokeWidth={1.5} />;
+            return <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={3.5} fill={dotColor(payload)} stroke="var(--surface)" strokeWidth={1.5} />;
           }}
         />
       </LineChart>

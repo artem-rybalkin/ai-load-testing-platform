@@ -51,18 +51,18 @@ export default function SystemHealth() {
   if (isDismissed) return null;
 
   return (
-    <div className="bg-[#fff8c5] border-b border-[#e3b341] px-4 py-2 flex items-start gap-3">
-      <span className="text-[#9a6700] text-[13px] mt-0.5 shrink-0">⚠</span>
+    <div className="bg-amber-bg border-b border-amber-fg/30 px-4 md:px-9 py-2.5 flex items-start gap-3">
+      <span className="text-amber-badge-fg text-[13px] mt-0.5 shrink-0">⚠</span>
       <div className="flex-1 min-w-0">
-        <span className="text-[12px] font-semibold text-[#9a6700]">System issues detected</span>
+        <span className="text-[12px] font-semibold text-amber-badge-fg">System issues detected</span>
         <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
           {issues.map(s => (
-            <span key={s.name} className="text-[11px] font-mono text-[#9a6700]">
+            <span key={s.name} className="text-[11px] font-mono text-amber-badge-fg">
               <span className="font-semibold">{SERVICE_LABELS[s.name] ?? s.name}</span>
               {' '}
-              <span className="text-[#bf8700]">{s.status}</span>
+              <span className="text-amber-fg">{s.status}</span>
               {SERVICE_IMPACT[s.name] && (
-                <span className="text-[#9a6700] font-normal"> — {SERVICE_IMPACT[s.name](s)}</span>
+                <span className="text-amber-badge-fg font-normal"> — {SERVICE_IMPACT[s.name](s)}</span>
               )}
             </span>
           ))}
@@ -70,7 +70,7 @@ export default function SystemHealth() {
       </div>
       <button
         onClick={dismiss}
-        className="text-[#9a6700] hover:text-[#7a5100] text-[14px] shrink-0 leading-none"
+        className="text-amber-badge-fg hover:text-tx text-[14px] shrink-0 leading-none"
         aria-label="Dismiss"
       >
         ×

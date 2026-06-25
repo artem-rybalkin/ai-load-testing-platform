@@ -54,19 +54,33 @@ ${transcript}
 
 Decide which ONE of the following three outcomes applies, and return ONLY valid JSON matching exactly one of these shapes:
 
-1. If you have enough information to build a complete test configuration (a single target URL, and either backend load-test settings or browser/client-side settings), return:
+1. Return "ready" ONLY if ALL FOUR of these were explicitly stated by the user somewhere in the conversation — never invent or silently default any of them:
+   (a) a single target URL
+   (b) which test type — backend or client-side (see the signal-word rule under outcome 2)
+   (c) a concrete number of users/VUs/sessions to simulate
+   (d) how long the test should run
+   If even one of (a)-(d) is missing, you MUST use outcome 2 instead — do not guess a number or duration just because the rest of the request is clear.
 {"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<human-readable one-sentence summary>", "options": { ... }, "thresholds": { ... } }}
 - For "backend": options must look like {"vus": <number>, "duration": "<e.g. 1m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"}.
 - For "client-side": options must look like {"sessions": <number>, "duration": "<e.g. 1m>", "collectWebVitals": true}.
 - "thresholds" is optional; include only fields the user actually mentioned (p95, avg, errorRate, lcp, fcp, ttfb, cls, inp, tbt). Every threshold value MUST be a plain JSON number with NO unit suffix — write {"p95": 1000}, NEVER {"p95": "1000ms"} or {"p95": "1000"}.
 
-2. If required information is missing or ambiguous, return:
+2. If any of (a)-(d) above is missing or ambiguous, return:
 {"status": "needsClarification", "question": "<one short follow-up question to ask the user>"}
 - Always ask if there is no target URL.
 - Always ask if the test type is not explicitly signaled. Words like "user(s)", "session(s)", a number, or "for N minutes" do NOT by themselves indicate which type — a backend test counts "users" as virtual users (VUs) and a browser test counts "users" as browser sessions, so these words alone are ambiguous. Only infer "backend" from explicit signals like "API", "backend", "load test", "http test", "k6", "performance test", "endpoint". Only infer "client-side" from explicit signals like "browser", "real browser", "page", "web vitals", "Lighthouse", "Puppeteer", "client-side". If neither signal is present, ask which type the user wants rather than guessing.
+- Always ask if the user has not stated a concrete number of users/VUs/sessions to simulate anywhere in the conversation — words like "spike test" or "soak test" name a load *shape*, not a load *amount*, and never imply a number on their own. Always ask if the user has not stated how long the test should run anywhere in the conversation. These are load-test parameters that materially change the test — never invent or silently default them. If both are missing, ask one combined question covering both; if only one is missing, ask for that one specifically.
 
 3. If the user's intent clearly spans multiple sequential steps or endpoints (e.g. "log in, then add an item to cart, then checkout"), DO NOT attempt to infer the steps. Instead return:
 {"status": "redirectToFlowBuilder", "reason": "<one short sentence explaining why this needs the Flow Builder>"}
+
+Example (this exact pattern is the most common mistake — study it closely):
+USER: Spike test homepage
+ASSISTANT: Could you provide the target URL and whether this should be a backend or client-side test?
+USER: example.com backend
+Even though URL and type are now both known, the user STILL never gave a number of VUs or a duration — "spike test" alone does not imply 50 VUs / 5m / any number. The correct response here is:
+{"status": "needsClarification", "question": "How many virtual users would you like to simulate, and for how long should the spike test run?"}
+Returning "ready" with invented numbers at this point is WRONG, even though it feels like the conversation has enough information to "complete" the request.
 
 Return ONLY the JSON object, nothing else.`;
 };

@@ -57,7 +57,7 @@ describe('WebhooksPage — initial load', () => {
     render(<WebhooksPage />);
     await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
     expect(screen.getByText('No log sources configured')).toBeInTheDocument();
-    expect(screen.getByText('Integrations')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Webhooks', level: 1 })).toBeInTheDocument();
   });
 
   it('shows an error message when getWebhooks rejects', async () => {

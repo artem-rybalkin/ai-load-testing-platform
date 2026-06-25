@@ -11,17 +11,17 @@ const WORKER_NAMES: Record<string, string> = {
 };
 
 const barColor = (pct: number) =>
-  pct >= 80 ? 'bg-[#cf222e]' : pct >= 60 ? 'bg-[#9a6700]' : 'bg-[#1f883d]';
+  pct >= 80 ? 'bg-status-fail' : pct >= 60 ? 'bg-status-slow' : 'bg-status-pass';
 
 const MiniBar = ({ value, max = 100, label }: { value: number; max?: number; label: string }) => {
   const pct = Math.min(100, Math.round((value / max) * 100));
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[10px] font-mono text-[#57606a] w-8 shrink-0">{label}</span>
-      <div className="w-14 h-1.5 bg-[#eaeef2] rounded-full overflow-hidden">
+      <span className="text-[10px] font-mono text-tx-3 w-8 shrink-0">{label}</span>
+      <div className="w-14 h-1.5 bg-line rounded-full overflow-hidden">
         <div className={`h-full rounded-full transition-all ${barColor(pct)}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-[10px] font-mono text-[#57606a] w-7 shrink-0">{pct}%</span>
+      <span className="text-[10px] font-mono text-tx-3 w-7 shrink-0">{pct}%</span>
     </div>
   );
 };
@@ -51,7 +51,7 @@ export default function WorkerHealth() {
   if (workers.length === 0 && !geminiUsage) return null;
 
   return (
-    <div className="border-b border-[#eaeef2] bg-[#f6f7f8] px-4 py-1.5">
+    <div className="border-b border-border bg-surface-2 px-4 md:px-9 py-2">
       <div className="flex items-center gap-6 flex-wrap">
         {workers.map(w => {
           const m = w.metrics!;
@@ -61,9 +61,9 @@ export default function WorkerHealth() {
             <div key={w.name} className="flex items-center gap-3">
               <div className="flex items-center gap-1.5">
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                  unreachable ? 'bg-[#8c959f]' : saturated ? 'bg-[#cf222e]' : 'bg-[#1f883d]'
+                  unreachable ? 'bg-tx-4' : saturated ? 'bg-status-fail' : 'bg-status-pass'
                 }`} />
-                <span className="text-[11px] font-mono font-medium text-[#24292f]">
+                <span className="text-[11px] font-mono font-medium">
                   {WORKER_NAMES[w.name]}
                 </span>
               </div>
@@ -71,21 +71,21 @@ export default function WorkerHealth() {
                 <>
                   <MiniBar value={m.cpuPercent} label="CPU" />
                   <MiniBar value={m.memoryPercent} label="MEM" />
-                  <span className={`text-[10px] font-mono ${saturated ? 'text-[#cf222e] font-semibold' : 'text-[#57606a]'}`}>
+                  <span className={`text-[10px] font-mono ${saturated ? 'text-red-fg font-semibold' : 'text-tx-3'}`}>
                     {m.activeTests}/{m.maxTests} tests
                   </span>
                 </>
               )}
               {unreachable && (
-                <span className="text-[10px] font-mono text-[#8c959f]">offline</span>
+                <span className="text-[10px] font-mono text-tx-4">offline</span>
               )}
             </div>
           );
         })}
         {geminiUsage && (
           <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-mono font-medium text-[#24292f]">Gemini</span>
-            <span className={`text-[10px] font-mono ${geminiUsage.used >= geminiUsage.max ? 'text-[#cf222e] font-semibold' : 'text-[#57606a]'}`}>
+            <span className="text-[11px] font-mono font-medium">Gemini</span>
+            <span className={`text-[10px] font-mono ${geminiUsage.used >= geminiUsage.max ? 'text-red-fg font-semibold' : 'text-tx-3'}`}>
               {geminiUsage.used}/{geminiUsage.max} today
             </span>
           </div>

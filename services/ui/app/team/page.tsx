@@ -109,9 +109,9 @@ export default function TeamPage() {
 
   if (!teamId || teamId === 'dev') {
     return (
-      <div className="p-4 lg:p-6">
-        <h1 className="text-[15px] font-semibold text-[#24292f] mb-4">Team</h1>
-        <p className="text-[13px] text-[#57606a]">Team management is not available — auth is disabled (dev mode).</p>
+      <div className="px-4 md:px-9 py-7.5">
+        <h1 className="font-display text-[28px] font-bold tracking-[-0.02em] mb-4">Team</h1>
+        <p className="text-[13px] text-tx-3">Team management is not available — auth is disabled (dev mode).</p>
       </div>
     );
   }
@@ -249,83 +249,87 @@ export default function TeamPage() {
   };
 
   return (
-    <div className="p-4 lg:p-6 space-y-4">
-      <h1 className="text-[15px] font-semibold text-[#24292f]">Team{currentTeam ? `: ${currentTeam.name}` : ''}</h1>
+    <div>
+      <div className="px-4 md:px-9 pt-7.5">
+        <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— People</div>
+        <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Team{currentTeam ? `: ${currentTeam.name}` : ''}</h1>
+      </div>
+      <div className="px-4 md:px-9 py-6 flex flex-col gap-4">
 
       {isAdmin && (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Add Member</span>
+        <div className="bg-surface border border-border rounded-card overflow-hidden">
+          <div className="px-6 py-4 border-b border-border">
+            <span className="font-display text-[16px] font-semibold">Add Member</span>
           </div>
-          <div className="p-4 flex gap-2 items-center">
+          <div className="p-5 flex gap-2 items-center">
             <input
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="teammate@example.com"
-              className="flex-1 border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]"
+              className="flex-1 border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
             />
             <select
               value={role}
               onChange={e => setRole(e.target.value as TeamRole)}
-              className="border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+              className="border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
             >
               {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
             <button
               onClick={handleAdd}
               disabled={saving}
-              className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+              className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
             >
               {saving ? 'Adding…' : 'Add'}
             </button>
           </div>
-          {error && <p className="px-4 pb-3 text-[#cf222e] text-[12px]">{error}</p>}
+          {error && <p className="px-4 pb-3 text-red-fg text-[12px]">{error}</p>}
         </div>
       )}
 
-      {!isAdmin && error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+      {!isAdmin && error && <p className="text-red-fg text-[12px]">{error}</p>}
 
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
+      <div className="bg-surface border border-border rounded-card overflow-hidden divide-y divide-line">
         {members.length === 0 ? (
-          <div className="p-8 text-center text-[13px] text-[#57606a]">No members</div>
+          <div className="p-8 text-center text-[13px] text-tx-3">No members</div>
         ) : (
           members.map(m => (
-            <div key={m.userId} className="flex items-center justify-between px-4 py-3 hover:bg-[#f6f8fa]">
+            <div key={m.userId} className="flex items-center justify-between px-4 py-3 hover:bg-surface-2">
               <div className="min-w-0">
-                <p className="text-[13px] font-mono text-[#24292f] truncate">{m.email}</p>
-                {m.name && <p className="text-[11px] text-[#8c959f]">{m.name}</p>}
+                <p className="text-[13px] font-mono text-tx truncate">{m.email}</p>
+                {m.name && <p className="text-[11px] text-tx-4">{m.name}</p>}
               </div>
               {isAdmin ? (
                 <div className="flex items-center gap-3 flex-shrink-0">
                   <select
                     value={m.role}
                     onChange={e => handleRoleChange(m.userId, e.target.value as TeamRole)}
-                    className="border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+                    className="border border-border rounded-control px-2 py-1 text-[12px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
                   >
                     {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                   <button
                     onClick={() => handleRemove(m.userId)}
-                    className="text-[11px] text-[#cf222e] hover:underline"
+                    className="text-[11px] text-red-fg hover:underline"
                   >
                     Remove
                   </button>
                 </div>
               ) : (
-                <span className="text-[10px] uppercase tracking-wide text-[#8c959f] flex-shrink-0">{m.role}</span>
+                <span className="text-[10px] uppercase tracking-wide text-tx-4 flex-shrink-0">{m.role}</span>
               )}
             </div>
           ))
         )}
       </div>
 
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-        <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Usage &amp; Limits</span>
+      <div className="bg-surface border border-border rounded-card overflow-hidden">
+        <div className="px-6 py-4 border-b border-border">
+          <span className="font-display text-[16px] font-semibold">Usage &amp; Limits</span>
         </div>
         {!quota || !usage ? (
-          <div className="p-8 text-center text-[13px] text-[#57606a]">
+          <div className="p-8 text-center text-[13px] text-tx-3">
             {quotaError || 'Loading…'}
           </div>
         ) : (
@@ -334,27 +338,27 @@ export default function TeamPage() {
               const limit = quotaDraft[key] ?? quota[key];
               const used = usageKey ? usage[usageKey] : undefined;
               const pct = used !== undefined && limit ? Math.min(100, (used / limit) * 100) : 0;
-              const barColor = pct >= 100 ? 'bg-[#cf222e]' : pct >= 80 ? 'bg-[#9a6700]' : 'bg-[#1f883d]';
+              const barColor = pct >= 100 ? 'bg-status-fail' : pct >= 80 ? 'bg-status-slow' : 'bg-status-pass';
               return (
                 <div key={key}>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[12px] text-[#24292f]">{label}</span>
+                    <span className="text-[12px] text-tx">{label}</span>
                     {isAdmin ? (
                       <input
                         type="number"
                         min={1}
                         value={quotaDraft[key] ?? ''}
                         onChange={e => setQuotaDraft(d => ({ ...d, [key]: parseInt(e.target.value, 10) || 0 }))}
-                        className="w-24 border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] font-mono bg-white text-[#24292f] text-right focus:outline-none focus:border-[#0969da]"
+                        className="w-24 border border-border rounded-control px-2 py-1 text-[12px] font-mono bg-surface text-tx text-right focus:outline-none focus:border-ink-bd"
                       />
                     ) : (
-                      <span className="text-[12px] font-mono text-[#57606a]">
+                      <span className="text-[12px] font-mono text-tx-3">
                         {used !== undefined ? `${used} / ${limit}` : limit}
                       </span>
                     )}
                   </div>
                   {usageKey && (
-                    <div className="h-1.5 rounded-full bg-[#eaeef2] overflow-hidden">
+                    <div className="h-1.5 rounded-full bg-line overflow-hidden">
                       <div className={`h-full ${barColor}`} style={{ width: `${pct}%` }} />
                     </div>
                   )}
@@ -363,45 +367,45 @@ export default function TeamPage() {
             })}
             {isAdmin && (
               <div className="flex items-center justify-end gap-2 pt-2">
-                {quotaError && <p className="text-[#cf222e] text-[12px] mr-auto">{quotaError}</p>}
+                {quotaError && <p className="text-red-fg text-[12px] mr-auto">{quotaError}</p>}
                 <button
                   onClick={handleSaveQuota}
                   disabled={savingQuota}
-                  className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+                  className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
                 >
                   {savingQuota ? 'Saving…' : 'Save limits'}
                 </button>
               </div>
             )}
-            {!isAdmin && quotaError && <p className="text-[#cf222e] text-[12px]">{quotaError}</p>}
+            {!isAdmin && quotaError && <p className="text-red-fg text-[12px]">{quotaError}</p>}
           </div>
         )}
       </div>
 
       {isAdmin && (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">API Keys</span>
+        <div className="bg-surface border border-border rounded-card overflow-hidden">
+          <div className="px-6 py-4 border-b border-border">
+            <span className="font-display text-[16px] font-semibold">API Keys</span>
           </div>
 
           {newKey && (
-            <div className="m-4 p-3 bg-[#ddf4ff] border border-[#54aeff] rounded-md">
-              <p className="text-[12px] text-[#24292f] mb-2">
+            <div className="m-4 p-3 bg-orange-bg border border-orange-bd rounded-control">
+              <p className="text-[12px] text-tx mb-2">
                 API key created — copy it now, it won&apos;t be shown again:
               </p>
               <div className="flex items-center gap-2">
-                <code className="flex-1 text-[12px] font-mono bg-white border border-[#d0d7de] rounded px-2 py-1 overflow-x-auto">
+                <code className="flex-1 text-[12px] font-mono bg-surface border border-border rounded px-2 py-1 overflow-x-auto">
                   {newKey.key}
                 </code>
                 <button
                   onClick={() => navigator.clipboard?.writeText(newKey.key)}
-                  className="px-3 py-1 bg-[#0969da] hover:bg-[#0860ca] text-white rounded-md text-[12px] font-medium transition-colors"
+                  className="px-3 py-1 bg-accent hover:bg-accent-hover text-white rounded-control text-[12px] font-medium transition-colors"
                 >
                   Copy
                 </button>
                 <button
                   onClick={() => setNewKey(null)}
-                  className="px-3 py-1 border border-[#d0d7de] rounded-md text-[12px] hover:bg-[#f6f8fa] transition-colors"
+                  className="px-3 py-1 border border-border rounded-control text-[12px] hover:bg-surface-2 transition-colors"
                 >
                   Dismiss
                 </button>
@@ -415,29 +419,29 @@ export default function TeamPage() {
               value={apiKeyName}
               onChange={e => setApiKeyName(e.target.value)}
               placeholder="Key name (e.g. CI pipeline)"
-              className="flex-1 border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]"
+              className="flex-1 border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
             />
             <button
               onClick={handleCreateKey}
               disabled={creatingKey}
-              className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+              className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
             >
               {creatingKey ? 'Generating…' : 'Generate key'}
             </button>
           </div>
-          {apiKeyError && <p className="px-4 pb-3 text-[#cf222e] text-[12px]">{apiKeyError}</p>}
+          {apiKeyError && <p className="px-4 pb-3 text-red-fg text-[12px]">{apiKeyError}</p>}
 
           {apiKeys.length === 0 ? (
-            <div className="p-8 text-center text-[13px] text-[#57606a]">No API keys</div>
+            <div className="p-8 text-center text-[13px] text-tx-3">No API keys</div>
           ) : (
-            <div className="divide-y divide-[#eaeef2] border-t border-[#d0d7de]">
+            <div className="divide-y divide-line border-t border-border">
               {apiKeys.map(k => (
-                <div key={k.id} className="flex items-center justify-between px-4 py-3 hover:bg-[#f6f8fa]">
+                <div key={k.id} className="flex items-center justify-between px-4 py-3 hover:bg-surface-2">
                   <div className="min-w-0">
-                    <p className="text-[13px] font-mono text-[#24292f] truncate">
-                      {k.name} {k.revoked && <span className="text-[10px] uppercase tracking-wide text-[#cf222e] ml-1">Revoked</span>}
+                    <p className="text-[13px] font-mono text-tx truncate">
+                      {k.name} {k.revoked && <span className="text-[10px] uppercase tracking-wide text-red-fg ml-1">Revoked</span>}
                     </p>
-                    <p className="text-[11px] text-[#8c959f]">
+                    <p className="text-[11px] text-tx-4">
                       Created {new Date(k.createdAt).toLocaleDateString()}
                       {k.lastUsedAt ? ` · Last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : ' · Never used'}
                     </p>
@@ -445,7 +449,7 @@ export default function TeamPage() {
                   {!k.revoked && (
                     <button
                       onClick={() => handleRevokeKey(k.id)}
-                      className="text-[11px] text-[#cf222e] hover:underline flex-shrink-0"
+                      className="text-[11px] text-red-fg hover:underline flex-shrink-0"
                     >
                       Revoke
                     </button>
@@ -458,33 +462,33 @@ export default function TeamPage() {
       )}
 
       {isAdmin && (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de] flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">AI Provider</span>
+        <div className="bg-surface border border-border rounded-card overflow-hidden">
+          <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+            <span className="font-display text-[16px] font-semibold">AI Provider</span>
             {aiProvider && (
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${aiProvider.isOverride ? 'bg-[#ddf4ff] text-[#0969da]' : 'bg-[#f6f8fa] text-[#57606a] border border-[#d0d7de]'}`}>
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${aiProvider.isOverride ? 'bg-orange-bg text-accent' : 'bg-surface-2 text-tx-3 border border-border'}`}>
                 {aiProvider.isOverride ? 'Custom for this team' : 'Using platform default'}
               </span>
             )}
           </div>
           {!aiProvider ? (
-            <div className="p-8 text-center text-[13px] text-[#57606a]">
+            <div className="p-8 text-center text-[13px] text-tx-3">
               {aiProviderError || 'Loading…'}
             </div>
           ) : (
             <div className="p-4 space-y-3">
-              <p className="text-[11px] text-[#8c959f]">
+              <p className="text-[11px] text-tx-4">
                 Choose which AI provider generates scripts and insights for this team. Fallbacks are tried in order if the primary provider is rate-limited or unreachable. Leave unset to use the platform default.
               </p>
               <div className="flex items-center justify-between gap-4">
-                <span className="text-[12px] text-[#24292f]">Primary provider</span>
+                <span className="text-[12px] text-tx">Primary provider</span>
                 <select
                   value={aiProviderDraft.provider}
                   onChange={e => {
                     const provider = e.target.value as AiProviderName;
                     setAiProviderDraft(d => ({ provider, fallbacks: d.fallbacks.filter(f => f !== provider) }));
                   }}
-                  className="border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+                  className="border border-border rounded-control px-2 py-1 text-[12px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
                 >
                   {AI_PROVIDER_NAMES.map(p => (
                     <option key={p} value={p}>
@@ -494,10 +498,10 @@ export default function TeamPage() {
                 </select>
               </div>
               <div>
-                <span className="text-[12px] text-[#24292f]">Fallback order</span>
+                <span className="text-[12px] text-tx">Fallback order</span>
                 <div className="flex flex-col gap-1 mt-1">
                   {AI_PROVIDER_NAMES.filter(p => p !== aiProviderDraft.provider).map(p => (
-                    <label key={p} className="flex items-center gap-2 text-[12px] text-[#24292f]">
+                    <label key={p} className="flex items-center gap-2 text-[12px] text-tx">
                       <input
                         type="checkbox"
                         checked={aiProviderDraft.fallbacks.includes(p)}
@@ -509,12 +513,12 @@ export default function TeamPage() {
                 </div>
               </div>
               <div className="flex items-center justify-end gap-2 pt-1">
-                {aiProviderError && <p className="text-[#cf222e] text-[12px] mr-auto">{aiProviderError}</p>}
+                {aiProviderError && <p className="text-red-fg text-[12px] mr-auto">{aiProviderError}</p>}
                 {aiProvider.isOverride && (
                   <button
                     onClick={handleRevertAiProvider}
                     disabled={savingAiProvider}
-                    className="px-4 py-1.5 border border-[#d0d7de] hover:bg-[#f6f8fa] text-[#24292f] rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+                    className="px-4 py-1.5 border border-border hover:bg-surface-2 text-tx rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
                   >
                     Revert to platform default
                   </button>
@@ -522,7 +526,7 @@ export default function TeamPage() {
                 <button
                   onClick={handleSaveAiProvider}
                   disabled={savingAiProvider}
-                  className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+                  className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
                 >
                   {savingAiProvider ? 'Saving…' : 'Save'}
                 </button>
@@ -533,24 +537,24 @@ export default function TeamPage() {
       )}
 
       {isAdmin && (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Audit Log</span>
+        <div className="bg-surface border border-border rounded-card overflow-hidden">
+          <div className="px-6 py-4 border-b border-border">
+            <span className="font-display text-[16px] font-semibold">Audit Log</span>
           </div>
-          {auditError && <p className="px-4 pt-3 text-[#cf222e] text-[12px]">{auditError}</p>}
+          {auditError && <p className="px-4 pt-3 text-red-fg text-[12px]">{auditError}</p>}
           {auditLog.length === 0 ? (
-            <div className="p-8 text-center text-[13px] text-[#57606a]">No audit log entries</div>
+            <div className="p-8 text-center text-[13px] text-tx-3">No audit log entries</div>
           ) : (
-            <div className="divide-y divide-[#eaeef2]">
+            <div className="divide-y divide-line">
               {auditLog.map(entry => (
-                <div key={entry.id} className="flex items-center justify-between px-4 py-2 hover:bg-[#f6f8fa]">
+                <div key={entry.id} className="flex items-center justify-between px-4 py-2 hover:bg-surface-2">
                   <div className="min-w-0">
-                    <p className="text-[12px] font-mono text-[#24292f] truncate">
-                      {entry.action} <span className="text-[#8c959f]">{entry.resourceType}</span> {entry.resourceId.slice(0, 8)}
+                    <p className="text-[12px] font-mono text-tx truncate">
+                      {entry.action} <span className="text-tx-4">{entry.resourceType}</span> {entry.resourceId.slice(0, 8)}
                     </p>
-                    <p className="text-[11px] text-[#8c959f]">{entry.userEmail ?? 'unknown user'}</p>
+                    <p className="text-[11px] text-tx-4">{entry.userEmail ?? 'unknown user'}</p>
                   </div>
-                  <span className="text-[11px] font-mono text-[#57606a] flex-shrink-0">
+                  <span className="text-[11px] font-mono text-tx-3 flex-shrink-0">
                     {new Date(entry.createdAt).toLocaleString()}
                   </span>
                 </div>
@@ -561,29 +565,30 @@ export default function TeamPage() {
       )}
 
       {isAdmin && (
-        <div className="bg-white border border-[#cf222e]/40 rounded-md overflow-hidden">
-          <div className="px-4 py-2 bg-[#fff0f0] border-b border-[#cf222e]/40">
-            <span className="text-[11px] font-semibold text-[#cf222e] uppercase tracking-wide">Danger Zone</span>
+        <div className="bg-surface border border-red-fg/30 rounded-card overflow-hidden">
+          <div className="px-4 py-2 bg-red-bg border-b border-red-fg/30">
+            <span className="text-[11px] font-semibold text-red-fg uppercase tracking-wide">Danger Zone</span>
           </div>
           <div className="p-4 flex items-center justify-between gap-4">
             <div>
-              <p className="text-[13px] text-[#24292f] font-medium">Erase all team data</p>
-              <p className="text-[11px] text-[#8c959f]">
+              <p className="text-[13px] text-tx font-medium">Erase all team data</p>
+              <p className="text-[11px] text-tx-4">
                 Permanently deletes all test results, live metrics, scripts, schedules, presets, webhooks, log sources, and audit log entries for this team. This cannot be undone.
               </p>
             </div>
             <button
               onClick={handleEraseData}
               disabled={erasing}
-              className="px-4 py-1.5 bg-[#cf222e] hover:bg-[#a40e26] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors flex-shrink-0"
+              className="px-4 py-1.5 bg-red-fg hover:bg-red-badge-fg text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors flex-shrink-0"
             >
               {erasing ? 'Erasing…' : eraseConfirming ? 'Click again to confirm' : 'Erase all data'}
             </button>
           </div>
-          {eraseError && <p className="px-4 pb-3 text-[#cf222e] text-[12px]">{eraseError}</p>}
-          {eraseResult && <p className="px-4 pb-3 text-[#1f883d] text-[12px]">{eraseResult}</p>}
+          {eraseError && <p className="px-4 pb-3 text-red-fg text-[12px]">{eraseError}</p>}
+          {eraseResult && <p className="px-4 pb-3 text-green-fg-2 text-[12px]">{eraseResult}</p>}
         </div>
       )}
+      </div>
     </div>
   );
 }

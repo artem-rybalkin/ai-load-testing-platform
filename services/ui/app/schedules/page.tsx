@@ -94,169 +94,170 @@ export default function SchedulesPage() {
     await load();
   };
 
-  const inputCls = "w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]";
-  const labelCls = "block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1";
+  const inputCls = "w-full bg-bg border border-border rounded-control px-3.5 py-2 text-[13px] text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5";
+  const labelCls = "font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5 block";
 
   return (
-    <div className="p-4 lg:p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-[15px] font-semibold text-[#24292f]">Scheduled Tests</h1>
+    <div>
+      <div className="px-4 md:px-9 pt-7.5 flex items-start justify-between flex-wrap gap-3.5">
+        <div>
+          <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Automation</div>
+          <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Schedules</h1>
+        </div>
         <button
           onClick={() => setShowForm(v => !v)}
-          className={`px-3 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${
-            showForm
-              ? 'border-[#d0d7de] bg-white text-[#24292f] hover:bg-[#eaeef2]'
-              : 'bg-[#1f883d] hover:bg-[#1a7f37] text-white border-transparent'
+          className={`flex items-center gap-1.5 rounded-control px-4 py-2.75 text-[13.5px] font-bold transition-colors ${
+            showForm ? 'border border-border bg-surface text-tx-2' : 'bg-accent hover:bg-accent-hover text-white'
           }`}
         >
           {showForm ? 'Cancel' : '+ New schedule'}
         </button>
       </div>
 
-      {showForm && (
-        <div className="bg-white border border-[#d0d7de] rounded-md mb-4 overflow-hidden">
-          <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">New Schedule</span>
-          </div>
-          <div className="p-4 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Name</label>
-                <input type="text" value={form.name}
-                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder="Hourly smoke test" className={inputCls} />
+      <div className="px-4 md:px-9 py-6 flex flex-col gap-4">
+        {showForm && (
+          <div className="bg-surface border border-border rounded-card overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <span className="font-display text-[16px] font-semibold">New Schedule</span>
+            </div>
+            <div className="p-6 space-y-3.5">
+              <div className="grid grid-cols-2 gap-3.5">
+                <div>
+                  <label className={labelCls}>Name</label>
+                  <input type="text" value={form.name}
+                    onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="Hourly smoke test" className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Cron expression</label>
+                  <input type="text" value={form.cron}
+                    onChange={e => setForm(f => ({ ...f, cron: e.target.value }))}
+                    placeholder="0 * * * *" className={`${inputCls} font-mono`} />
+                  {cronPreview && <p className="text-[11px] text-green-fg-2 font-mono mt-1">{cronPreview}</p>}
+                  {/* AI-5: natural-language cron assistant */}
+                  <div className="flex gap-1.5 mt-1.5">
+                    <input
+                      type="text" value={cronPhrase}
+                      onChange={e => setCronPhrase(e.target.value)}
+                      onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); handleConvertCron(); } }}
+                      placeholder="every weekday at 9am…"
+                      className="flex-1 bg-bg border border-border rounded-control px-2.5 py-1.5 text-[12px] text-tx placeholder:text-tx-5 focus:outline-none focus:border-ink-bd"
+                    />
+                    <button type="button" onClick={handleConvertCron} disabled={cronConverting || !cronPhrase}
+                      className="px-2.5 py-1.5 text-[11px] font-mono rounded-control border border-border text-accent hover:bg-orange-bg disabled:opacity-50">
+                      {cronConverting ? '⏳' : '✨ Convert'}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div>
-                <label className={labelCls}>Cron expression</label>
-                <input type="text" value={form.cron}
-                  onChange={e => setForm(f => ({ ...f, cron: e.target.value }))}
-                  placeholder="0 * * * *" className={`${inputCls} font-mono`} />
-                {cronPreview && <p className="text-[11px] text-[#1f883d] font-mono mt-1">{cronPreview}</p>}
-                {/* AI-5: natural-language cron assistant */}
-                <div className="flex gap-1 mt-1">
-                  <input
-                    type="text" value={cronPhrase}
-                    onChange={e => setCronPhrase(e.target.value)}
-                    onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); handleConvertCron(); } }}
-                    placeholder="every weekday at 9am…"
-                    className="flex-1 border border-[#d0d7de] rounded-md px-2 py-1 text-[12px] text-[#24292f] placeholder-[#8c959f] focus:outline-none focus:border-[#0969da]"
-                  />
-                  <button type="button" onClick={handleConvertCron} disabled={cronConverting || !cronPhrase}
-                    className="px-2 py-1 text-[11px] font-mono rounded-md border border-[#d0d7de] text-[#0969da] hover:bg-[#ddf4ff] disabled:opacity-50">
-                    {cronConverting ? '⏳' : '✨ Convert'}
+                <label className={labelCls}>Target URL</label>
+                <input type="url" value={form.target_url}
+                  onChange={e => setForm(f => ({ ...f, target_url: e.target.value }))}
+                  placeholder="https://example.com" className={inputCls} />
+              </div>
+              <div className="grid grid-cols-2 gap-3.5">
+                <div>
+                  <label className={labelCls}>Test type</label>
+                  <select value={form.type}
+                    onChange={e => setForm(f => ({ ...f, type: e.target.value as 'backend' | 'client-side' }))}
+                    className={inputCls}>
+                    <option value="backend">Backend / API</option>
+                    <option value="client-side">Client-side / Browser</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Duration</label>
+                  <select value={form.duration}
+                    onChange={e => setForm(f => ({ ...f, duration: e.target.value }))}
+                    className={inputCls}>
+                    {['30s', '1m', '2m', '5m', '10m'].map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+              </div>
+              {form.type === 'backend' ? (
+                <div>
+                  <label className={labelCls}>Virtual users</label>
+                  <input type="number" min={1} max={100} value={form.vus}
+                    onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
+                    className={inputCls} />
+                </div>
+              ) : (
+                <div>
+                  <label className={labelCls}>Sessions</label>
+                  <input type="number" min={1} max={10} value={form.sessions}
+                    onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))}
+                    className={inputCls} />
+                </div>
+              )}
+              <div>
+                <label className={labelCls}>Description (optional)</label>
+                <input type="text" value={form.description}
+                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                  placeholder="What does this schedule test?" className={inputCls} />
+              </div>
+              {error && <p className="text-red-fg text-[12.5px]">{error}</p>}
+            </div>
+            <div className="px-6 py-4 border-t border-border">
+              <button onClick={handleCreate} disabled={saving}
+                className="bg-accent hover:bg-accent-hover text-white rounded-control px-4 py-2 text-[13px] font-bold disabled:opacity-50 transition-colors">
+                {saving ? 'Saving…' : 'Create schedule'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {error && !showForm && (
+          <div className="bg-red-bg border border-red-fg/30 rounded-control px-4 py-3 text-[12.5px] text-red-fg">{error}</div>
+        )}
+
+        {loading ? (
+          <div className="bg-surface border border-border rounded-card p-8 text-center text-[13px] text-tx-4">Loading…</div>
+        ) : schedules.length === 0 && !error ? (
+          <div className="bg-surface border border-border rounded-card p-10 text-center text-[13px] text-tx-4">
+            No schedules yet. Create one to run tests automatically.
+          </div>
+        ) : (
+          <div className="bg-surface border border-border rounded-card overflow-hidden overflow-x-auto">
+            <div className="grid grid-cols-[1.6fr_2fr_1.3fr_1fr_auto] gap-3.5 min-w-[700px] px-6 py-3 bg-surface-2 border-b border-border font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">
+              <span>Name</span><span>Target</span><span>Cron</span><span>Last run</span><span className="text-right">Actions</span>
+            </div>
+            {schedules.map(s => (
+              <div key={s.id} className="grid grid-cols-[1.6fr_2fr_1.3fr_1fr_auto] gap-3.5 min-w-[700px] items-center px-6 py-3.5 border-b border-border-3 last:border-b-0 hover:bg-hover">
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-display font-semibold text-[14px]">{s.name}</span>
+                  </div>
+                  <span className={`inline-block mt-1 px-2 rounded-chip text-[10px] font-mono font-medium ${s.enabled ? 'bg-green-bg text-green-fg-2' : 'bg-surface-2 text-tx-3'}`}>
+                    {s.enabled ? 'active' : 'paused'}
+                  </span>
+                  <span className="inline-block mt-1 ml-1.5 px-2 rounded-chip text-[10px] font-mono text-accent bg-orange-bg border border-orange-bd">{s.type}</span>
+                </div>
+                <p className="font-mono text-[12.5px] text-tx-3 truncate">{s.target_url}</p>
+                <div>
+                  <code className="text-[11px] bg-bg border border-border px-2 py-0.5 rounded-chip font-mono text-tx-3">{s.cron}</code>
+                </div>
+                <span className="text-[12px] font-mono text-tx-4">{s.last_run_at ? new Date(s.last_run_at).toLocaleString() : '—'}</span>
+                <div className="flex items-center gap-1.5 justify-end">
+                  <button onClick={() => handleRun(s.id)}
+                    className="px-2.5 py-1 text-[11px] border border-border text-tx-2 rounded-chip hover:bg-hover transition-colors">
+                    Run now
+                  </button>
+                  <button onClick={() => handleToggle(s)}
+                    className={`w-9 h-5 rounded-full relative flex-shrink-0 transition-colors ${s.enabled ? 'bg-accent' : 'bg-line'}`}
+                    title={s.enabled ? 'Pause' : 'Enable'}>
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${s.enabled ? 'right-0.5' : 'left-0.5'}`} />
+                  </button>
+                  <button onClick={() => handleDelete(s.id)}
+                    className="px-2.5 py-1 text-[11px] border border-red-fg/30 text-red-fg rounded-chip hover:bg-red-bg transition-colors">
+                    Delete
                   </button>
                 </div>
               </div>
-            </div>
-            <div>
-              <label className={labelCls}>Target URL</label>
-              <input type="url" value={form.target_url}
-                onChange={e => setForm(f => ({ ...f, target_url: e.target.value }))}
-                placeholder="https://example.com" className={inputCls} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Test type</label>
-                <select value={form.type}
-                  onChange={e => setForm(f => ({ ...f, type: e.target.value as 'backend' | 'client-side' }))}
-                  className={inputCls}>
-                  <option value="backend">Backend / API</option>
-                  <option value="client-side">Client-side / Browser</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelCls}>Duration</label>
-                <select value={form.duration}
-                  onChange={e => setForm(f => ({ ...f, duration: e.target.value }))}
-                  className={inputCls}>
-                  {['30s', '1m', '2m', '5m', '10m'].map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-              </div>
-            </div>
-            {form.type === 'backend' ? (
-              <div>
-                <label className={labelCls}>Virtual users</label>
-                <input type="number" min={1} max={100} value={form.vus}
-                  onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
-                  className={inputCls} />
-              </div>
-            ) : (
-              <div>
-                <label className={labelCls}>Sessions</label>
-                <input type="number" min={1} max={10} value={form.sessions}
-                  onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))}
-                  className={inputCls} />
-              </div>
-            )}
-            <div>
-              <label className={labelCls}>Description (optional)</label>
-              <input type="text" value={form.description}
-                onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="What does this schedule test?" className={inputCls} />
-            </div>
-            {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+            ))}
           </div>
-          <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de]">
-            <button onClick={handleCreate} disabled={saving}
-              className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors">
-              {saving ? 'Saving…' : 'Create schedule'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {error && !showForm && (
-        <div className="bg-[#ffebe9] border border-[#f4c7c3] rounded-md px-4 py-3 mb-4 text-[12px] text-[#cf222e]">{error}</div>
-      )}
-
-      {loading ? (
-        <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">Loading…</div>
-      ) : schedules.length === 0 && !error ? (
-        <div className="bg-white border border-[#d0d7de] rounded-md p-10 text-center text-[13px] text-[#57606a]">
-          No schedules yet. Create one to run tests automatically.
-        </div>
-      ) : (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
-          {schedules.map(s => (
-            <div key={s.id} className="flex items-center gap-4 px-4 py-3 hover:bg-[#f6f8fa]">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="font-medium text-[#24292f] text-[13px]">{s.name}</span>
-                  <span className={`px-1.5 rounded text-[10px] font-mono font-medium ${s.enabled ? 'bg-[#dafbe1] text-[#1a7f37]' : 'bg-[#f6f8fa] text-[#57606a]'}`}>
-                    {s.enabled ? 'active' : 'paused'}
-                  </span>
-                  <span className="px-1.5 rounded text-[10px] font-mono bg-[#ddf4ff] text-[#0969da]">{s.type}</span>
-                </div>
-                <p className="text-[11px] font-mono text-[#57606a] truncate">{s.target_url}</p>
-                <div className="flex items-center gap-3 mt-0.5">
-                  <code className="text-[10px] bg-[#f6f8fa] border border-[#d0d7de] px-1.5 py-0.5 rounded font-mono text-[#57606a]">{s.cron}</code>
-                  {s.last_run_at && (
-                    <span className="text-[10px] font-mono text-[#8c959f]">Last run: {new Date(s.last_run_at).toLocaleString()}</span>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button onClick={() => handleRun(s.id)}
-                  className="px-2.5 py-1 text-[11px] border border-[#d0d7de] text-[#24292f] rounded-md hover:bg-[#eaeef2] transition-colors">
-                  Run now
-                </button>
-                <button onClick={() => handleToggle(s)}
-                  className={`px-2.5 py-1 text-[11px] border rounded-md transition-colors ${
-                    s.enabled
-                      ? 'border-[#e3b341] text-[#9a6700] hover:bg-[#fff8c5]'
-                      : 'border-[#2da44e] text-[#1f883d] hover:bg-[#dafbe1]'
-                  }`}>
-                  {s.enabled ? 'Pause' : 'Enable'}
-                </button>
-                <button onClick={() => handleDelete(s.id)}
-                  className="px-2.5 py-1 text-[11px] border border-[#f4c7c3] text-[#cf222e] rounded-md hover:bg-[#ffebe9] transition-colors">
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

@@ -29,7 +29,7 @@ const mockCreateTest = vi.mocked(createTest);
 const mockGetResult = vi.mocked(getResult);
 
 const sendMessage = async (text: string) => {
-  const input = screen.getByPlaceholderText(/load test/i);
+  const input = screen.getByPlaceholderText(/describe a test/i);
   fireEvent.change(input, { target: { value: text } });
   fireEvent.click(screen.getByRole('button', { name: /send/i }));
 };
@@ -43,7 +43,7 @@ afterEach(() => cleanup());
 describe('ChatPage', () => {
   it('renders the message input and a send button', () => {
     render(<ChatPage />);
-    expect(screen.getByPlaceholderText(/load test/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/describe a test/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send/i })).toBeInTheDocument();
   });
 
@@ -76,7 +76,7 @@ describe('ChatPage', () => {
     expect(screen.getByText('backend')).toBeInTheDocument();
     expect(screen.getByText('Load test the API')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /run test/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /keep chatting/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit settings/i })).toBeInTheDocument();
   });
 
   it('dismisses the preview card when Keep chatting is clicked', async () => {
@@ -91,9 +91,9 @@ describe('ChatPage', () => {
     });
     render(<ChatPage />);
     await sendMessage('Load test https://api.example.com');
-    await waitFor(() => expect(screen.getByRole('button', { name: /keep chatting/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /edit settings/i })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /keep chatting/i }));
+    fireEvent.click(screen.getByRole('button', { name: /edit settings/i }));
     await waitFor(() => expect(screen.queryByRole('button', { name: /run test/i })).not.toBeInTheDocument());
   });
 

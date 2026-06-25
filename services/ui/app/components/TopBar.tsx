@@ -1,31 +1,28 @@
-import { Link, useLocation } from 'react-router-dom';
+import { useDarkMode } from '@/lib/useDarkMode';
 
-const LABELS: Record<string, string> = {
-  '/':           'New Test',
-  '/results':    'Results',
-  '/schedules':  'Schedules',
-  '/presets':  'Presets',
-  '/webhooks':   'Webhooks',
-};
+interface TopBarProps {
+  onMenuClick: () => void;
+}
 
-export default function TopBar() {
-  const { pathname } = useLocation();
-
-  // derive a label: exact match first, then starts-with for dynamic routes
-  const label =
-    LABELS[pathname] ??
-    Object.entries(LABELS).find(([k]) => k !== '/' && pathname.startsWith(k))?.[1] ??
-    'AI Load Testing';
+export default function TopBar({ onMenuClick }: TopBarProps) {
+  const { dark, toggle: toggleDark } = useDarkMode();
 
   return (
-    <header className="md:hidden sticky top-0 z-40 bg-white border-b border-[#d0d7de] flex items-center justify-between h-10 px-3">
-      <span className="text-[13px] font-semibold text-[#24292f]">⚡ {label}</span>
-      <Link
-        to="/"
-        className="text-[12px] font-medium text-[#0969da] hover:underline"
+    <header className="md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-sidebar-bg border-b border-sidebar-border">
+      <div className="flex items-center gap-3">
+        <button onClick={onMenuClick} className="flex text-sidebar-bright cursor-pointer">
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 7h14M4 11h14M4 15h14" /></svg>
+        </button>
+        <span className="font-display text-[14px] font-bold text-white tracking-[-0.01em] whitespace-nowrap">ARTEM RYBALKIN<span className="text-accent">.</span></span>
+      </div>
+      <button
+        onClick={toggleDark}
+        className="flex items-center gap-1.5 px-3 py-2 rounded-[9px] border border-sidebar-border text-sidebar-bright text-[12.5px]"
       >
-        + New
-      </Link>
+        {dark
+          ? <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M16 11.5A6.5 6.5 0 1 1 8.5 4a5 5 0 0 0 7.5 7.5Z" strokeLinejoin="round" /></svg>
+          : <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7"><circle cx="10" cy="10" r="3.4" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.6 4.6l1.4 1.4M14 14l1.5 1.5M15.4 4.6 14 6M6 14l-1.4 1.5" strokeLinecap="round" /></svg>}
+      </button>
     </header>
   );
 }
