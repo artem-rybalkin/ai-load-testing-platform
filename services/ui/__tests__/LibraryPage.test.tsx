@@ -34,10 +34,10 @@ describe('LibraryPage', () => {
     expect(screen.queryByText(new RegExp(first.script.split('\n')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).not.toBeInTheDocument();
   });
 
-  it('navigates to the home page with the template id when "Use this script" is clicked', () => {
+  it('navigates to the home page with the template id when "Use template" is clicked', () => {
     render(<LibraryPage />);
     const first = SCRIPT_TEMPLATES[0];
-    fireEvent.click(screen.getAllByRole('button', { name: /use this script/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /use template/i })[0]);
     expect(mockNavigate).toHaveBeenCalledWith(`/?useScriptTemplate=${first.id}`);
   });
 });

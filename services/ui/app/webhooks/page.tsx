@@ -89,11 +89,11 @@ function WebhooksSection() {
 
   return (
     <section>
-      <h2 className="text-[13px] font-semibold text-[#24292f] mb-3">Webhooks</h2>
+      <h2 className="font-display text-[17px] font-semibold mb-3.5">Webhooks</h2>
 
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden mb-4">
-        <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Add Webhook</span>
+      <div className="bg-surface border border-border rounded-control overflow-hidden mb-4">
+        <div className="px-4 py-2 bg-surface-2 border-b border-border">
+          <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">Add Webhook</span>
         </div>
         <div className="p-4 space-y-3">
           <input
@@ -101,25 +101,25 @@ function WebhooksSection() {
             value={url}
             onChange={e => setUrl(e.target.value)}
             placeholder="https://your-endpoint.example.com/webhook"
-            className="w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]"
+            className="w-full border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
           />
           <div className="flex items-center gap-4 text-[13px]">
-            <span className="text-[#57606a]">Trigger on:</span>
+            <span className="text-tx-3">Trigger on:</span>
             {['failed', 'degraded'].map(e => (
               <label key={e} className="flex items-center gap-1.5 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={events.includes(e)}
                   onChange={() => toggleEvent(e)}
-                  className="rounded border-[#d0d7de] text-[#0969da] focus:ring-[#0969da]"
+                  className="rounded border-border text-accent focus:ring-accent"
                 />
-                <span className={`font-mono text-[12px] ${e === 'failed' ? 'text-[#cf222e]' : 'text-[#9a6700]'}`}>{e}</span>
+                <span className={`font-mono text-[12px] ${e === 'failed' ? 'text-red-fg' : 'text-amber-fg'}`}>{e}</span>
               </label>
             ))}
           </div>
           {/* Format selector */}
           <div>
-            <span className="text-[#57606a] text-[13px] mr-2">Format:</span>
+            <span className="text-tx-3 text-[13px] mr-2">Format:</span>
             <div className="flex flex-wrap gap-2 mt-1">
               {WEBHOOK_FORMATS.map(f => (
                 <label key={f.value} className="flex items-center gap-1.5 cursor-pointer" title={f.hint}>
@@ -129,32 +129,32 @@ function WebhooksSection() {
                     value={f.value}
                     checked={format === f.value}
                     onChange={() => setFormat(f.value)}
-                    className="text-[#0969da]"
+                    className="text-accent"
                   />
                   <span className="text-[13px] font-mono">{f.label}</span>
                 </label>
               ))}
             </div>
             {format !== 'generic' && (
-              <p className="text-[11px] text-[#57606a] mt-1">
+              <p className="text-[11px] text-tx-3 mt-1">
                 {WEBHOOK_FORMATS.find(f => f.value === format)?.hint}
               </p>
             )}
           </div>
 
-          {checkingNoise && <p className="text-[11px] text-[#57606a] font-mono">✨ Checking noise level…</p>}
+          {checkingNoise && <p className="text-[11px] text-tx-3 font-mono">✨ Checking noise level…</p>}
           {noiseWarning && (
-            <p className={`text-[12px] font-mono ${noiseWarning.level === 'noisy' ? 'text-[#9a6700]' : 'text-[#57606a]'}`}>
+            <p className={`text-[12px] font-mono ${noiseWarning.level === 'noisy' ? 'text-amber-fg' : 'text-tx-3'}`}>
               {noiseWarning.level === 'noisy' ? '⚠ ' : 'ℹ '}{noiseWarning.message}
             </p>
           )}
-          {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+          {error && <p className="text-red-fg text-[12px]">{error}</p>}
         </div>
-        <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de]">
+        <div className="px-4 py-3 bg-surface-2 border-t border-border">
           <button
             onClick={handleAdd}
             disabled={saving}
-            className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+            className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
           >
             {saving ? 'Saving…' : 'Add webhook'}
           </button>
@@ -162,22 +162,22 @@ function WebhooksSection() {
       </div>
 
       {webhooks.length === 0 ? (
-        <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">
+        <div className="bg-surface border border-border rounded-control p-8 text-center text-[13px] text-tx-3">
           No webhooks configured
         </div>
       ) : (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
+        <div className="bg-surface border border-border rounded-control overflow-hidden divide-y divide-line">
           {webhooks.map(w => (
-            <div key={w.id} className="flex items-center justify-between px-4 py-3 hover:bg-[#f6f8fa]">
+            <div key={w.id} className="flex items-center justify-between px-4 py-3 hover:bg-surface-2">
               <div className="min-w-0">
-                <p className="text-[13px] font-mono text-[#24292f] truncate max-w-sm">{w.url}</p>
-                <p className="text-[10px] font-mono text-[#8c959f] mt-0.5">
+                <p className="text-[13px] font-mono text-tx truncate max-w-sm">{w.url}</p>
+                <p className="text-[10px] font-mono text-tx-4 mt-0.5">
                   Events: {w.events.join(', ')} · Added {new Date(w.created_at).toLocaleDateString()}
                 </p>
               </div>
               <button
                 onClick={() => deleteWebhook(w.id).then(load)}
-                className="text-[11px] text-[#cf222e] hover:underline ml-4 flex-shrink-0"
+                className="text-[11px] text-red-fg hover:underline ml-4 flex-shrink-0"
               >
                 Remove
               </button>
@@ -263,15 +263,15 @@ function LogSourcesSection() {
 
   return (
     <section>
-      <h2 className="text-[13px] font-semibold text-[#24292f] mb-1">Log Sources</h2>
-      <p className="text-[12px] text-[#57606a] mb-3">
+      <h2 className="font-display text-[17px] font-semibold mb-1.5">Log Sources</h2>
+      <p className="text-[12.5px] text-tx-3 mb-3.5">
         Configure deep-link URL templates so each test result shows a &ldquo;View logs&rdquo; button
         pre-filtered to the test&rsquo;s time window.
       </p>
 
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden mb-4">
-        <div className="px-4 py-2 bg-[#f6f8fa] border-b border-[#d0d7de]">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
+      <div className="bg-surface border border-border rounded-control overflow-hidden mb-4">
+        <div className="px-4 py-2 bg-surface-2 border-b border-border">
+          <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">
             {editingId ? 'Edit Log Source' : 'Add Log Source'}
           </span>
         </div>
@@ -281,7 +281,7 @@ function LogSourcesSection() {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Production Grafana"
-              className="flex-1 border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]"
+              className="flex-1 border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
             />
             <select
               value={platform}
@@ -289,7 +289,7 @@ function LogSourcesSection() {
                 setPlatform(e.target.value);
                 setUrlTemplate('');
               }}
-              className="border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da]"
+              className="border border-border rounded-control px-3 py-1.5 text-[13px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
             >
               {PLATFORMS.map(p => <option key={p}>{p}</option>)}
             </select>
@@ -301,21 +301,21 @@ function LogSourcesSection() {
               onChange={e => setUrlTemplate(e.target.value)}
               placeholder={PLATFORM_PLACEHOLDER[platform] ?? ''}
               rows={2}
-              className="w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[12px] font-mono bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f] resize-none"
+              className="w-full border border-border rounded-control px-3 py-1.5 text-[12px] font-mono bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5 resize-none"
             />
             <button
               type="button"
               onClick={() => setShowVars(v => !v)}
-              className="mt-1 text-[11px] text-[#0969da] hover:underline"
+              className="mt-1 text-[11px] text-accent hover:underline"
             >
               {showVars ? '▲ Hide' : '▼ Available template variables'}
             </button>
             {showVars && (
-              <div className="mt-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md px-3 py-2 space-y-1">
+              <div className="mt-2 bg-surface-2 border border-border rounded-control px-3 py-2 space-y-1">
                 {TEMPLATE_VARS.map(([v, desc]) => (
                   <div key={v} className="flex gap-2 text-[11px]">
-                    <code className="text-[#0969da] font-mono w-44 flex-shrink-0">{v}</code>
-                    <span className="text-[#57606a]">{desc}</span>
+                    <code className="text-accent font-mono w-44 flex-shrink-0">{v}</code>
+                    <span className="text-tx-3">{desc}</span>
                   </div>
                 ))}
               </div>
@@ -323,41 +323,41 @@ function LogSourcesSection() {
           </div>
 
           {/* AI Analysis: optional metrics API endpoint */}
-          <div className="pt-2 border-t border-[#eaeef2]">
-            <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
-              Metrics API endpoint <span className="text-[#8c959f] normal-case font-normal tracking-normal">(optional — fetched during AI analysis)</span>
+          <div className="pt-2 border-t border-line">
+            <label className="block text-[11px] font-semibold text-tx-3 uppercase tracking-wide mb-1.5">
+              Metrics API endpoint <span className="text-tx-4 normal-case font-normal tracking-normal">(optional — fetched during AI analysis)</span>
             </label>
             <textarea
               rows={2}
               value={metricsEndpointTemplate}
               onChange={e => setMetricsEndpointTemplate(e.target.value)}
               placeholder={`https://grafana.example.com/api/datasources/proxy/1/api/v1/query_range?query=http_requests_total&start={startedAtMs}&end={completedAtMs}`}
-              className="w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[12px] font-mono bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] placeholder-[#8c959f] resize-none"
+              className="w-full border border-border rounded-control px-3 py-1.5 text-[12px] font-mono bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5 resize-none"
             />
-            <p className="text-[11px] text-[#57606a] mt-0.5">
+            <p className="text-[11px] text-tx-3 mt-0.5">
               Returns JSON data included in AI Insights and Diagnose prompts. Supports the same template variables as the dashboard URL above.
             </p>
           </div>
           <div>
-            <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
-              Auth header <span className="text-[#8c959f] normal-case font-normal tracking-normal">(optional — sent as Authorization header)</span>
+            <label className="block text-[11px] font-semibold text-tx-3 uppercase tracking-wide mb-1.5">
+              Auth header <span className="text-tx-4 normal-case font-normal tracking-normal">(optional — sent as Authorization header)</span>
             </label>
             <input
               type="password"
               value={authHeader}
               onChange={e => setAuthHeader(e.target.value)}
               placeholder="Bearer eyJhbGci…  or  Api-Key abc123"
-              className="w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[12px] font-mono bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] placeholder-[#8c959f]"
+              className="w-full border border-border rounded-control px-3 py-1.5 text-[12px] font-mono bg-surface text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
             />
           </div>
 
-          {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+          {error && <p className="text-red-fg text-[12px]">{error}</p>}
         </div>
-        <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] flex items-center gap-2">
+        <div className="px-4 py-3 bg-surface-2 border-t border-border flex items-center gap-2">
           <button
             onClick={handleSubmit}
             disabled={saving}
-            className="px-4 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+            className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
           >
             {saving ? 'Saving…' : editingId ? 'Save changes' : 'Add log source'}
           </button>
@@ -365,7 +365,7 @@ function LogSourcesSection() {
             <button
               onClick={resetForm}
               disabled={saving}
-              className="px-4 py-1.5 border border-[#d0d7de] hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] font-medium disabled:opacity-50 transition-colors"
+              className="px-4 py-1.5 border border-border hover:bg-hover text-tx rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
             >
               Cancel
             </button>
@@ -374,32 +374,32 @@ function LogSourcesSection() {
       </div>
 
       {sources.length === 0 ? (
-        <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">
+        <div className="bg-surface border border-border rounded-control p-8 text-center text-[13px] text-tx-3">
           No log sources configured
         </div>
       ) : (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden divide-y divide-[#eaeef2]">
+        <div className="bg-surface border border-border rounded-control overflow-hidden divide-y divide-line">
           {sources.map(s => (
-            <div key={s.id} className="flex items-start justify-between px-4 py-3 hover:bg-[#f6f8fa]">
+            <div key={s.id} className="flex items-start justify-between px-4 py-3 hover:bg-surface-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="text-[13px] font-medium text-[#24292f]">{s.name}</p>
+                  <p className="text-[13px] font-medium text-tx">{s.name}</p>
                   {s.platform && (
-                    <span className="text-[10px] font-mono bg-[#ddf4ff] text-[#0969da] px-1.5 py-0.5 rounded">{s.platform}</span>
+                    <span className="text-[10px] font-mono bg-orange-bg text-accent px-1.5 py-0.5 rounded-chip">{s.platform}</span>
                   )}
                 </div>
-                <p className="text-[11px] font-mono text-[#8c959f] mt-0.5 truncate max-w-sm">{s.url_template}</p>
+                <p className="text-[11px] font-mono text-tx-4 mt-0.5 truncate max-w-sm">{s.url_template}</p>
               </div>
               <div className="flex items-center gap-3 ml-4 flex-shrink-0">
                 <button
                   onClick={() => startEdit(s)}
-                  className="text-[11px] text-[#0969da] hover:underline"
+                  className="text-[11px] text-accent hover:underline"
                 >
                   Edit
                 </button>
                 <button
                   onClick={() => deleteLogSource(s.id).then(load)}
-                  className="text-[11px] text-[#cf222e] hover:underline"
+                  className="text-[11px] text-red-fg hover:underline"
                 >
                   Remove
                 </button>
@@ -416,10 +416,15 @@ function LogSourcesSection() {
 
 export default function WebhooksPage() {
   return (
-    <div className="p-4 lg:p-6 space-y-8">
-      <h1 className="text-[15px] font-semibold text-[#24292f]">Integrations</h1>
-      <WebhooksSection />
-      <LogSourcesSection />
+    <div>
+      <div className="px-4 md:px-9 pt-7.5">
+        <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Integrations</div>
+        <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Webhooks</h1>
+      </div>
+      <div className="px-4 md:px-9 py-6 space-y-8">
+        <WebhooksSection />
+        <LogSourcesSection />
+      </div>
     </div>
   );
 }

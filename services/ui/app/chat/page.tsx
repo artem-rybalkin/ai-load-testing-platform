@@ -57,6 +57,14 @@ function thresholdRows(thresholds?: ParsedTestIntent['thresholds']): Array<[stri
     .map(([k, v]) => [k, String(v)]);
 }
 
+const SUGGESTIONS = ['Spike test homepage', 'Soak test for 30m', 'Test the login flow'];
+
+const BotIcon = () => (
+  <div className="w-7.5 h-7.5 rounded-[9px] bg-accent flex items-center justify-center flex-shrink-0">
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M11 2 4 11h4l-1 7 8-9h-5l1-7Z" fill="#fff" /></svg>
+  </div>
+);
+
 export default function ChatPage() {
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState('');
@@ -73,8 +81,8 @@ export default function ChatPage() {
 
   const appendEntry = (entry: ChatEntry) => setEntries(prev => [...prev, entry]);
 
-  const handleSend = async () => {
-    const content = input.trim();
+  const handleSend = async (text?: string) => {
+    const content = (text ?? input).trim();
     if (!content || thinking) return;
     setInput('');
     setError(null);
@@ -153,189 +161,183 @@ export default function ChatPage() {
   });
 
   return (
-    <div className="p-4 lg:p-6 flex flex-col h-[calc(100vh-2.5rem)] lg:h-screen max-w-3xl mx-auto">
-      <div className="mb-4">
-        <h1 className="text-[15px] font-semibold text-[#24292f]">Chat</h1>
-        <p className="text-[12px] text-[#57606a] mt-1">
-          Describe the test you want to run, in plain English — I&apos;ll ask follow-up questions if anything&apos;s missing.
-        </p>
+    <div>
+      <div className="px-4 md:px-9 pt-7.5">
+        <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Assistant</div>
+        <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Chat</h1>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-3 pb-3">
-        {entries.map((entry, i) => {
-          if (entry.kind === 'text') {
-            const isUser = entry.role === 'user';
-            return (
-              <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[80%] rounded-md px-3 py-2 text-[13px] ${
-                    isUser ? 'bg-[#0969da] text-white' : 'bg-white border border-[#d0d7de] text-[#24292f]'
-                  }`}
-                >
-                  {entry.content}
-                </div>
-              </div>
-            );
-          }
+      <div className="px-4 md:px-9 py-6 flex flex-col gap-4.5">
+        <div className="max-w-[760px] w-full mx-auto flex flex-col gap-4">
+          <div className="flex gap-3 items-start">
+            <BotIcon />
+            <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] leading-[1.55] text-tx-2">
+              Hi — describe what you&apos;d like to load test and I&apos;ll configure the run for you.
+            </div>
+          </div>
 
-          if (entry.kind === 'redirect') {
-            return (
-              <div key={i} className="flex justify-start">
-                <div className="max-w-[80%] rounded-md px-3 py-2 text-[13px] bg-white border border-[#d0d7de] text-[#24292f] space-y-2">
-                  <p>{entry.reason}</p>
-                  <Link
-                    to="/?type=flow"
-                    className="inline-block px-3 py-1.5 bg-[#0969da] hover:bg-[#0860ca] text-white rounded-md text-[12px] font-medium transition-colors"
-                  >
-                    Open Flow Builder
-                  </Link>
-                </div>
-              </div>
-            );
-          }
-
-          if (entry.kind === 'preview') {
-            if (entry.dismissed) {
-              return (
-                <div key={i} className="flex justify-start">
-                  <div className="max-w-[80%] rounded-md px-3 py-2 text-[13px] bg-white border border-[#d0d7de] text-[#57606a] italic">
-                    Okay, keep going — let me know what to change.
-                  </div>
-                </div>
-              );
-            }
-            if (entry.started) {
-              return (
-                <div key={i} className="flex justify-start">
-                  <div className="max-w-[80%] rounded-md px-3 py-2 text-[13px] bg-white border border-[#d0d7de] text-[#57606a] italic">
-                    ✓ Test started — see status below.
-                  </div>
-                </div>
-              );
-            }
-            return (
-              <div key={i} className="flex justify-start">
-                <div className="max-w-[90%] rounded-md border border-[#d0d7de] bg-white overflow-hidden">
-                  <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa] flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 bg-[#ddf4ff] text-[#0969da] rounded text-[10px] font-mono uppercase">
-                      {entry.config.type}
-                    </span>
-                    <span className="text-[12px] font-mono text-[#24292f] truncate">{entry.config.targetUrl}</span>
-                  </div>
-                  <div className="p-3 text-[12px] space-y-2">
-                    <p className="text-[#24292f]">{entry.config.description}</p>
-                    <div>
-                      <div className="text-[10px] font-semibold text-[#57606a] uppercase tracking-wide mb-1">Options</div>
-                      <div className="space-y-0.5 font-mono text-[11px]">
-                        {optionRows(entry.config.options).map(([k, v]) => (
-                          <div key={k} className="flex justify-between gap-2">
-                            <span className="text-[#57606a]">{k}</span>
-                            <span className="text-[#24292f]">{v}</span>
-                          </div>
-                        ))}
-                      </div>
+          {entries.map((entry, i) => {
+            if (entry.kind === 'text') {
+              const isUser = entry.role === 'user';
+              if (isUser) {
+                return (
+                  <div key={i} className="flex justify-end">
+                    <div className="bg-btn2 text-white rounded-[16px_4px_16px_16px] px-4 py-3.5 text-[14px] leading-[1.55] max-w-[82%]">
+                      {entry.content}
                     </div>
-                    {entry.config.thresholds && thresholdRows(entry.config.thresholds).length > 0 && (
-                      <div>
-                        <div className="text-[10px] font-semibold text-[#57606a] uppercase tracking-wide mb-1">Thresholds</div>
-                        <div className="space-y-0.5 font-mono text-[11px]">
-                          {thresholdRows(entry.config.thresholds).map(([k, v]) => (
-                            <div key={k} className="flex justify-between gap-2">
-                              <span className="text-[#57606a]">{k}</span>
-                              <span className="text-[#24292f]">{v}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
-                  <div className="px-3 py-2 border-t border-[#d0d7de] bg-[#f6f8fa] flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleRunTest(entry, i)}
-                      className="px-3 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[12px] font-medium transition-colors"
-                    >
-                      Run Test
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleKeepChatting(entry)}
-                      className="px-3 py-1.5 bg-white border border-[#d0d7de] hover:bg-[#f6f8fa] text-[#24292f] rounded-md text-[12px] font-medium transition-colors"
-                    >
-                      Keep chatting
-                    </button>
+                );
+              }
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <BotIcon />
+                  <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] leading-[1.55] text-tx-2">
+                    {entry.content}
                   </div>
+                </div>
+              );
+            }
+
+            if (entry.kind === 'redirect') {
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <BotIcon />
+                  <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4.5 py-4 flex-1">
+                    <p className="text-[14px] text-tx-2 mb-3.5">{entry.reason}</p>
+                    <Link to="/?type=flow" className="inline-flex items-center gap-1.5 bg-accent hover:bg-accent-hover text-white rounded-control px-4 py-2.5 text-[13px] font-bold transition-colors">
+                      Open Flow Builder
+                    </Link>
+                  </div>
+                </div>
+              );
+            }
+
+            if (entry.kind === 'preview') {
+              if (entry.dismissed) {
+                return (
+                  <div key={i} className="flex gap-3 items-start">
+                    <BotIcon />
+                    <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-tx-4 italic">
+                      Okay, keep going — let me know what to change.
+                    </div>
+                  </div>
+                );
+              }
+              if (entry.started) {
+                return (
+                  <div key={i} className="flex gap-3 items-start">
+                    <BotIcon />
+                    <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-tx-4 italic">
+                      ✓ Test started — see status below.
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <BotIcon />
+                  <div className="flex-1 bg-surface border border-border rounded-[4px_16px_16px_16px] px-4.5 py-4">
+                    <p className="text-[14px] text-tx-2 mb-1">Got it — here&apos;s the test I&apos;ll run:</p>
+                    <p className="text-[13px] text-tx-3 mb-3.5">{entry.config.description}</p>
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      <span className="font-mono text-[11px] rounded-chip px-2 py-0.5 text-accent bg-orange-bg border border-orange-bd">{entry.config.type}</span>
+                      <span className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{entry.config.targetUrl}</span>
+                      {optionRows(entry.config.options).map(([k, v]) => (
+                        <span key={k} className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{v}</span>
+                      ))}
+                      {thresholdRows(entry.config.thresholds).map(([k, v]) => (
+                        <span key={k} className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{k}: {v}</span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2.5 flex-wrap">
+                      <button type="button" onClick={() => handleRunTest(entry, i)}
+                        className="flex items-center gap-1.5 bg-accent hover:bg-accent-hover text-white rounded-control px-4 py-2.5 text-[13px] font-bold cursor-pointer transition-colors">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="#fff"><path d="M4 3l9 5-9 5z" /></svg>Run test
+                      </button>
+                      <button type="button" onClick={() => handleKeepChatting(entry)}
+                        className="bg-surface border border-border text-tx-2 rounded-control px-4 py-2.5 text-[13px] font-semibold cursor-pointer">
+                        Edit settings
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            // status bubble
+            const isPending = entry.status === 'pending' || entry.status === 'running';
+            const label = entry.status === 'pending' ? 'pending…'
+              : entry.status === 'running' ? 'running…'
+              : entry.status;
+            return (
+              <div key={i} className="flex gap-3 items-start">
+                <BotIcon />
+                <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                    entry.status === 'completed' ? 'bg-green-fg'
+                      : entry.status === 'failed' ? 'bg-red-fg'
+                      : entry.status === 'cancelled' ? 'bg-tx-4'
+                      : 'bg-amber-fg'
+                  }`} />
+                  {isPending ? (
+                    <span className="font-mono text-[12.5px]">Test <span className="text-tx-4">{entry.testId}</span> — {label}</span>
+                  ) : (
+                    <Link to={`/results/${entry.testId}`} className="font-mono text-[12.5px] text-accent hover:underline">
+                      Test {entry.testId} — {label} →
+                    </Link>
+                  )}
                 </div>
               </div>
             );
-          }
+          })}
 
-          // status bubble
-          const isPending = entry.status === 'pending' || entry.status === 'running';
-          const label = entry.status === 'pending' ? 'pending…'
-            : entry.status === 'running' ? 'running…'
-            : entry.status;
-          return (
-            <div key={i} className="flex justify-start">
-              <div className="max-w-[80%] rounded-md px-3 py-2 text-[13px] bg-white border border-[#d0d7de] text-[#24292f] flex items-center gap-2">
-                <span
-                  className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                    entry.status === 'completed' ? 'bg-[#1f883d]'
-                      : entry.status === 'failed' ? 'bg-[#cf222e]'
-                      : entry.status === 'cancelled' ? 'bg-[#57606a]'
-                      : 'bg-[#9a6700]'
-                  }`}
-                />
-                {isPending ? (
-                  <span className="font-mono text-[12px]">
-                    Test <span className="text-[#57606a]">{entry.testId}</span> — {label}
-                  </span>
-                ) : (
-                  <Link to={`/results/${entry.testId}`} className="font-mono text-[12px] text-[#0969da] hover:underline">
-                    Test {entry.testId} — {label} →
-                  </Link>
-                )}
-              </div>
+          {thinking && (
+            <div className="flex gap-3 items-start">
+              <BotIcon />
+              <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-tx-4 italic">thinking…</div>
             </div>
-          );
-        })}
+          )}
 
-        {thinking && (
-          <div className="flex justify-start">
-            <div className="max-w-[80%] rounded-md px-3 py-2 text-[13px] bg-white border border-[#d0d7de] text-[#57606a] italic">
-              thinking…
+          {error && (
+            <div className="flex gap-3 items-start">
+              <BotIcon />
+              <div className="bg-red-bg border border-red-fg/30 rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-red-fg">{error}</div>
             </div>
+          )}
+
+          <div ref={bottomRef} />
+
+          {entries.length === 0 && (
+            <div className="flex gap-2 flex-wrap pl-10.5">
+              {SUGGESTIONS.map(s => (
+                <button key={s} type="button" onClick={() => handleSend(s)}
+                  className="text-[12.5px] text-tx-3 bg-surface border border-border rounded-full px-3.5 py-1.75 cursor-pointer hover:border-tx-5">
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2.5 bg-surface border border-border rounded-[14px] px-2 py-2 pl-4 mt-1">
+            <input
+              type="text"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+              placeholder="Describe a test, or ask a question…"
+              className="flex-1 text-[14px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
+            />
+            <button
+              type="button"
+              onClick={() => handleSend()}
+              disabled={thinking || !input.trim()}
+              aria-label="Send"
+              className="w-9.5 h-9.5 rounded-[10px] bg-accent flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer"
+            >
+              <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10h11M10 5l5 5-5 5" /></svg>
+            </button>
           </div>
-        )}
-
-        {error && (
-          <div className="flex justify-start">
-            <div className="max-w-[80%] rounded-md px-3 py-2 text-[13px] bg-[#fff1f0] border border-[#ffd6d3] text-[#cf222e]">
-              {error}
-            </div>
-          </div>
-        )}
-
-        <div ref={bottomRef} />
-      </div>
-
-      <div className="flex gap-2 pt-3 border-t border-[#d0d7de]">
-        <input
-          type="text"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-          placeholder="e.g. Load test https://api.example.com with 50 VUs for 2 minutes"
-          className="flex-1 px-3 py-2 border border-[#d0d7de] rounded-md text-[13px] focus:outline-none focus:ring-2 focus:ring-[#0969da]"
-        />
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={thinking || !input.trim()}
-          className="px-4 py-2 bg-[#1f883d] hover:bg-[#1a7f37] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md text-[13px] font-medium transition-colors"
-        >
-          Send
-        </button>
+        </div>
       </div>
     </div>
   );

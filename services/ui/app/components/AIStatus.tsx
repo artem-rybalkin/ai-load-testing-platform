@@ -44,18 +44,18 @@ export default function AIStatus() {
   if (!exceeded) return null;
 
   return (
-    <div className="bg-[#fff8c5] border-b border-[#e3b341] px-4 py-2 flex items-start gap-3">
-      <span className="text-[#9a6700] text-[13px] mt-0.5 shrink-0">⚠</span>
+    <div className="bg-amber-bg border-b border-amber-fg/30 px-4 md:px-9 py-2.5 flex items-start gap-3">
+      <span className="text-amber-badge-fg text-[13px] mt-0.5 shrink-0">⚠</span>
       <div className="flex-1 min-w-0">
-        <span className="text-[12px] font-semibold text-[#9a6700]">Gemini API — daily quota exceeded</span>
-        <p className="text-[11px] font-mono text-[#9a6700] mt-0.5">
+        <span className="text-[12px] font-semibold text-amber-badge-fg">Gemini API — daily quota exceeded</span>
+        <p className="text-[11px] font-mono text-amber-badge-fg mt-0.5">
           AI features (script generation, insights, correlation detection) are unavailable until quota resets at midnight UTC.
           Tests with cached scripts continue to work normally.
         </p>
       </div>
       <button
         onClick={dismiss}
-        className="text-[#9a6700] hover:text-[#7a5100] text-[14px] shrink-0 leading-none"
+        className="text-amber-badge-fg hover:text-tx text-[14px] shrink-0 leading-none"
         aria-label="Dismiss"
       >
         ×

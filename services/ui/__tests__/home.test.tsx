@@ -59,7 +59,7 @@ describe('Home page — form validation', () => {
 
   it('calls createTest and navigates when form is valid', async () => {
     render(<Home />);
-    const urlInput = screen.getByPlaceholderText('https://example.com');
+    const urlInput = screen.getByPlaceholderText('api.acme.io/checkout');
     fireEvent.change(urlInput, { target: { value: 'https://api.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /run test/i }));
     await waitFor(() => expect(mockCreateTest).toHaveBeenCalledWith(
@@ -71,7 +71,7 @@ describe('Home page — form validation', () => {
   it('shows the server error message when createTest fails', async () => {
     mockCreateTest.mockRejectedValueOnce(new Error('Invalid targetUrl — must use http or https'));
     render(<Home />);
-    const urlInput = screen.getByPlaceholderText('https://example.com');
+    const urlInput = screen.getByPlaceholderText('api.acme.io/checkout');
     fireEvent.change(urlInput, { target: { value: 'localhost:8081' } });
     fireEvent.click(screen.getByRole('button', { name: /run test/i }));
     await waitFor(() => expect(screen.getByText('Invalid targetUrl — must use http or https')).toBeInTheDocument());
@@ -80,7 +80,7 @@ describe('Home page — form validation', () => {
   it('falls back to a generic message when createTest rejects without an Error', async () => {
     mockCreateTest.mockRejectedValueOnce('not an Error instance');
     render(<Home />);
-    const urlInput = screen.getByPlaceholderText('https://example.com');
+    const urlInput = screen.getByPlaceholderText('api.acme.io/checkout');
     fireEvent.change(urlInput, { target: { value: 'https://test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /run test/i }));
     await waitFor(() => expect(screen.getByText('Failed to create test')).toBeInTheDocument());
@@ -90,7 +90,7 @@ describe('Home page — form validation', () => {
     render(<Home />);
     expect(screen.getByRole('button', { name: /backend/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /browser/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /multi-step flow/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^flow$/i })).toBeInTheDocument();
   });
 
   it('shows load profile selector for backend type inside Advanced settings', () => {
@@ -110,7 +110,7 @@ describe('Home page — script library template', () => {
     stableSearchParams.set('useScriptTemplate', 'rest-api-load');
     render(<Home />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /custom script/i })).toHaveClass('bg-white'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /custom script/i })).toHaveClass('bg-sel'));
     const textarea = await waitFor(() => screen.getByPlaceholderText(/import http from 'k6\/http'/i) as HTMLTextAreaElement);
     expect(textarea.value).toContain("import http from 'k6/http'");
     expect(textarea.value).toContain("const BASE_URL = 'https://example.com'");
@@ -120,7 +120,7 @@ describe('Home page — script library template', () => {
     stableSearchParams.set('useScriptTemplate', 'does-not-exist');
     render(<Home />);
     await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
-    expect(screen.getByRole('button', { name: /ai generate/i })).toHaveClass('bg-white');
+    expect(screen.getByRole('button', { name: /ai generate/i })).toHaveClass('bg-sel');
   });
 });
 
@@ -161,7 +161,7 @@ describe('Home page — preset dropdown', () => {
     // Wait for the preset dropdown to appear, then select by its default display value
     await waitFor(() => screen.getByDisplayValue('Load from preset…'));
     fireEvent.change(screen.getByDisplayValue('Load from preset…'), { target: { value: 'tmpl-1' } });
-    expect((screen.getByPlaceholderText('https://example.com') as HTMLInputElement).value).toBe('http://preset.com');
+    expect((screen.getByPlaceholderText('api.acme.io/checkout') as HTMLInputElement).value).toBe('preset.com');
   });
 });
 
@@ -291,7 +291,7 @@ describe('Home page — browser SLO threshold inputs', () => {
   it('includes inp and tbt in createTest payload when browser thresholds are enabled with defaults', async () => {
     render(<Home />);
     fireEvent.click(screen.getByRole('button', { name: /browser/i }));
-    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://browser.test.com' } });
+    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://browser.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /run test/i }));
@@ -314,7 +314,7 @@ describe('Home page — custom headers editor', () => {
 
   it('adds a header row and includes it in the createTest payload', async () => {
     render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://api.test.com' } });
+    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://api.test.com' } });
     const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
     fireEvent.click(advancedBtn!);
 
@@ -356,7 +356,7 @@ describe('Home page — re-run from results list', () => {
     mockGetResult.mockResolvedValueOnce({ result: makeRerunResult() } as never);
     render(<Home />);
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('https://example.com')).toHaveValue('https://rerun.example.com');
+      expect(screen.getByPlaceholderText('api.acme.io/checkout')).toHaveValue('rerun.example.com');
     });
     const descInput = screen.getByPlaceholderText(/e\.g\. load test/i) as HTMLInputElement;
     expect(descInput.value).toBe('load test with 10 users for 1 minute');
@@ -385,7 +385,7 @@ describe('Home page — re-run from results list', () => {
 describe('Home page — threshold preview', () => {
   it('does not show the preview button until SLO thresholds are open', async () => {
     render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://preview.test.com' } });
+    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
     expect(screen.queryByRole('button', { name: /preview against last run/i })).not.toBeInTheDocument();
   });
 
@@ -397,7 +397,7 @@ describe('Home page — threshold preview', () => {
       basedOn: { testId: 't1', completedAt: '2026-01-01T00:00:00.000Z' },
     });
     render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://preview.test.com' } });
+    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
 
     const previewBtn = screen.getByRole('button', { name: /preview against last run/i });
@@ -415,7 +415,7 @@ describe('Home page — threshold preview', () => {
       basedOn: { testId: 't1', completedAt: '2026-01-01T00:00:00.000Z' },
     });
     render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://preview.test.com' } });
+    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
     fireEvent.click(screen.getByRole('button', { name: /preview against last run/i }));
 
@@ -426,7 +426,7 @@ describe('Home page — threshold preview', () => {
   it('shows a message when no completed run is available', async () => {
     mockPreviewThresholds.mockResolvedValueOnce({ available: false });
     render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('https://example.com'), { target: { value: 'https://no-history.test.com' } });
+    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://no-history.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
     fireEvent.click(screen.getByRole('button', { name: /preview against last run/i }));
 

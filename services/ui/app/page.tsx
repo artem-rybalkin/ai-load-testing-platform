@@ -1,8 +1,9 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest } from '@/lib/api';
+import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
 import { useAuth } from '@/lib/AuthContext';
+import { useResultsSocket } from '@/lib/useResultsSocket';
 import { findScriptTemplate } from '@/lib/scriptTemplates';
 
 interface EnvVar { key: string; value: string }
@@ -27,95 +28,124 @@ function relTime(iso: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function QuickStatsPanel({ active, recent }: { active: ActiveTest[]; recent: TestResult[] }) {
-  const completed = recent.filter(r => r.status === 'completed');
-  const passCount = completed.filter(r => r.perf_status === 'passed').length;
-  const passRate = completed.length > 0 ? Math.round((passCount / completed.length) * 100) : null;
-  const avgP95 = completed.length > 0 && completed[0]?.metrics?.p95ResponseTime != null
-    ? Math.round(completed.reduce((s, r) => s + (r.metrics?.p95ResponseTime ?? 0), 0) / completed.length)
-    : null;
+function fmtElapsed(secs: number) {
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+/** Sparkline path generator over a fixed 560x80 viewBox, matching the design's live card chart. */
+function sparklinePath(values: number[]): { area: string; line: string } {
+  if (values.length < 2) return { area: '', line: '' };
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const stepX = 544 / (values.length - 1);
+  const pts = values.map((v, i) => {
+    const x = 8 + i * stepX;
+    const y = 8 + (1 - (v - min) / range) * 64;
+    return [x, y];
+  });
+  const line = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const [lastX] = pts[pts.length - 1];
+  const [firstX] = pts[0];
+  const area = `${line} L${lastX},80 L${firstX},80 Z`;
+  return { area, line };
+}
+
+function LiveCard({ test }: { test: ActiveTest }) {
+  const navigate = useNavigate();
+  const [points, setPoints] = useState<LiveMetricPoint[]>([]);
+  const [meta, setMeta] = useState<{ startedAt: string | null; durationSeconds: number | null } | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    getLiveMetrics(test.test_id).then(d => setPoints(d.points ?? [])).catch(() => {});
+    getResult(test.test_id).then(({ result }) => setMeta({ startedAt: result.started_at, durationSeconds: result.duration_seconds })).catch(() => {});
+  }, [test.test_id]);
+
+  useResultsSocket(event => {
+    if (event.type === 'test:live' && event.testId === test.test_id) {
+      setPoints(p => [...p, event.point].slice(-40));
+    }
+  });
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const latest = points[points.length - 1];
+  const elapsed = meta?.startedAt ? Math.max(0, Math.floor((now - new Date(meta.startedAt).getTime()) / 1000)) : 0;
+  const { area, line } = sparklinePath(points.map(p => p.avgResponseTime));
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* Stats */}
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-        <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
-          <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Quick Stats</span>
+    <div
+      onClick={() => navigate(`/results/${test.test_id}`)}
+      className="rounded-card p-5.5 cursor-pointer text-white"
+      style={{ background: 'var(--livecard)', border: '1px solid var(--livecard-bd)' }}
+    >
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-live pulse-ring inline-block" />
+          <span className="font-mono text-[11px] tracking-[0.12em] text-live">RUNNING</span>
+        </span>
+        <span className="font-mono text-[12px] text-tx-4">
+          {fmtElapsed(elapsed)}{meta?.durationSeconds ? ` / ${fmtElapsed(meta.durationSeconds)}` : ''}
+        </span>
+      </div>
+      <div className="font-mono text-[13.5px] text-sidebar-bright mt-2.5 truncate">{test.target_url}</div>
+      <div className="flex items-end gap-7 mt-3.5">
+        <div>
+          <div className="font-mono text-[10.5px] text-tx-4 uppercase tracking-[0.06em]">avg</div>
+          <div className="font-display text-[30px] font-bold text-white leading-none mt-1">{latest ? Math.round(latest.avgResponseTime) : '—'}<span className="text-[15px] text-tx-4">ms</span></div>
         </div>
-        <div className="divide-y divide-[#eaeef2]">
-          <div className="flex justify-between items-center px-3 py-2 text-[13px]">
-            <span className="text-[#57606a]">Tests today</span>
-            <span className="font-mono font-semibold text-[#24292f]">{recent.length}</span>
-          </div>
-          {avgP95 !== null && (
-            <div className="flex justify-between items-center px-3 py-2 text-[13px]">
-              <span className="text-[#57606a]">Avg p95</span>
-              <span className="font-mono font-semibold text-[#24292f]">{avgP95}ms</span>
-            </div>
-          )}
-          {passRate !== null && (
-            <div className="flex justify-between items-center px-3 py-2 text-[13px]">
-              <span className="text-[#57606a]">Pass rate</span>
-              <span className={`font-mono font-semibold ${passRate >= 80 ? 'text-[#1f883d]' : passRate >= 50 ? 'text-[#9a6700]' : 'text-[#cf222e]'}`}>
-                {passRate}%
-              </span>
-            </div>
-          )}
+        <div>
+          <div className="font-mono text-[10.5px] text-tx-4 uppercase tracking-[0.06em]">VUs</div>
+          <div className="font-display text-[30px] font-bold text-white leading-none mt-1">{latest ? Math.round(latest.vus) : '—'}</div>
+        </div>
+        <div>
+          <div className="font-mono text-[10.5px] text-tx-4 uppercase tracking-[0.06em]">err</div>
+          <div className="font-display text-[30px] font-bold text-white leading-none mt-1">{latest ? latest.errorRate.toFixed(1) : '0.0'}<span className="text-[15px] text-tx-4">%</span></div>
         </div>
       </div>
+      {points.length > 1 ? (
+        <svg viewBox="0 0 560 80" preserveAspectRatio="none" className="w-full h-15 block mt-3.5">
+          <defs><linearGradient id="liveCardGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#34d27b" stopOpacity=".3" /><stop offset="1" stopColor="#34d27b" stopOpacity="0" /></linearGradient></defs>
+          <path d={area} fill="url(#liveCardGrad)" />
+          <path d={line} fill="none" stroke="#34d27b" strokeWidth="2.2" />
+        </svg>
+      ) : <div className="h-15 mt-3.5" />}
+    </div>
+  );
+}
 
-      {/* Active */}
-      {active.length > 0 && (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-          <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Active Now</span>
+function RecentRuns({ recent }: { recent: TestResult[] }) {
+  const navigate = useNavigate();
+  const completed = recent.filter(r => r.status === 'completed').slice(0, 4);
+  return (
+    <div className="bg-surface border border-border rounded-card px-6 py-4.5 flex-1">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="font-display text-[15px] font-semibold">Recent runs</span>
+        <Link to="/results" className="text-[12.5px] text-accent font-semibold">View all →</Link>
+      </div>
+      {completed.length === 0 && <p className="text-[12.5px] text-tx-4 py-3">No completed runs yet.</p>}
+      {completed.map((r, i) => {
+        const metricVal = typeof r.metrics?.p95ResponseTime === 'number' ? `${Math.round(r.metrics.p95ResponseTime)}ms`
+          : typeof r.metrics?.lcp === 'number' ? `${Math.round(r.metrics.lcp)}ms` : '—';
+        const arrow = r.perf_status === 'passed' ? { sym: '↑', cls: 'text-green-fg' } : r.perf_status === 'failed' ? { sym: '↓', cls: 'text-red-fg' } : { sym: '→', cls: 'text-amber-fg' };
+        return (
+          <div
+            key={r.id}
+            onClick={() => navigate(`/results/${r.test_id}`)}
+            className={`flex items-center gap-3 py-2.75 cursor-pointer ${i < completed.length - 1 ? 'border-b border-line' : ''}`}
+          >
+            <span className={`font-display text-[13px] font-bold w-3.5 ${arrow.cls}`}>{arrow.sym}</span>
+            <span className="font-mono text-[12.5px] text-tx-2 flex-1 min-w-0 truncate">{r.target_url.replace(/https?:\/\//, '')}</span>
+            <span className="font-display text-[14px] font-semibold">{metricVal}</span>
           </div>
-          <div className="divide-y divide-[#eaeef2]">
-            {active.map(t => (
-              <Link
-                key={t.test_id}
-                to={`/results/${t.test_id}`}
-                className="flex items-center justify-between px-3 py-2 text-[12px] hover:bg-[#f6f8fa] group"
-              >
-                <span className="flex items-center gap-1.5 min-w-0">
-                  <span className="w-1.5 h-1.5 bg-[#0969da] rounded-full animate-pulse flex-shrink-0" />
-                  <span className="font-mono truncate text-[#24292f]">{t.target_url.replace(/https?:\/\//, '')}</span>
-                </span>
-                <span className="text-[#57606a] text-[10px] font-mono ml-2 flex-shrink-0">{t.type}</span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Recent */}
-      {recent.length > 0 && (
-        <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-          <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
-            <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Recent</span>
-          </div>
-          <div className="divide-y divide-[#eaeef2]">
-            {recent.slice(0, 5).map(r => (
-              <Link
-                key={r.id}
-                to={`/results/${r.test_id}`}
-                className="flex items-center justify-between px-3 py-2 text-[12px] hover:bg-[#f6f8fa]"
-              >
-                <span className="flex items-center gap-1.5 min-w-0">
-                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                    r.perf_status === 'passed' ? 'bg-[#1f883d]' :
-                    r.perf_status === 'failed' ? 'bg-[#cf222e]' :
-                    r.status === 'running' ? 'bg-[#0969da] animate-pulse' :
-                    'bg-[#9a6700]'
-                  }`} />
-                  <span className="font-mono truncate text-[#24292f]">{r.target_url.replace(/https?:\/\//, '')}</span>
-                </span>
-                <span className="text-[#57606a] text-[10px] font-mono ml-2 flex-shrink-0">{relTime(r.created_at)}</span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -226,10 +256,18 @@ function HomeContent() {
     }
   };
 
-  useEffect(() => {
-    getPresets().then(d => setPresets(d.presets ?? [])).catch(() => {});
+  const refreshOverview = () => {
     getResults().then(d => setRecent(d.results?.slice(0, 10) ?? [])).catch(() => {});
     getActiveTests().then(d => setActive(d.active ?? [])).catch(() => {});
+  };
+
+  useResultsSocket((event) => {
+    if (event.type === 'tests:changed' || event.type === 'test:status' || event.type === 'reconnected') refreshOverview();
+  });
+
+  useEffect(() => {
+    getPresets().then(d => setPresets(d.presets ?? [])).catch(() => {});
+    refreshOverview();
 
     const rerun = searchParams.get('rerun');
     if (rerun) {
@@ -538,572 +576,470 @@ function HomeContent() {
     }
   };
 
-  const inputCls = "w-full border border-[#d0d7de] rounded-md px-3 py-1.5 text-[13px] bg-white text-[#24292f] focus:outline-none focus:border-[#0969da] focus:ring-2 focus:ring-[#0969da]/20 placeholder-[#8c959f]";
+  const inputCls = "w-full bg-bg border border-border rounded-control px-3.5 py-2.75 text-[13.5px] font-display font-semibold text-tx focus:outline-none focus:border-ink-bd placeholder:font-sans placeholder:font-normal placeholder:text-tx-5";
+
+  const completedToday = recent.filter(r => r.status === 'completed' && new Date(r.created_at).toDateString() === new Date().toDateString());
+  const passCount = completedToday.filter(r => r.perf_status === 'passed').length;
+  const passRate = completedToday.length > 0 ? Math.round((passCount / completedToday.length) * 100) : null;
+  const backendCompleted = completedToday.filter(r => typeof r.metrics?.p95ResponseTime === 'number');
+  const avgP95 = backendCompleted.length > 0 ? Math.round(backendCompleted.reduce((s, r) => s + r.metrics.p95ResponseTime, 0) / backendCompleted.length) : null;
+  const rpsResults = completedToday.filter(r => typeof r.metrics?.rps === 'number');
+  const avgRps = rpsResults.length > 0 ? rpsResults.reduce((s, r) => s + r.metrics.rps, 0) / rpsResults.length : null;
 
   return (
-    <div className="p-4 lg:p-6">
-      <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 items-start">
-
-        {/* ── Left: Test form ── */}
-        <div className="w-full lg:flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-3">
-            <h1 className="text-[15px] font-semibold text-[#24292f]">New Test</h1>
-            {presets.length > 0 && (
-              <select
-                value=""
-                onChange={e => handleLoadPreset(e.target.value)}
-                className="text-[12px] border border-[#d0d7de] rounded-md px-2 py-1 bg-[#f6f8fa] text-[#57606a] focus:outline-none focus:border-[#0969da]"
-              >
-                <option value="" disabled>Load from preset…</option>
-                {presets.map(t => (
-                  <option key={t.id} value={t.id}>{t.name} ({t.type})</option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {rerunFrom && (
-            <div className="flex items-center justify-between px-3 py-2 mb-3 bg-[#ddf4ff] border border-[#c8e1ff] rounded-md text-[12px]">
-              <span className="text-[#0969da]">
-                ↻ Pre-filled from previous run of <span className="font-mono">{rerunFrom}</span> — script will be reused
-              </span>
-              <button
-                onClick={() => setRerunFrom(null)}
-                className="text-[#57606a] hover:text-[#24292f] ml-3 flex-shrink-0"
-                aria-label="Dismiss re-run notice"
-              >
-                ✕
-              </button>
-            </div>
+    <div>
+      <div className="px-4 md:px-9 pt-7.5 flex items-start justify-between flex-wrap gap-3.5">
+        <div>
+          <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Overview</div>
+          <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">New test</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          {presets.length > 0 && (
+            <select
+              value=""
+              onChange={e => handleLoadPreset(e.target.value)}
+              className="text-[12.5px] border border-border rounded-control px-3 py-2 bg-surface text-tx-3 focus:outline-none"
+            >
+              <option value="" disabled>Load from preset…</option>
+              {presets.map(t => <option key={t.id} value={t.id}>{t.name} ({t.type})</option>)}
+            </select>
           )}
+          {!isViewer && (
+            <button onClick={handleSubmit} disabled={loading} className="flex items-center gap-2 bg-btn2 text-white rounded-control px-4 py-2.75 text-[13.5px] font-semibold disabled:opacity-50">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="var(--accent)"><path d="M4 3l9 5-9 5z" /></svg> Quick run
+            </button>
+          )}
+        </div>
+      </div>
 
-          <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-            <div className="p-4 space-y-4">
+      <div className="px-4 md:px-9 py-6 flex flex-col gap-5">
+        {rerunFrom && (
+          <div className="flex items-center justify-between px-4 py-2.5 bg-orange-bg border border-orange-bd rounded-control text-[12.5px]">
+            <span className="text-accent">↻ Pre-filled from previous run of <span className="font-mono">{rerunFrom}</span> — script will be reused</span>
+            <button onClick={() => setRerunFrom(null)} className="text-tx-4 hover:text-tx ml-3 flex-shrink-0" aria-label="Dismiss re-run notice">✕</button>
+          </div>
+        )}
 
-              {/* Test type */}
+        {/* Stat band */}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] bg-surface border border-border rounded-card overflow-hidden [&>*:not(:last-child)]:border-r [&>*:not(:last-child)]:border-border-2">
+          {[
+            { label: 'Tests today', value: completedToday.length, suffix: null },
+            { label: 'Pass rate', value: passRate ?? '—', suffix: passRate !== null ? '%' : null, color: passRate !== null && passRate >= 80 ? 'text-green-fg' : passRate !== null ? 'text-amber-fg' : undefined },
+            { label: 'Avg p95', value: avgP95 ?? '—', suffix: avgP95 !== null ? 'ms' : null },
+            { label: 'Throughput', value: avgRps !== null ? avgRps.toFixed(1) : '—', suffix: avgRps !== null ? '/s' : null },
+          ].map(cell => (
+            <div key={cell.label} className="px-6 py-5">
+              <div className="font-mono text-[10.5px] tracking-[0.1em] text-tx-4 uppercase">{cell.label}</div>
+              <div className="flex items-baseline gap-2 mt-2">
+                <span className={`font-display text-[38px] font-bold tracking-[-0.03em] leading-none ${cell.color ?? ''}`}>{cell.value}</span>
+                {cell.suffix && <span className="text-[18px] text-tx-4">{cell.suffix}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 lg:[grid-template-columns:minmax(360px,1fr)_minmax(360px,1fr)] gap-5">
+          {/* Composer */}
+          <div className="bg-surface border border-border rounded-card p-6.5 flex flex-col gap-4.5">
+            <div className="font-display text-[17px] font-semibold">Configure run</div>
+            <div className="flex gap-2">
+              {([
+                { id: 'backend',     label: 'Backend' },
+                { id: 'client-side', label: 'Browser' },
+                { id: 'flow',        label: 'Flow' },
+              ] as const).map(t => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    if (t.id !== form.type) { setThresholds(DEFAULT_THRESHOLDS); setThresholdSuggestionNote(null); }
+                    setForm(f => ({ ...f, type: t.id }));
+                    if (t.id !== 'backend') { setScriptMode('ai'); setCustomScript(''); }
+                  }}
+                  className={`flex-1 text-center py-2.75 rounded-control text-[13.5px] cursor-pointer transition-colors ${
+                    form.type === t.id ? 'bg-sel text-white font-semibold' : 'border border-border text-tx-3 font-medium'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {form.type === 'flow' && (
+              <>
+                <FlowBuilder
+                  steps={flowSteps}
+                  envVars={flowEnvVars}
+                  onChange={setFlowSteps}
+                  onEnvVarsChange={setFlowEnvVars}
+                  testData={flowTestData}
+                  onTestDataChange={setFlowTestData}
+                  csvFile={flowCsvFile}
+                  onCsvChange={setFlowCsvFile}
+                  teamId={user?.currentTeamId ?? undefined}
+                />
+                <div>
+                  <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Run as</div>
+                  <div className="flex gap-2">
+                    {([
+                      { id: 'k6',      label: 'k6 HTTP',          desc: 'Load test with many virtual users' },
+                      { id: 'browser', label: 'Browser', desc: 'Real browser, Web Vitals, Lighthouse' },
+                    ] as const).map(r => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        title={r.desc}
+                        onClick={() => setFlowRunner(r.id)}
+                        className={`flex-1 text-center py-2.5 rounded-control text-[12.5px] cursor-pointer ${
+                          flowRunner === r.id ? 'bg-sel text-white font-semibold' : 'border border-border text-tx-3'
+                        }`}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                  {flowRunner === 'browser' && (
+                    <p className="mt-1.5 text-[12px] text-tx-4 leading-[1.5]">
+                      Launches a real Chromium browser. Collects Web Vitals &amp; Lighthouse scores. Uses <strong>sessions</strong> and <strong>duration</strong> from Advanced settings.
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
+            {form.type !== 'flow' && (
               <div>
-                <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Test type</label>
-                <div className="flex border border-[#d0d7de] rounded-md overflow-hidden">
+                <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">
+                  Target URL
+                  {form.type === 'backend' && scriptMode === 'custom' && <span className="ml-1 text-tx-4 normal-case font-normal">(optional — used as result label)</span>}
+                </div>
+                <div className="flex items-center bg-bg border-[1.5px] border-ink-bd rounded-control overflow-hidden">
+                  <span className="font-mono text-[13px] text-tx-4 px-3.5 border-r-[1.5px] border-border h-11.5 flex items-center flex-shrink-0">https://</span>
+                  <input
+                    type="text"
+                    placeholder={form.type === 'backend' && scriptMode === 'custom' ? 'example.com (auto-detected from script if blank)' : 'api.acme.io/checkout'}
+                    value={form.targetUrl.replace(/^https?:\/\//, '')}
+                    onChange={e => setForm(f => ({ ...f, targetUrl: e.target.value ? `https://${e.target.value.replace(/^https?:\/\//, '')}` : '' }))}
+                    className="flex-1 min-w-0 font-mono text-[13.5px] text-tx font-medium px-3.5 py-0 bg-transparent border-none focus:outline-none placeholder:text-tx-5 placeholder:font-normal"
+                  />
+                </div>
+                {form.targetUrl && (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <button type="button" onClick={handleSuggestSettings} disabled={suggestingSettings} className="text-[11px] text-accent hover:underline disabled:opacity-50 font-mono">
+                      {suggestingSettings ? '⏳ Analysing…' : '✨ Suggest settings'}
+                    </button>
+                    {settingsSuggestionNote && <span className="text-[11px] text-tx-4 font-mono truncate">{settingsSuggestionNote}</span>}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {form.type === 'backend' && (
+              <div>
+                <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Script source</div>
+                <div className="flex gap-2 w-fit">
                   {([
-                    { id: 'backend',     label: '⚡ Backend'        },
-                    { id: 'client-side', label: '🌐 Browser'        },
-                    { id: 'flow',        label: '🔗 Multi-step Flow' },
-                  ] as const).map((t, i) => (
+                    { id: 'ai',     label: 'AI Generate'  },
+                    { id: 'custom', label: 'Custom Script' },
+                  ] as const).map(s => (
                     <button
-                      key={t.id}
-                      onClick={() => {
-                        if (t.id !== form.type) {
-                          setThresholds(DEFAULT_THRESHOLDS);
-                          setThresholdSuggestionNote(null);
-                        }
-                        setForm(f => ({ ...f, type: t.id }));
-                        if (t.id !== 'backend') { setScriptMode('ai'); setCustomScript(''); }
-                      }}
-                      className={`flex-1 py-1.5 text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-[#d0d7de]' : ''} ${
-                        form.type === t.id
-                          ? 'bg-white text-[#0969da]'
-                          : 'bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2]'
+                      key={s.id}
+                      type="button"
+                      onClick={() => setScriptMode(s.id)}
+                      className={`px-4 py-2 rounded-control text-[13px] font-medium cursor-pointer ${
+                        scriptMode === s.id ? 'bg-sel text-white font-semibold' : 'border border-border text-tx-3'
                       }`}
                     >
-                      {t.label}
+                      {s.label}
                     </button>
                   ))}
                 </div>
               </div>
+            )}
 
-              {/* Flow builder */}
-              {form.type === 'flow' && (
-                <>
-                  <FlowBuilder
-                    steps={flowSteps}
-                    envVars={flowEnvVars}
-                    onChange={setFlowSteps}
-                    onEnvVarsChange={setFlowEnvVars}
-                    testData={flowTestData}
-                    onTestDataChange={setFlowTestData}
-                    csvFile={flowCsvFile}
-                    onCsvChange={setFlowCsvFile}
-                    teamId={user?.currentTeamId ?? undefined}
-                  />
-                  {/* Runner selector */}
-                  <div>
-                    <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Run as</label>
-                    <div className="flex border border-[#d0d7de] rounded-md overflow-hidden w-fit">
-                      {([
-                        { id: 'k6',      label: '⚡ k6 HTTP',          desc: 'Load test with many virtual users' },
-                        { id: 'browser', label: '🌐 Puppeteer Browser', desc: 'Real browser, Web Vitals, Lighthouse' },
-                      ] as const).map((r, i) => (
-                        <button
-                          key={r.id}
-                          type="button"
-                          title={r.desc}
-                          onClick={() => setFlowRunner(r.id)}
-                          className={`px-3 py-1.5 text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-[#d0d7de]' : ''} ${
-                            flowRunner === r.id
-                              ? 'bg-white text-[#0969da]'
-                              : 'bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2]'
-                          }`}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                    {flowRunner === 'browser' && (
-                      <p className="mt-1 text-[11px] text-[#57606a]">
-                        Launches a real Chromium browser. Collects Web Vitals &amp; Lighthouse scores. Uses <strong>sessions</strong> and <strong>duration</strong> from Advanced settings.
-                      </p>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {/* URL */}
-              {form.type !== 'flow' && (
-                <div>
-                  <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
-                    Target URL
-                    {form.type === 'backend' && scriptMode === 'custom' && (
-                      <span className="ml-1 text-[#8c959f] normal-case font-normal tracking-normal">(optional — used as result label)</span>
-                    )}
-                  </label>
-                  <input
-                    type="text"
-                    placeholder={form.type === 'backend' && scriptMode === 'custom' ? 'https://example.com (auto-detected from script if blank)' : 'https://example.com'}
-                    value={form.targetUrl}
-                    onChange={e => setForm(f => ({ ...f, targetUrl: e.target.value }))}
-                    className={inputCls}
-                  />
-                  {form.targetUrl && (
-                    <div className="mt-1 flex items-center gap-2">
-                      <button type="button" onClick={handleSuggestSettings} disabled={suggestingSettings}
-                        className="text-[11px] text-[#0969da] hover:underline disabled:opacity-50 font-mono">
-                        {suggestingSettings ? '⏳ Analysing…' : '✨ Suggest settings'}
-                      </button>
-                      {settingsSuggestionNote && (
-                        <span className="text-[11px] text-[#57606a] font-mono truncate">{settingsSuggestionNote}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Script source toggle — backend only */}
-              {form.type === 'backend' && (
-                <div>
-                  <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">Script source</label>
-                  <div className="flex border border-[#d0d7de] rounded-md overflow-hidden w-fit">
-                    {([
-                      { id: 'ai',     label: '🤖 AI Generate'  },
-                      { id: 'custom', label: '📄 Custom Script' },
-                    ] as const).map((s, i) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setScriptMode(s.id)}
-                        className={`px-3 py-1.5 text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-[#d0d7de]' : ''} ${
-                          scriptMode === s.id
-                            ? 'bg-white text-[#0969da]'
-                            : 'bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2]'
-                        }`}
-                      >
-                        {s.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Custom k6 script — textarea + file upload */}
-              {form.type === 'backend' && scriptMode === 'custom' && (
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">k6 Script</label>
-                    <div className="flex items-center gap-3">
-                      <label className="text-[11px] font-mono text-[#0969da] hover:underline cursor-pointer">
-                        ↑ Upload .js
-                        <input type="file" accept=".js,.ts" className="hidden"
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0]; if (!file) return;
-                            setCustomScript(await file.text()); e.target.value = '';
-                          }} />
-                      </label>
-                      <label className={`text-[11px] font-mono cursor-pointer ${translating ? 'text-[#57606a]' : 'text-[#0969da] hover:underline'}`}
-                        title="Upload a Playwright .ts/.js file and translate it to k6 with AI">
-                        {translating ? '⏳ Translating…' : '✨ Translate Playwright'}
-                        <input type="file" accept=".js,.ts" className="hidden" disabled={translating}
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0]; if (!file) return;
-                            const src = await file.text(); e.target.value = '';
-                            setTranslating(true);
-                            try {
-                              const { k6Script } = await translatePlaywright(src, form.targetUrl || undefined);
-                              setCustomScript(k6Script);
-                            } catch (err) { setError(`Translation failed: ${(err as Error).message}`); }
-                            finally { setTranslating(false); }
-                          }} />
-                      </label>
-                    </div>
-                  </div>
-                  <textarea
-                    value={customScript}
-                    onChange={e => setCustomScript(e.target.value)}
-                    placeholder={"import http from 'k6/http';\nimport { sleep } from 'k6';\n\nexport const options = { vus: 10, duration: '30s' };\n\nexport default function() {\n  http.get('https://example.com');\n  sleep(1);\n}"}
-                    spellCheck={false}
-                    className={`${inputCls} font-mono text-[11px] leading-relaxed h-48 resize-y`}
-                  />
-                  <p className="text-[10px] text-[#8c959f] mt-1">Max 512 KB · The script&apos;s own <code className="font-mono">export const options</code> overrides Advanced settings.</p>
-                </div>
-              )}
-
-              {/* Description — hidden in custom script mode */}
-              {!(form.type === 'backend' && scriptMode === 'custom') && (
+            {form.type === 'backend' && scriptMode === 'custom' && (
               <div>
-                <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-1.5">
-                  What to test?{' '}
-                  <span className="text-[#8c959f] normal-case font-normal tracking-normal">(AI parses VUs, duration, profile)</span>
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">k6 Script</div>
+                  <div className="flex items-center gap-3">
+                    <label className="text-[11px] font-mono text-accent hover:underline cursor-pointer">
+                      ↑ Upload .js
+                      <input type="file" accept=".js,.ts" className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0]; if (!file) return;
+                          setCustomScript(await file.text()); e.target.value = '';
+                        }} />
+                    </label>
+                    <label className={`text-[11px] font-mono cursor-pointer ${translating ? 'text-tx-4' : 'text-accent hover:underline'}`}
+                      title="Upload a Playwright .ts/.js file and translate it to k6 with AI">
+                      {translating ? '⏳ Translating…' : '✨ Translate Playwright'}
+                      <input type="file" accept=".js,.ts" className="hidden" disabled={translating}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0]; if (!file) return;
+                          const src = await file.text(); e.target.value = '';
+                          setTranslating(true);
+                          try {
+                            const { k6Script } = await translatePlaywright(src, form.targetUrl || undefined);
+                            setCustomScript(k6Script);
+                          } catch (err) { setError(`Translation failed: ${(err as Error).message}`); }
+                          finally { setTranslating(false); }
+                        }} />
+                    </label>
+                  </div>
+                </div>
+                <textarea
+                  value={customScript}
+                  onChange={e => setCustomScript(e.target.value)}
+                  placeholder={"import http from 'k6/http';\nimport { sleep } from 'k6';\n\nexport const options = { vus: 10, duration: '30s' };\n\nexport default function() {\n  http.get('https://example.com');\n  sleep(1);\n}"}
+                  spellCheck={false}
+                  className={`${inputCls} font-mono text-[11px] leading-relaxed h-48 resize-y`}
+                />
+                <p className="text-[10px] text-tx-4 mt-1">Max 512 KB · The script&apos;s own <code className="font-mono">export const options</code> overrides Advanced settings.</p>
+              </div>
+            )}
+
+            {!(form.type === 'backend' && scriptMode === 'custom') && (
+              <div>
+                <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">
+                  What to test? <span className="text-tx-4 normal-case font-normal">(AI parses VUs, duration, profile)</span>
+                </div>
                 <input
                   type="text"
                   placeholder="e.g. load test with 10 users for 2 minutes, ramp up 30s..."
                   value={form.description}
                   onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                   onBlur={e => {
-                    // Skip if focus is moving to the Run Test button — avoid opening
-                    // Advanced Settings mid-submit which confuses users
                     const relatedTarget = e.relatedTarget as HTMLElement | null;
                     if (relatedTarget?.closest('[data-run-btn]')) return;
                     applyDescriptionParams(e.target.value);
                   }}
-                  className={inputCls}
+                  className="w-full bg-surface border border-border rounded-control px-3.5 py-2.5 text-[13px] text-tx focus:outline-none focus:border-ink-bd placeholder:text-tx-5"
                 />
               </div>
-              )}
+            )}
 
-              {/* Advanced settings */}
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced(v => !v)}
-                  className="flex items-center gap-1 text-[12px] text-[#57606a] hover:text-[#24292f] py-0.5"
-                >
-                  <span className={`transition-transform inline-block text-[10px] ${showAdvanced ? 'rotate-90' : ''}`}>▶</span>
-                  Advanced settings
-                  {!showAdvanced && (
-                    <span className="text-[11px] text-[#8c959f] ml-1 font-mono">
-                      {form.type === 'client-side'
-                        ? `${form.sessions} sessions · ${form.duration}`
-                        : `${form.vus} VUs · ${form.duration}${form.rampUp ? ` · ramp ${form.rampUp}` : ''}${form.type === 'backend' ? ` · ${form.profile}` : ''}`}
-                    </span>
-                  )}
-                </button>
-                {showAdvanced && (
-                  <div className="mt-2 space-y-3 p-3 bg-[#f6f8fa] rounded-md border border-[#d0d7de]">
-                    {form.type === 'backend' && (
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[#57606a] mb-1.5">Load profile</label>
-                        <div className="grid grid-cols-2 gap-1.5">
-                          {([
-                            { id: 'load',     label: 'Load',     hint: 'Constant VUs' },
-                            { id: 'spike',    label: 'Spike',    hint: 'Traffic burst' },
-                            { id: 'capacity', label: 'Capacity', hint: 'Find breakpoint' },
-                            { id: 'soak',     label: 'Soak',     hint: 'Long steady-state' },
-                          ] as const).map(p => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => setForm(f => ({ ...f, profile: p.id }))}
-                              className={`py-1.5 px-2.5 rounded-md border text-left transition-colors ${
-                                form.profile === p.id
-                                  ? 'border-[#0969da] bg-[#ddf4ff]'
-                                  : 'border-[#d0d7de] bg-white hover:bg-[#eaeef2]'
-                              }`}
-                            >
-                              <div className="text-[12px] font-medium text-[#24292f]">{p.label}</div>
-                              <div className="text-[10px] text-[#8c959f]">{p.hint}</div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-3">
-                      {form.type === 'client-side' ? (
-                        <div>
-                          <label className="block text-[11px] text-[#57606a] mb-1">Browser sessions</label>
-                          <input type="number" min={1} max={10} value={form.sessions}
-                            onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))}
-                            className={inputCls}
-                          />
-                        </div>
-                      ) : (
-                        <div>
-                          <label className="block text-[11px] text-[#57606a] mb-1">
-                            {form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Virtual users'}
-                          </label>
-                          <input type="number" min={1} max={100} value={form.vus}
-                            onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))}
-                            className={inputCls}
-                          />
-                        </div>
-                      )}
-                      <div>
-                        <label className="block text-[11px] text-[#57606a] mb-1">Duration</label>
-                        <select value={form.duration} onChange={e => setForm(f => ({ ...f, duration: e.target.value }))}
-                          className={inputCls}
-                        >
-                          {DURATION_OPTIONS.map(d => (
-                            <option key={d} value={d}>{d}</option>
-                          ))}
-                        </select>
+            {form.type === 'backend' && (
+              <div className="bg-bg border border-dashed border-dashed rounded-control px-3.5 py-3 text-[13px] text-tx-4">
+                ✦ Try: &ldquo;ramp to 200 users over 1 min, then hold&rdquo;
+              </div>
+            )}
+
+            {/* Advanced settings */}
+            <div>
+              <button type="button" onClick={() => setShowAdvanced(v => !v)} className="flex items-center gap-1.5 text-[12.5px] text-tx-3 hover:text-tx py-0.5">
+                <span className={`transition-transform inline-block text-[10px] ${showAdvanced ? 'rotate-90' : ''}`}>▶</span>
+                Advanced settings
+                {!showAdvanced && (
+                  <span className="text-[11px] text-tx-4 ml-1 font-mono">
+                    {form.type === 'client-side'
+                      ? `${form.sessions} sessions · ${form.duration}`
+                      : `${form.vus} VUs · ${form.duration}${form.rampUp ? ` · ramp ${form.rampUp}` : ''}${form.type === 'backend' ? ` · ${form.profile}` : ''}`}
+                  </span>
+                )}
+              </button>
+              {showAdvanced && (
+                <div className="mt-2.5 space-y-3.5 p-4 bg-bg rounded-control border border-border">
+                  {form.type === 'backend' && (
+                    <div>
+                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Profile</div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {([
+                          { id: 'load',     label: 'Load',     hint: 'Constant VUs' },
+                          { id: 'spike',    label: 'Spike',    hint: 'Traffic burst' },
+                          { id: 'capacity', label: 'Capacity', hint: 'Find breakpoint' },
+                          { id: 'soak',     label: 'Soak',     hint: 'Long steady-state' },
+                        ] as const).map(p => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => setForm(f => ({ ...f, profile: p.id }))}
+                            className={`py-2 px-3 rounded-control border text-left transition-colors ${
+                              form.profile === p.id ? 'border-ink-bd bg-surface' : 'border-border bg-surface hover:bg-hover'
+                            }`}
+                          >
+                            <div className="text-[12.5px] font-semibold">{p.label}</div>
+                            <div className="text-[10.5px] text-tx-4">{p.hint}</div>
+                          </button>
+                        ))}
                       </div>
                     </div>
-                    {form.type !== 'client-side' && (
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    {form.type === 'client-side' ? (
                       <div>
-                        <label className="block text-[11px] text-[#57606a] mb-1">Ramp-up <span className="text-[#8c959f]">(optional, e.g. 30s, 1m)</span></label>
-                        <input type="text" placeholder="30s" value={form.rampUp}
-                          onChange={e => setForm(f => ({ ...f, rampUp: e.target.value }))}
-                          className={inputCls}
-                        />
+                        <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Browser sessions</div>
+                        <input type="number" min={1} max={10} value={form.sessions}
+                          onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))} className={inputCls} />
                       </div>
-                    )}
-                    {form.type === 'backend' && (form.profile === 'spike' || form.profile === 'capacity') && (
+                    ) : (
                       <div>
-                        <label className="block text-[11px] text-[#57606a] mb-1">
-                          {form.profile === 'spike' ? 'Peak VUs (spike target)' : 'Max VUs (capacity ceiling)'}
-                        </label>
-                        <input type="number" min={form.vus + 1} max={500} value={form.peakVus}
-                          onChange={e => setForm(f => ({ ...f, peakVus: Number(e.target.value) }))}
-                          className={inputCls}
-                        />
-                      </div>
-                    )}
-
-                    {/* HTTP settings — backend/flow only */}
-                    {form.type !== 'client-side' && (
-                      <div className="pt-2 border-t border-[#eaeef2]">
-                        <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide mb-2">HTTP Settings</label>
-                        <div className="space-y-2">
-                          <label className="flex items-center gap-2 text-[12px] text-[#24292f] cursor-pointer">
-                            <input type="checkbox" checked={form.httpKeepAlive}
-                              onChange={e => setForm(f => ({ ...f, httpKeepAlive: e.target.checked }))}
-                              className="rounded-sm border-[#d0d7de]"
-                            />
-                            Keep-alive connections
-                          </label>
-                          <label className="flex items-center gap-2 text-[12px] text-[#24292f] cursor-pointer">
-                            <input type="checkbox" checked={form.httpDiscardBodies}
-                              onChange={e => setForm(f => ({ ...f, httpDiscardBodies: e.target.checked }))}
-                              className="rounded-sm border-[#d0d7de]"
-                            />
-                            Discard response bodies <span className="text-[#8c959f]">(faster, saves memory)</span>
-                          </label>
-                          <div>
-                            <label className="block text-[11px] text-[#57606a] mb-1">Request timeout <span className="text-[#8c959f]">(e.g. 30s, 1m)</span></label>
-                            <input type="text" placeholder="30s" value={form.httpTimeout}
-                              onChange={e => setForm(f => ({ ...f, httpTimeout: e.target.value }))}
-                              className={inputCls}
-                            />
-                          </div>
+                        <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">
+                          {form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Users'}
                         </div>
+                        <input type="number" min={1} max={100} value={form.vus}
+                          onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))} className={inputCls} />
                       </div>
                     )}
-
-                    {/* Custom headers — backend/browser only */}
-                    {form.type !== 'flow' && (
-                      <div className="pt-2 border-t border-[#eaeef2]">
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="block text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Custom Headers</label>
-                          <button type="button" onClick={() => setCustomHeaders(h => [...h, { key: '', value: '' }])} className="text-xs text-blue-600 hover:underline">+ add</button>
-                        </div>
-                        {customHeaders.map((h, i) => (
-                          <div key={i} className="flex gap-1 mb-1 items-center">
-                            <input
-                              type="text"
-                              placeholder="Header-Name"
-                              value={h.key}
-                              onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
-                              className="w-40 border border-[#d0d7de] rounded px-2 py-0.5 text-xs font-mono focus:outline-none focus:border-[#0969da]"
-                            />
-                            <span className="text-[#8c959f] text-xs">:</span>
-                            <input
-                              type="text"
-                              placeholder="value"
-                              value={h.value}
-                              onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
-                              className="flex-1 border border-[#d0d7de] rounded px-2 py-0.5 text-xs font-mono focus:outline-none focus:border-[#0969da]"
-                            />
-                            <button type="button" onClick={() => setCustomHeaders(hs => hs.filter((_, j) => j !== i))} className="text-[#8c959f] hover:text-[#cf222e] text-xs">✕</button>
-                          </div>
-                        ))}
-                        {customHeaders.length === 0 && (
-                          <p className="text-xs text-[#8c959f]">No custom headers. Sent with every request (e.g. API keys, auth tokens).</p>
-                        )}
-                      </div>
-                    )}
+                    <div>
+                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Duration</div>
+                      <select value={form.duration} onChange={e => setForm(f => ({ ...f, duration: e.target.value }))} className={inputCls}>
+                        {DURATION_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </div>
                   </div>
-                )}
-              </div>
+                  {form.type !== 'client-side' && (
+                    <div>
+                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Ramp-up <span className="normal-case font-normal text-tx-4">(optional, e.g. 30s, 1m)</span></div>
+                      <input type="text" placeholder="30s" value={form.rampUp} onChange={e => setForm(f => ({ ...f, rampUp: e.target.value }))} className={inputCls} />
+                    </div>
+                  )}
+                  {form.type === 'backend' && (form.profile === 'spike' || form.profile === 'capacity') && (
+                    <div>
+                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">
+                        {form.profile === 'spike' ? 'Peak VUs (spike target)' : 'Max VUs (capacity ceiling)'}
+                      </div>
+                      <input type="number" min={form.vus + 1} max={500} value={form.peakVus}
+                        onChange={e => setForm(f => ({ ...f, peakVus: Number(e.target.value) }))} className={inputCls} />
+                    </div>
+                  )}
 
-              {/* SLO thresholds */}
-              <div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowThresholds(v => !v)}
-                    className="flex items-center gap-1 text-[12px] text-[#57606a] hover:text-[#24292f] py-0.5"
-                  >
-                    <span className={`transition-transform inline-block text-[10px] ${showThresholds ? 'rotate-90' : ''}`}>▶</span>
-                    SLO thresholds
-                    {showThresholds && <span className="text-[11px] text-[#0969da] ml-1">active</span>}
-                  </button>
-                  {form.targetUrl && form.type !== 'flow' && (
-                    <button
-                      type="button"
-                      onClick={handleSuggestThresholds}
-                      disabled={suggestingThresholds}
-                      className="text-[11px] text-[#0969da] hover:underline disabled:opacity-50 font-mono"
-                      title="Analyse run history and suggest realistic SLO values"
-                    >
-                      {suggestingThresholds ? '⏳ Analysing…' : '✨ Suggest'}
-                    </button>
+                  {form.type !== 'client-side' && (
+                    <div className="pt-3 border-t border-line">
+                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-2">HTTP Settings</div>
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-[12.5px] text-tx cursor-pointer">
+                          <input type="checkbox" checked={form.httpKeepAlive} onChange={e => setForm(f => ({ ...f, httpKeepAlive: e.target.checked }))} className="rounded-sm border-border" />
+                          Keep-alive connections
+                        </label>
+                        <label className="flex items-center gap-2 text-[12.5px] text-tx cursor-pointer">
+                          <input type="checkbox" checked={form.httpDiscardBodies} onChange={e => setForm(f => ({ ...f, httpDiscardBodies: e.target.checked }))} className="rounded-sm border-border" />
+                          Discard response bodies <span className="text-tx-4">(faster, saves memory)</span>
+                        </label>
+                        <div>
+                          <div className="text-[11px] text-tx-3 mb-1">Request timeout <span className="text-tx-4">(e.g. 30s, 1m)</span></div>
+                          <input type="text" placeholder="30s" value={form.httpTimeout} onChange={e => setForm(f => ({ ...f, httpTimeout: e.target.value }))} className={inputCls} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {form.type !== 'flow' && (
+                    <div className="pt-3 border-t border-line">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">Custom Headers</div>
+                        <button type="button" onClick={() => setCustomHeaders(h => [...h, { key: '', value: '' }])} className="text-[11px] text-accent hover:underline">+ add</button>
+                      </div>
+                      {customHeaders.map((h, i) => (
+                        <div key={i} className="flex gap-1.5 mb-1.5 items-center">
+                          <input type="text" placeholder="Header-Name" value={h.key}
+                            onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                            className="w-40 border border-border rounded-control px-2.5 py-1 text-[11px] font-mono bg-surface focus:outline-none" />
+                          <span className="text-tx-4 text-[11px]">:</span>
+                          <input type="text" placeholder="value" value={h.value}
+                            onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                            className="flex-1 border border-border rounded-control px-2.5 py-1 text-[11px] font-mono bg-surface focus:outline-none" />
+                          <button type="button" onClick={() => setCustomHeaders(hs => hs.filter((_, j) => j !== i))} className="text-tx-4 hover:text-red-fg text-[11px]">✕</button>
+                        </div>
+                      ))}
+                      {customHeaders.length === 0 && <p className="text-[11px] text-tx-4">No custom headers. Sent with every request (e.g. API keys, auth tokens).</p>}
+                    </div>
                   )}
                 </div>
-                {thresholdSuggestionNote && (
-                  <p className="text-[11px] text-[#57606a] mt-1 font-mono">{thresholdSuggestionNote}</p>
-                )}
-                {showThresholds && (
-                  <div className="mt-2 grid grid-cols-3 gap-2 p-3 bg-[#f6f8fa] rounded-md border border-[#d0d7de]">
-                    {(form.type === 'client-side' ? [
-                      { key: 'lcp',  label: 'LCP ms'  },
-                      { key: 'fcp',  label: 'FCP ms'  },
-                      { key: 'ttfb', label: 'TTFB ms' },
-                      { key: 'cls',  label: 'CLS'     },
-                      { key: 'inp',  label: 'INP ms'  },
-                      { key: 'tbt',  label: 'TBT ms'  },
-                    ] : [
-                      { key: 'p95',             label: 'p95 ms'     },
-                      { key: 'avg',             label: 'Avg ms'     },
-                      { key: 'errorRate',       label: 'Err %'      },
-                      { key: 'serverErrorRate', label: '5xx err %'  },
-                      { key: 'timeoutRate',     label: 'Timeout %'  },
-                    ] as const).map(({ key, label }) => (
-                      <div key={key}>
-                        <label className="block text-[10px] text-[#57606a] mb-1">{label} max</label>
-                        <input
-                          type="number" min={0}
-                          value={(thresholds as unknown as Record<string, string>)[key]}
-                          onChange={e => setThresholds(t => ({ ...t, [key]: e.target.value }))}
-                          className={inputCls}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {showThresholds && form.targetUrl && (
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      onClick={handlePreviewThresholds}
-                      disabled={previewingThresholds}
-                      className="text-[11px] text-[#0969da] hover:underline disabled:opacity-50 font-mono"
-                      title="Check these thresholds against the most recent completed run for this URL"
-                    >
-                      {previewingThresholds ? '⏳ Checking…' : '👁 Preview against last run'}
-                    </button>
-                    {thresholdPreviewError && (
-                      <p className="text-[11px] text-[#cf222e] mt-1 font-mono">{thresholdPreviewError}</p>
-                    )}
-                    {thresholdPreview && !thresholdPreview.available && (
-                      <p className="text-[11px] text-[#57606a] mt-1 font-mono">No completed run found for this URL yet.</p>
-                    )}
-                    {thresholdPreview?.available && (
-                      <div className={`mt-1 p-2 rounded-md border text-[11px] font-mono ${
-                        thresholdPreview.perfStatus === 'failed' ? 'bg-[#fff0f0] border-[#cf222e]/40 text-[#cf222e]'
-                        : thresholdPreview.perfStatus === 'degraded' ? 'bg-[#fff8c5] border-[#9a6700]/40 text-[#9a6700]'
-                        : 'bg-[#dafbe1] border-[#1f883d]/40 text-[#1f883d]'
-                      }`}>
-                        <p className="font-semibold">
-                          {thresholdPreview.perfStatus === 'failed' ? '✗ Would fail' : thresholdPreview.perfStatus === 'degraded' ? '⚠ Degraded' : '✓ Would pass'}
-                        </p>
-                        {thresholdPreview.thresholdViolations && thresholdPreview.thresholdViolations.length > 0 && (
-                          <ul className="list-disc list-inside mt-1">
-                            {thresholdPreview.thresholdViolations.map(v => <li key={v}>{v}</li>)}
-                          </ul>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {error && <p className="text-[#cf222e] text-[12px]">{error}</p>}
+              )}
             </div>
 
-            {/* Action buttons */}
+            {/* SLO thresholds */}
+            <div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setShowThresholds(v => !v)} className="flex items-center gap-1.5 text-[12.5px] text-tx-3 hover:text-tx py-0.5">
+                  <span className={`transition-transform inline-block text-[10px] ${showThresholds ? 'rotate-90' : ''}`}>▶</span>
+                  SLO thresholds
+                  {showThresholds && <span className="text-[11px] text-accent ml-1">active</span>}
+                </button>
+                {form.targetUrl && form.type !== 'flow' && (
+                  <button type="button" onClick={handleSuggestThresholds} disabled={suggestingThresholds} className="text-[11px] text-accent hover:underline disabled:opacity-50 font-mono" title="Analyse run history and suggest realistic SLO values">
+                    {suggestingThresholds ? '⏳ Analysing…' : '✨ Suggest'}
+                  </button>
+                )}
+              </div>
+              {thresholdSuggestionNote && <p className="text-[11px] text-tx-4 mt-1 font-mono">{thresholdSuggestionNote}</p>}
+              {showThresholds && (
+                <div className="mt-2.5 grid grid-cols-3 gap-2.5 p-4 bg-bg rounded-control border border-border">
+                  {(form.type === 'client-side' ? [
+                    { key: 'lcp',  label: 'LCP ms'  }, { key: 'fcp',  label: 'FCP ms'  }, { key: 'ttfb', label: 'TTFB ms' },
+                    { key: 'cls',  label: 'CLS'     }, { key: 'inp',  label: 'INP ms'  }, { key: 'tbt',  label: 'TBT ms'  },
+                  ] : [
+                    { key: 'p95', label: 'p95 ms' }, { key: 'avg', label: 'Avg ms' }, { key: 'errorRate', label: 'Err %' },
+                    { key: 'serverErrorRate', label: '5xx err %' }, { key: 'timeoutRate', label: 'Timeout %' },
+                  ] as const).map(({ key, label }) => (
+                    <div key={key}>
+                      <div className="text-[10.5px] text-tx-4 mb-1">{label} max</div>
+                      <input type="number" min={0} value={(thresholds as unknown as Record<string, string>)[key]}
+                        onChange={e => setThresholds(t => ({ ...t, [key]: e.target.value }))} className={inputCls} />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showThresholds && form.targetUrl && (
+                <div className="mt-2">
+                  <button type="button" onClick={handlePreviewThresholds} disabled={previewingThresholds} className="text-[11px] text-accent hover:underline disabled:opacity-50 font-mono" title="Check these thresholds against the most recent completed run for this URL">
+                    {previewingThresholds ? '⏳ Checking…' : '👁 Preview against last run'}
+                  </button>
+                  {thresholdPreviewError && <p className="text-[11px] text-red-fg mt-1 font-mono">{thresholdPreviewError}</p>}
+                  {thresholdPreview && !thresholdPreview.available && <p className="text-[11px] text-tx-4 mt-1 font-mono">No completed run found for this URL yet.</p>}
+                  {thresholdPreview?.available && (
+                    <div className={`mt-1 p-2.5 rounded-control border text-[11px] font-mono ${
+                      thresholdPreview.perfStatus === 'failed' ? 'bg-red-bg border-red-fg/40 text-red-fg'
+                      : thresholdPreview.perfStatus === 'degraded' ? 'bg-amber-bg border-amber-fg/40 text-amber-fg'
+                      : 'bg-green-bg border-green-fg/40 text-green-fg'
+                    }`}>
+                      <p className="font-semibold">
+                        {thresholdPreview.perfStatus === 'failed' ? '✗ Would fail' : thresholdPreview.perfStatus === 'degraded' ? '⚠ Degraded' : '✓ Would pass'}
+                      </p>
+                      {thresholdPreview.thresholdViolations && thresholdPreview.thresholdViolations.length > 0 && (
+                        <ul className="list-disc list-inside mt-1">{thresholdPreview.thresholdViolations.map(v => <li key={v}>{v}</li>)}</ul>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {error && <p className="text-red-fg text-[12.5px]">{error}</p>}
+
             {isViewer ? (
-              <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] text-[12px] text-[#57606a]">
-                Viewers cannot run tests or save presets.
-              </div>
+              <p className="text-[12.5px] text-tx-4">Viewers cannot run tests or save presets.</p>
             ) : (
-              <div className="px-4 py-3 bg-[#f6f8fa] border-t border-[#d0d7de] flex gap-2">
-                <button
-                  onClick={handleSubmit}
-                  disabled={loading}
-                  data-run-btn
-                  className="flex-1 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {loading ? 'Creating…' : '▶ Run Test'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSavePreset}
-                  disabled={savingPreset}
-                  className="px-3 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] disabled:opacity-50 transition-colors"
-                >
-                  {savingPreset ? 'Saving…' : 'Save preset'}
-                </button>
-              </div>
+              <button onClick={handleSubmit} disabled={loading} data-run-btn
+                className="bg-accent hover:bg-accent-hover text-white border-none rounded-[13px] py-3.5 text-[15px] font-bold font-sans flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50 transition-colors">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="#fff"><path d="M4 3l9 5-9 5z" /></svg> {loading ? 'Creating…' : 'Run test'}
+              </button>
+            )}
+            {!isViewer && (
+              <button type="button" onClick={handleSavePreset} disabled={savingPreset} className="text-[12.5px] text-tx-3 hover:text-tx self-start disabled:opacity-50">
+                {savingPreset ? 'Saving…' : 'Save as preset'}
+              </button>
             )}
             {presetNameSuggestion && (
-              <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] text-[#57606a] font-mono">✓ Saved as: <strong>{presetNameSuggestion.name}</strong></span>
-                {presetNameSuggestion.tags.map(tag => (
-                  <span key={tag} className="px-1.5 py-0.5 bg-[#eaeef2] text-[#57606a] rounded text-[10px] font-mono">{tag}</span>
-                ))}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] text-tx-4 font-mono">✓ Saved as: <strong>{presetNameSuggestion.name}</strong></span>
+                {presetNameSuggestion.tags.map(tag => <span key={tag} className="px-1.5 py-0.5 bg-bg text-tx-3 rounded-chip text-[10px] font-mono">{tag}</span>)}
               </div>
             )}
           </div>
-        </div>
 
-        {/* ── Right: Quick stats panel ── */}
-        <div className="hidden lg:block w-72 flex-shrink-0">
-          <div className="mb-3">
-            <h2 className="text-[15px] font-semibold text-[#24292f]">&nbsp;</h2>
+          {/* Live + recent */}
+          <div className="flex flex-col gap-5">
+            {active.length > 0
+              ? <LiveCard test={active[0]} />
+              : (
+                <div className="rounded-card p-5.5 text-tx-4 text-[13px] border border-dashed border-dashed">
+                  No tests are running right now.
+                </div>
+              )}
+            <RecentRuns recent={recent} />
           </div>
-          <QuickStatsPanel active={active} recent={recent} />
-
-          {/* Presets quick-access */}
-          {presets.length > 0 && (
-            <div className="mt-3 bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-              <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
-                <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Presets</span>
-              </div>
-              <div className="divide-y divide-[#eaeef2]">
-                {presets.slice(0, 5).map(t => (
-                  <div key={t.id} className="flex items-center justify-between px-3 py-2">
-                    <span className="font-mono text-[12px] text-[#24292f] truncate mr-2">{t.name}</span>
-                    <button
-                      onClick={() => handleLoadPreset(t.id)}
-                      className="text-[11px] text-[#0969da] hover:underline flex-shrink-0"
-                    >
-                      [Use]
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
-
       </div>
     </div>
   );
@@ -1111,7 +1047,7 @@ function HomeContent() {
 
 export default function Home() {
   return (
-    <Suspense fallback={<div className="p-6 text-[#57606a] text-[13px]">Loading…</div>}>
+    <Suspense fallback={<div className="p-6 text-tx-4 text-[13px]">Loading…</div>}>
       <HomeContent />
     </Suspense>
   );

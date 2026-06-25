@@ -128,29 +128,29 @@ describe('getVitalStatus', () => {
 
 describe('lhColor', () => {
   it('returns green for scores >= 90', () => {
-    expect(lhColor(90)).toBe('#1f883d');
-    expect(lhColor(100)).toBe('#1f883d');
+    expect(lhColor(90)).toBe('#16a34a');
+    expect(lhColor(100)).toBe('#16a34a');
   });
   it('returns amber for scores between 50 and 89', () => {
-    expect(lhColor(89)).toBe('#9a6700');
-    expect(lhColor(50)).toBe('#9a6700');
+    expect(lhColor(89)).toBe('#ca8a04');
+    expect(lhColor(50)).toBe('#ca8a04');
   });
   it('returns red for scores below 50', () => {
-    expect(lhColor(49)).toBe('#cf222e');
-    expect(lhColor(0)).toBe('#cf222e');
+    expect(lhColor(49)).toBe('#dc2626');
+    expect(lhColor(0)).toBe('#dc2626');
   });
 });
 
 describe('lhCls', () => {
   it('returns the green classes for scores >= 90', () => {
-    expect(lhCls(90)).toBe('text-[#1a7f37] bg-[#dafbe1]');
+    expect(lhCls(90)).toBe('text-green-fg-2 bg-green-bg');
   });
   it('returns the amber classes for scores between 50 and 89', () => {
-    expect(lhCls(50)).toBe('text-[#9a6700] bg-[#fff8c5]');
-    expect(lhCls(89)).toBe('text-[#9a6700] bg-[#fff8c5]');
+    expect(lhCls(50)).toBe('text-amber-badge-fg bg-amber-bg');
+    expect(lhCls(89)).toBe('text-amber-badge-fg bg-amber-bg');
   });
   it('returns the red classes for scores below 50', () => {
-    expect(lhCls(49)).toBe('text-[#cf222e] bg-[#ffebe9]');
+    expect(lhCls(49)).toBe('text-red-badge-fg bg-red-bg');
   });
 });
 

@@ -13,18 +13,19 @@ interface StepMetric {
   requestsFailed: number;
 }
 
-const COLORS = ['#0969da', '#1f883d', '#9a6700', '#7c3aed', '#cf222e', '#0891b2', '#c2410c'];
+const COLORS = ['#ff5a2c', '#16a34a', '#ca8a04', '#7c3aed', '#dc2626', '#0891b2', '#c2410c'];
 
 const TOOLTIP_STYLE = {
-  background: '#fff',
-  border: '1px solid #d0d7de',
-  borderRadius: '6px',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: '8px',
   fontSize: 11,
-  fontFamily: 'monospace',
+  fontFamily: "'JetBrains Mono', monospace",
   boxShadow: 'none',
+  color: 'var(--tx)',
 };
 
-const TICK = { fill: '#57606a', fontSize: 11, fontFamily: 'monospace' };
+const TICK = { fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
 
 export default function FlowStepChart({ steps }: { steps: StepMetric[] }) {
   const data = steps.map(s => ({
@@ -36,20 +37,20 @@ export default function FlowStepChart({ steps }: { steps: StepMetric[] }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Response Time per Step</span>
-        <span className="text-[10px] font-mono text-[#8c959f]">ms</span>
+      <div className="flex items-center justify-between mb-2.5">
+        <span className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">Response Time per Step</span>
+        <span className="text-[10px] font-mono text-tx-4">ms</span>
       </div>
       <ResponsiveContainer width="100%" height={200}>
         <BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke="#eaeef2" vertical={false} />
+          <CartesianGrid stroke="#f2ede2" vertical={false} />
           <XAxis dataKey="name" tick={TICK} axisLine={false} tickLine={false} />
           <YAxis tick={TICK} unit="ms" width={50} axisLine={false} tickLine={false} />
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
             formatter={(v, name) => [`${v}ms`, name === 'avg' ? 'Avg' : 'p95']}
             labelFormatter={(_, payload) => payload?.[0]?.payload?.fullName ?? ''}
-            cursor={{ fill: '#f6f8fa' }}
+            cursor={{ fill: 'var(--hover)' }}
           />
           <Legend
             wrapperStyle={{ fontSize: 11, fontFamily: 'monospace' }}

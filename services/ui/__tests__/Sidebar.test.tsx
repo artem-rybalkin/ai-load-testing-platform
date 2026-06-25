@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../app/components/Sidebar';
 import type { SessionUser } from '../lib/api';
@@ -20,10 +20,8 @@ const mockToggleDark   = vi.hoisted(() => vi.fn());
 const mockUseDarkMode  = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/useDarkMode', () => ({ useDarkMode: mockUseDarkMode }));
 
-// Defaults to desktop (lg+) width so existing tests exercise the expand/collapse-by-choice
-// behavior; tablet-width (md-only) tests below override this to simulate < lg.
-const mockUseMediaQuery = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/useMediaQuery', () => ({ useMediaQuery: mockUseMediaQuery }));
+const mockGetActiveTests = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/api', () => ({ getActiveTests: mockGetActiveTests }));
 
 const baseUser: SessionUser = {
   id: 'u1', email: 'alice@example.com', name: 'Alice',
@@ -31,15 +29,14 @@ const baseUser: SessionUser = {
   currentTeamId: 't1', role: 'admin', orgs: [],
 };
 
-const renderSidebar = () => render(<MemoryRouter><Sidebar /></MemoryRouter>);
+const renderSidebar = (open = true) => render(<MemoryRouter><Sidebar open={open} onNavigate={() => {}} /></MemoryRouter>);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockLogout.mockResolvedValue(undefined);
   mockUseDarkMode.mockReturnValue({ dark: false, toggle: mockToggleDark });
-  mockUseMediaQuery.mockReturnValue(true);
+  mockGetActiveTests.mockResolvedValue({ active: [] });
   mockUseAuth.mockReturnValue({ user: baseUser, logout: mockLogout, switchTeam: mockSwitchTeam });
-  try { localStorage.clear(); } catch {}
 });
 afterEach(() => cleanup());
 
@@ -95,7 +92,7 @@ describe('Sidebar', () => {
   it('signing out calls logout() and navigates to /login', async () => {
     renderSidebar();
     fireEvent.click(screen.getByRole('button', { name: /sign out/i }));
-    await vi.waitFor(() => expect(mockLogout).toHaveBeenCalled());
+    await waitFor(() => expect(mockLogout).toHaveBeenCalled());
     expect(mockNavigate).toHaveBeenCalledWith('/login');
   });
 
@@ -105,36 +102,20 @@ describe('Sidebar', () => {
     expect(mockToggleDark).toHaveBeenCalled();
   });
 
-  it('collapses and expands the sidebar, persisting to localStorage', () => {
-    renderSidebar();
-    const collapseBtn = screen.getByTitle('Collapse sidebar');
-    fireEvent.click(collapseBtn);
-    expect(localStorage.getItem('sidebar-open')).toBe('false');
-    expect(screen.getByTitle('Expand sidebar')).toBeInTheDocument();
-  });
-
   it('does not render the user/logout section when no user is present', () => {
     mockUseAuth.mockReturnValue({ user: null, logout: mockLogout, switchTeam: mockSwitchTeam });
     renderSidebar();
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument();
   });
-});
 
-describe('Sidebar — tablet width (md: but below lg:)', () => {
-  it('forces the collapsed icon-rail and hides the expand/collapse toggle', () => {
-    mockUseMediaQuery.mockReturnValue(false);
+  it('shows the live-run count from getActiveTests', async () => {
+    mockGetActiveTests.mockResolvedValue({ active: [{ test_id: 't1', type: 'backend', target_url: 'https://a.com' }] });
     renderSidebar();
-    expect(screen.queryByTitle('Collapse sidebar')).not.toBeInTheDocument();
-    expect(screen.queryByTitle('Expand sidebar')).not.toBeInTheDocument();
-    expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument();
-    // Nav links remain reachable (accessible name still includes the sr-only label)
-    expect(screen.getByRole('link', { name: /new test/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('1 LIVE RUN')).toBeInTheDocument());
   });
 
-  it('ignores a stored lg+ "open" preference when below lg', () => {
-    localStorage.setItem('sidebar-open', 'true');
-    mockUseMediaQuery.mockReturnValue(false);
-    renderSidebar();
-    expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument();
+  it('hides the drawer (mobile) when open is false', () => {
+    const { container } = renderSidebar(false);
+    expect(container.querySelector('aside')).toHaveClass('hidden');
   });
 });

@@ -5,11 +5,11 @@ import { compareResults, TestResult } from '@/lib/api';
 const PerfBadge = ({ status }: { status?: string }) => {
   if (!status) return null;
   const cls: Record<string, string> = {
-    passed:  'bg-[#dafbe1] text-[#1a7f37]',
-    degraded:'bg-[#fff8c5] text-[#9a6700]',
-    failed:  'bg-[#ffebe9] text-[#cf222e]',
+    passed:   'bg-green-bg text-green-fg-2',
+    degraded: 'bg-amber-bg text-amber-badge-fg',
+    failed:   'bg-red-bg text-red-badge-fg',
   };
-  return <span className={`px-1.5 rounded text-[10px] font-mono font-medium ${cls[status] ?? 'bg-[#f6f8fa] text-[#57606a]'}`}>{status}</span>;
+  return <span className={`px-2 rounded-chip text-[10px] font-mono font-medium ${cls[status] ?? 'bg-surface-2 text-tx-3'}`}>{status}</span>;
 };
 
 const MetricRow = ({ label, a, b, unit = '' }: { label: string; a: number; b: number; unit?: string }) => {
@@ -17,11 +17,11 @@ const MetricRow = ({ label, a, b, unit = '' }: { label: string; a: number; b: nu
   const pct = a !== 0 ? ((diff / a) * 100).toFixed(1) : '—';
   const worse = diff > 0;
   return (
-    <tr className="border-b border-[#eaeef2] hover:bg-[#f6f8fa]">
-      <td className="py-2 px-3 text-[12px] text-[#57606a]">{label}</td>
-      <td className="py-2 px-3 text-[12px] font-mono font-medium text-center text-[#24292f]">{Math.round(a)}{unit}</td>
-      <td className="py-2 px-3 text-[12px] font-mono font-medium text-center text-[#24292f]">{Math.round(b)}{unit}</td>
-      <td className={`py-2 px-3 text-[12px] font-mono text-center font-semibold ${diff === 0 ? 'text-[#8c959f]' : worse ? 'text-[#cf222e]' : 'text-[#1f883d]'}`}>
+    <tr className="border-b border-border-3 hover:bg-hover">
+      <td className="py-2.5 px-4 text-[12.5px] text-tx-3">{label}</td>
+      <td className="py-2.5 px-4 font-mono text-[12.5px] font-medium text-center">{Math.round(a)}{unit}</td>
+      <td className="py-2.5 px-4 font-mono text-[12.5px] font-medium text-center">{Math.round(b)}{unit}</td>
+      <td className={`py-2.5 px-4 font-mono text-[12.5px] text-center font-semibold ${diff === 0 ? 'text-tx-4' : worse ? 'text-red-fg' : 'text-green-fg'}`}>
         {diff === 0 ? '=' : `${worse ? '+' : ''}${pct}%`}
       </td>
     </tr>
@@ -59,10 +59,10 @@ function CompareContent() {
   }, [a, b]);
 
   if (error) return (
-    <div className="flex items-center justify-center h-40 text-[#cf222e] text-[13px]">{error}</div>
+    <div className="flex items-center justify-center h-40 text-red-fg text-[13px]">{error}</div>
   );
   if (!results) return (
-    <div className="flex items-center justify-center h-40 text-[#57606a] text-[13px]">Loading…</div>
+    <div className="flex items-center justify-center h-40 text-tx-4 text-[13px]">Loading…</div>
   );
 
   const { resultA, resultB } = results;
@@ -70,47 +70,52 @@ function CompareContent() {
   const rows = isBackend ? backendMetrics : clientMetrics;
 
   return (
-    <div className="p-4 lg:p-6 max-w-3xl">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-[15px] font-semibold text-[#24292f]">Compare Runs</h1>
-        <Link to="/results" className="text-[12px] text-[#0969da] hover:underline">← All results</Link>
+    <div>
+      <div className="px-4 md:px-9 pt-7.5 flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— History</div>
+          <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Compare Runs</h1>
+        </div>
+        <Link to="/results" className="text-[13px] text-accent hover:underline">← All results</Link>
       </div>
 
-      <div className="bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="bg-[#f6f8fa] border-b border-[#d0d7de]">
-              <th className="py-2 px-3 text-left text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Metric</th>
-              <th className="py-2 px-3 text-center text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
-                A
-                <div className="text-[10px] font-normal font-mono text-[#8c959f] mt-0.5">{new Date(resultA.created_at).toLocaleString()}</div>
-                <div className="mt-1"><PerfBadge status={resultA.perf_status} /></div>
-              </th>
-              <th className="py-2 px-3 text-center text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">
-                B
-                <div className="text-[10px] font-normal font-mono text-[#8c959f] mt-0.5">{new Date(resultB.created_at).toLocaleString()}</div>
-                <div className="mt-1"><PerfBadge status={resultB.perf_status} /></div>
-              </th>
-              <th className="py-2 px-3 text-center text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Δ A→B</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ key, label, unit }) => (
-              <MetricRow
-                key={key}
-                label={label}
-                a={(resultA.metrics[key] ?? 0) as number}
-                b={(resultB.metrics[key] ?? 0) as number}
-                unit={unit}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="px-4 md:px-9 py-6 max-w-3xl">
+        <div className="bg-surface border border-border rounded-card overflow-hidden overflow-x-auto">
+          <table className="w-full min-w-[480px]">
+            <thead>
+              <tr className="bg-surface-2 border-b border-border">
+                <th className="py-3 px-4 text-left font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">Metric</th>
+                <th className="py-3 px-4 text-center font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">
+                  A
+                  <div className="text-[10px] font-normal font-mono text-tx-4 mt-0.5">{new Date(resultA.created_at).toLocaleString()}</div>
+                  <div className="mt-1"><PerfBadge status={resultA.perf_status} /></div>
+                </th>
+                <th className="py-3 px-4 text-center font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">
+                  B
+                  <div className="text-[10px] font-normal font-mono text-tx-4 mt-0.5">{new Date(resultB.created_at).toLocaleString()}</div>
+                  <div className="mt-1"><PerfBadge status={resultB.perf_status} /></div>
+                </th>
+                <th className="py-3 px-4 text-center font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">Δ A→B</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ key, label, unit }) => (
+                <MetricRow
+                  key={key}
+                  label={label}
+                  a={(resultA.metrics[key] ?? 0) as number}
+                  b={(resultB.metrics[key] ?? 0) as number}
+                  unit={unit}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-      <div className="mt-3 flex gap-4">
-        <Link to={`/results/${resultA.test_id}`} className="text-[12px] text-[#0969da] hover:underline">View result A →</Link>
-        <Link to={`/results/${resultB.test_id}`} className="text-[12px] text-[#0969da] hover:underline">View result B →</Link>
+        <div className="mt-3.5 flex gap-4">
+          <Link to={`/results/${resultA.test_id}`} className="text-[12.5px] text-accent hover:underline">View result A →</Link>
+          <Link to={`/results/${resultB.test_id}`} className="text-[12.5px] text-accent hover:underline">View result B →</Link>
+        </div>
       </div>
     </div>
   );
@@ -118,7 +123,7 @@ function CompareContent() {
 
 export default function ComparePage() {
   return (
-    <Suspense fallback={<main className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-gray-500">Loading...</p></main>}>
+    <Suspense fallback={<main className="min-h-screen bg-bg flex items-center justify-center"><p className="text-tx-4">Loading...</p></main>}>
       <CompareContent />
     </Suspense>
   );

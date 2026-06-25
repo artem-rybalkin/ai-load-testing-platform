@@ -3,13 +3,12 @@ import { ResultsSocketProvider } from '@/lib/ResultsSocketContext';
 import { HealthProvider } from '@/lib/HealthContext';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import Sidebar from '@/app/components/Sidebar';
-import BottomNav from '@/app/components/BottomNav';
 import TopBar from '@/app/components/TopBar';
 import ActiveTests from '@/app/components/ActiveTests';
 import WorkerHealth from '@/app/components/WorkerHealth';
 import SystemHealth from '@/app/components/SystemHealth';
 import AIStatus from '@/app/components/AIStatus';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useState } from 'react';
 
 const HomePage         = lazy(() => import('@/app/page'));
 const ChatPage         = lazy(() => import('@/app/chat/page'));
@@ -32,22 +31,26 @@ function AuthGate() {
 }
 
 function RootLayout() {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
-    <div className="flex min-h-screen">
-      <Sidebar />
+    <div className="flex min-h-screen bg-bg text-tx font-sans">
+      {menuOpen && (
+        <div onClick={() => setMenuOpen(false)} className="fixed inset-0 z-40 bg-black/45 md:hidden" />
+      )}
+      <Sidebar open={menuOpen} onNavigate={() => setMenuOpen(false)} />
       <div className="flex-1 min-w-0 flex flex-col">
-        <TopBar />
+        <TopBar onMenuClick={() => setMenuOpen(true)} />
         <ActiveTests />
         <WorkerHealth />
         <AIStatus />
         <SystemHealth />
-        <main className="flex-1 pb-14 md:pb-0">
+        <main className="flex-1">
           <Suspense fallback={null}>
             <Outlet />
           </Suspense>
         </main>
       </div>
-      <BottomNav />
     </div>
   );
 }

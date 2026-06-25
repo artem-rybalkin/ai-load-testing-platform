@@ -185,7 +185,7 @@ describe('WorkerHealth — Gemini quota chip', () => {
     });
     renderWithHealth(<WorkerHealth />);
     const chip = await waitFor(() => screen.getByText(/100\/100 today/));
-    expect(chip.className).toContain('text-[#cf222e]');
+    expect(chip.className).toContain('text-red-fg');
   });
 
   it('does not render anything when no team and no workers', async () => {

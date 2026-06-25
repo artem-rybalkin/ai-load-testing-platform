@@ -15,42 +15,63 @@ function relTime(iso: string) {
 
 const StatusDot = ({ status, perf }: { status: string; perf?: string }) => {
   const cls =
-    perf === 'passed'  ? 'bg-[#1f883d]' :
-    perf === 'failed'  ? 'bg-[#cf222e]' :
-    perf === 'degraded'? 'bg-[#9a6700]' :
-    status === 'running' || status === 'pending' ? 'bg-[#0969da] animate-pulse' :
-    status === 'failed' || status === 'cancelled' ? 'bg-[#cf222e]' :
-    'bg-[#8c959f]';
-  return <span className={`w-2 h-2 rounded-full inline-block flex-shrink-0 ${cls}`} />;
+    perf === 'passed'  ? 'bg-status-pass' :
+    perf === 'failed'  ? 'bg-status-fail' :
+    perf === 'degraded'? 'bg-status-slow' :
+    status === 'running' || status === 'pending' ? 'bg-live pulse-dot' :
+    status === 'failed' || status === 'cancelled' ? 'bg-status-fail' :
+    'bg-tx-5';
+  return <span className={`w-2.25 h-2.25 rounded-full inline-block flex-shrink-0 ${cls}`} />;
 };
 
-const TypeTag = ({ type }: { type: string }) => {
-  const cls =
-    type === 'backend'   ? 'text-[#0969da] border-[#c8e1ff] bg-[#f1f8ff]' :
-    type === 'flow'      ? 'text-[#4338ca] border-[#c7d2fe] bg-[#eef2ff]' :
-                          'text-[#7c3aed] border-[#e9d5ff] bg-[#faf5ff]';
-  return (
-    <span className={`inline-block px-1.5 py-0 border rounded text-[10px] font-mono ${cls}`}>
-      {type}
-    </span>
-  );
+const TYPE_CLS: Record<string, string> = {
+  backend: 'text-accent bg-orange-bg border-orange-bd',
+  flow: 'text-indigo-fg bg-indigo-bg border-indigo-bd',
+  'client-side': 'text-purple-fg bg-purple-bg border-purple-bd',
+};
+const TYPE_LABEL: Record<string, string> = { backend: 'backend', 'client-side': 'browser', flow: 'flow' };
+
+const TypeTag = ({ type }: { type: string }) => (
+  <span className={`inline-block px-2 py-0.5 border rounded-chip text-[11px] font-mono ${TYPE_CLS[type] ?? TYPE_CLS.backend}`}>
+    {TYPE_LABEL[type] ?? type}
+  </span>
+);
+
+const STATUS_BADGE_CLS: Record<string, string> = {
+  LIVE: 'text-green-fg-2 bg-green-bg',
+  PASS: 'text-green-fg-2 bg-green-bg',
+  SLOW: 'text-amber-badge-fg bg-amber-bg',
+  FAIL: 'text-red-badge-fg bg-red-bg',
 };
 
-const PerfTag = ({ status }: { status: string }) => {
-  const cls =
-    status === 'passed'  ? 'bg-[#dafbe1] text-[#1a7f37]' :
-    status === 'failed'  ? 'bg-[#ffebe9] text-[#cf222e]' :
-                          'bg-[#fff8c5] text-[#9a6700]';
-  return (
-    <span className={`inline-block px-1.5 rounded text-[10px] font-mono ${cls}`}>{status}</span>
-  );
-};
-
-function getMainMetric(r: TestResult) {
-  if (!r.metrics) return null;
-  if (r.type === 'client-side') return `LCP: ${Math.round(r.metrics.lcp ?? 0)}ms · TTFB: ${Math.round(r.metrics.ttfb ?? 0)}ms`;
-  return `p95: ${Math.round(r.metrics.p95ResponseTime ?? 0)}ms · ${(r.metrics.rps ?? 0).toFixed(1)} rps`;
+function statusBadge(r: TestResult): string {
+  if (r.status === 'running' || r.status === 'pending') return 'LIVE';
+  if (r.perf_status === 'passed') return 'PASS';
+  if (r.perf_status === 'degraded') return 'SLOW';
+  if (r.perf_status === 'failed') return 'FAIL';
+  return r.status.toUpperCase();
 }
+
+function p95Value(r: TestResult): string {
+  if (!r.metrics) return '—';
+  if (r.type === 'client-side') return r.metrics.lcp != null ? `${Math.round(r.metrics.lcp)}ms` : '—';
+  return r.metrics.p95ResponseTime != null ? `${Math.round(r.metrics.p95ResponseTime)}ms` : '—';
+}
+
+function errValue(r: TestResult): string {
+  if (!r.metrics) return '—';
+  if (r.type === 'client-side') return r.metrics.jsErrors != null ? `${r.metrics.jsErrors} errs` : '—';
+  const { requestsTotal, requestsFailed } = r.metrics as { requestsTotal?: number; requestsFailed?: number };
+  if (!requestsTotal) return '—';
+  return `${(((requestsFailed ?? 0) / requestsTotal) * 100).toFixed(2)}%`;
+}
+
+const DATE_RANGES = [
+  { id: 'all', label: 'All time', days: null },
+  { id: '1', label: 'Last 24 hours', days: 1 },
+  { id: '7', label: 'Last 7 days', days: 7 },
+  { id: '30', label: 'Last 30 days', days: 30 },
+] as const;
 
 export default function ResultsPage() {
   const [results, setResults] = useState<TestResult[]>([]);
@@ -58,6 +79,9 @@ export default function ResultsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'backend' | 'client-side' | 'flow'>('all');
+  const [dateRange, setDateRange] = useState<typeof DATE_RANGES[number]['id']>('all');
   const navigate = useNavigate();
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -99,166 +123,153 @@ export default function ResultsPage() {
     );
   };
 
+  const rangeDays = DATE_RANGES.find(d => d.id === dateRange)?.days ?? null;
+  const filtered = results.filter(r => {
+    if (typeFilter !== 'all' && r.type !== typeFilter) return false;
+    if (search && !r.target_url.toLowerCase().includes(search.toLowerCase())) return false;
+    if (rangeDays !== null && Date.now() - new Date(r.created_at).getTime() > rangeDays * 86_400_000) return false;
+    return true;
+  });
+
   return (
-    <div className="p-4 lg:p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-[15px] font-semibold text-[#24292f]">Results</h1>
+    <div>
+      <div className="px-4 md:px-9 pt-7.5 flex items-start justify-between flex-wrap gap-3.5">
+        <div>
+          <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— History</div>
+          <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Results</h1>
+        </div>
         <div className="flex items-center gap-2">
-          {selected.length === 1 && (
-            <span className="text-[12px] text-[#57606a]">Select one more to compare</span>
-          )}
+          {selected.length === 1 && <span className="text-[12.5px] text-tx-4">Select one more to compare</span>}
           {selected.length === 2 && (
             <button
               onClick={() => navigate(`/results/compare?a=${selected[0]}&b=${selected[1]}`)}
-              className="px-3 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[12px] font-medium transition-colors"
+              className="border border-border bg-surface hover:bg-hover text-tx-2 rounded-control px-3.5 py-2 text-[12.5px] font-medium transition-colors"
             >
               Compare selected ({selected.length}/2)
             </button>
           )}
-          <Link
-            to="/"
-            className="px-3 py-1.5 bg-[#1f883d] hover:bg-[#1a7f37] text-white rounded-md text-[12px] font-medium transition-colors"
-          >
-            + New Test
-          </Link>
+          <Link to="/" className="flex items-center gap-1.5 bg-accent hover:bg-accent-hover text-white rounded-control px-4 py-2.75 text-[13.5px] font-bold transition-colors">+ New test</Link>
         </div>
       </div>
 
-      {loading ? (
-        <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center text-[13px] text-[#57606a]">Loading…</div>
-      ) : results.length === 0 ? (
-        <div className="bg-white border border-[#d0d7de] rounded-md p-8 text-center">
-          <p className="text-[#57606a] text-[13px]">No results yet</p>
-          <Link to="/" className="text-[#0969da] text-[12px] hover:underline mt-2 block">Run your first test →</Link>
-        </div>
-      ) : (
-        <>
-          {/* Desktop table */}
-          <div className="hidden md:block bg-white border border-[#d0d7de] rounded-md overflow-hidden">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-[#f6f8fa] border-b border-[#d0d7de]">
-                  <th className="w-9 px-3 py-2" />
-                  <th className="text-left px-3 py-2 text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">URL / Meta</th>
-                  <th className="text-left px-3 py-2 text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Type</th>
-                  <th className="text-left px-3 py-2 text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Status</th>
-                  <th className="text-left px-3 py-2 text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Analysis</th>
-                  <th className="px-3 py-2 text-right text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#eaeef2]">
-                {results.map(r => {
-                  const metric = getMainMetric(r);
-                  return (
-                    <tr
-                      key={r.id}
-                      onClick={() => navigate(`/results/${r.test_id}`)}
-                      className={`cursor-pointer hover:bg-[#f6f8fa] ${selected.includes(r.test_id) ? 'bg-[#ddf4ff] hover:bg-[#ddf4ff]' : ''}`}
-                    >
-                      <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
-                        {r.status === 'completed' && (
-                          <input
-                            type="checkbox"
-                            checked={selected.includes(r.test_id)}
-                            onChange={() => toggleSelect(r.test_id)}
-                            className="rounded-sm border-[#d0d7de] text-[#0969da] focus:ring-[#0969da] cursor-pointer"
-                          />
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-1.5">
-                          {r.is_baseline && <span className="text-[9px] font-semibold text-[#9a6700] bg-[#fff8c5] border border-[#e3b341] rounded px-1">B</span>}
-                          <span className="text-[13px] font-mono text-[#24292f] font-medium max-w-xs truncate">{r.target_url}</span>
-                        </div>
-                        <div className="text-[11px] font-mono text-[#57606a] mt-0.5">
-                          {relTime(r.created_at)}
-                          {metric && <span className="ml-2">{metric}</span>}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5"><TypeTag type={r.type} /></td>
-                      <td className="px-3 py-2.5">
-                        <span className="flex items-center gap-1.5 text-[12px] font-mono text-[#57606a]">
-                          <StatusDot status={r.status} perf={r.perf_status} />
-                          {r.status}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {r.perf_status && <PerfTag status={r.perf_status} />}
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-3">
-                          {r.status === 'completed' && (
-                            <button
-                              onClick={e => { e.stopPropagation(); navigate(`/?rerun=${r.test_id}`); }}
-                              className="text-[12px] text-[#57606a] hover:text-[#24292f] hover:underline"
-                            >
-                              ↻ Re-run
-                            </button>
-                          )}
-                          <Link to={`/results/${r.test_id}`} className="text-[12px] text-[#0969da] hover:underline" onClick={e => e.stopPropagation()}>View →</Link>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      <div className="px-4 md:px-9 py-6 flex flex-col gap-4">
+        {/* Filter bar */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 bg-surface border border-border rounded-control px-3.5 py-2.5 flex-1 min-w-[220px]">
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="var(--tx-5)" strokeWidth="1.8"><circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" strokeLinecap="round" /></svg>
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by URL or tag…"
+              className="flex-1 bg-transparent border-none text-[13px] focus:outline-none placeholder:text-tx-5"
+            />
           </div>
-
-          {/* Load more */}
-          {nextBefore && (
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={loadMore}
-                disabled={loadingMore}
-                className="px-4 py-1.5 border border-[#d0d7de] bg-white hover:bg-[#eaeef2] text-[#24292f] rounded-md text-[13px] disabled:opacity-50 transition-colors"
-              >
-                {loadingMore ? 'Loading…' : 'Load more'}
+          <div className="flex bg-surface border border-border rounded-control p-1 gap-0.5">
+            {([
+              { id: 'all', label: 'All' }, { id: 'backend', label: 'Backend' },
+              { id: 'client-side', label: 'Browser' }, { id: 'flow', label: 'Flow' },
+            ] as const).map(t => (
+              <button key={t.id} onClick={() => setTypeFilter(t.id)}
+                className={`px-3.5 py-1.75 rounded-[8px] text-[12.5px] cursor-pointer ${typeFilter === t.id ? 'bg-sel text-white font-semibold' : 'text-tx-3'}`}>
+                {t.label}
               </button>
-            </div>
-          )}
+            ))}
+          </div>
+          <select value={dateRange} onChange={e => setDateRange(e.target.value as typeof dateRange)}
+            className="bg-surface border border-border rounded-control px-3.5 py-2.5 text-[13px] text-tx-3 focus:outline-none">
+            {DATE_RANGES.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+          </select>
+        </div>
 
-          {/* Mobile card list */}
-          <div className="md:hidden space-y-2">
-            {results.map(r => {
-              const metric = getMainMetric(r);
-              return (
-                <div
-                  key={r.id}
-                  className="block bg-white border border-[#d0d7de] rounded-md px-3 py-2.5"
-                >
+        {loading ? (
+          <div className="bg-surface border border-border rounded-card p-8 text-center text-[13px] text-tx-4">Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-surface border border-border rounded-card p-8 text-center">
+            <p className="text-tx-4 text-[13px]">{results.length === 0 ? 'No results yet' : 'No results match your filters'}</p>
+            {results.length === 0 && <Link to="/" className="text-accent text-[12.5px] hover:underline mt-2 block">Run your first test →</Link>}
+          </div>
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block bg-surface border border-border rounded-card overflow-hidden overflow-x-auto">
+              <div className="grid grid-cols-[22px_2.2fr_90px_1fr_1fr_1fr_90px_60px] gap-3.5 min-w-[700px] px-5.5 py-3 bg-surface-2 border-b border-border font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">
+                <span />
+                <span>Target</span><span>Type</span><span>p95</span><span>Errors</span><span>When</span><span className="text-right">Status</span><span />
+              </div>
+              {filtered.map(r => {
+                return (
+                  <div
+                    key={r.id}
+                    onClick={() => navigate(`/results/${r.test_id}`)}
+                    className={`grid grid-cols-[22px_2.2fr_90px_1fr_1fr_1fr_90px_60px] gap-3.5 min-w-[700px] px-5.5 py-3.5 items-center border-b border-border-3 last:border-b-0 cursor-pointer hover:bg-hover ${selected.includes(r.test_id) ? 'bg-orange-bg/40' : ''}`}
+                  >
+                    <span onClick={e => e.stopPropagation()}>
+                      {r.status === 'completed' ? (
+                        <input type="checkbox" checked={selected.includes(r.test_id)} onChange={() => toggleSelect(r.test_id)} className="cursor-pointer" />
+                      ) : <StatusDot status={r.status} perf={r.perf_status} />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5">
+                        {r.is_baseline && <span className="text-[9px] font-bold text-amber-badge-fg bg-amber-bg rounded-chip px-1">B</span>}
+                        <span className="font-mono text-[13px] text-tx truncate">{r.target_url}</span>
+                      </span>
+                    </span>
+                    <span><TypeTag type={r.type} /></span>
+                    <span className="font-display text-[14.5px] font-semibold">{p95Value(r)}</span>
+                    <span className="font-display text-[13.5px] text-tx-3">{errValue(r)}</span>
+                    <span className="text-[12.5px] text-tx-4">{relTime(r.created_at)}</span>
+                    <span className={`justify-self-end text-[10.5px] font-bold rounded-chip px-2.25 py-0.75 ${STATUS_BADGE_CLS[statusBadge(r)] ?? 'text-tx-3 bg-surface-2'}`}>{statusBadge(r)}</span>
+                    <span className="justify-self-end flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                      {r.status === 'completed' && (
+                        <button onClick={() => navigate(`/?rerun=${r.test_id}`)} title="Re-run" className="text-tx-4 hover:text-tx text-[13px]">↻</button>
+                      )}
+                      <Link to={`/results/${r.test_id}`} className="text-accent text-[12px] hover:underline">View →</Link>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Load more */}
+            {nextBefore && (
+              <div className="flex justify-center pt-2">
+                <button onClick={loadMore} disabled={loadingMore} className="px-4 py-2 border border-border bg-surface hover:bg-hover text-tx rounded-control text-[13px] disabled:opacity-50 transition-colors">
+                  {loadingMore ? 'Loading…' : 'Load more'}
+                </button>
+              </div>
+            )}
+
+            {/* Mobile card list */}
+            <div className="md:hidden space-y-2.5">
+              {filtered.map(r => (
+                <div key={r.id} className="block bg-surface border border-border rounded-control px-3.5 py-3">
                   <div className="flex items-start justify-between gap-2">
                     <Link to={`/results/${r.test_id}`} className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <StatusDot status={r.status} perf={r.perf_status} />
-                        <span className="font-mono text-[13px] text-[#24292f] font-medium truncate">{r.target_url.replace(/https?:\/\//, '')}</span>
+                        <span className="font-mono text-[13px] text-tx font-medium truncate">{r.target_url.replace(/https?:\/\//, '')}</span>
                       </div>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2 mt-1.5">
                         <TypeTag type={r.type} />
-                        <span className="text-[11px] font-mono text-[#57606a]">{relTime(r.created_at)}</span>
-                        {r.perf_status && <PerfTag status={r.perf_status} />}
+                        <span className="text-[11px] font-mono text-tx-4">{relTime(r.created_at)}</span>
+                        <span className={`text-[10px] font-bold rounded-chip px-1.5 py-0.5 ${STATUS_BADGE_CLS[statusBadge(r)] ?? 'text-tx-3 bg-surface-2'}`}>{statusBadge(r)}</span>
                       </div>
-                      {metric && <div className="text-[11px] font-mono text-[#57606a] mt-0.5">{metric}</div>}
+                      <div className="text-[11px] font-mono text-tx-4 mt-1">{p95Value(r)} · {errValue(r)}</div>
                     </Link>
-                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                      <span className="text-[13px] text-[#0969da]">→</span>
+                    <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                      <span className="text-[13px] text-accent">→</span>
                       {r.status === 'completed' && (
-                        <button
-                          onClick={() => navigate(`/?rerun=${r.test_id}`)}
-                          className="text-[11px] text-[#57606a] hover:text-[#24292f]"
-                        >
-                          ↻ Re-run
-                        </button>
+                        <button onClick={() => navigate(`/?rerun=${r.test_id}`)} className="text-[11px] text-tx-4 hover:text-tx">↻ Re-run</button>
                       )}
                     </div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </>
-      )}
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

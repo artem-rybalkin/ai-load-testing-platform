@@ -17,67 +17,62 @@ const fmtRemaining = (secs: number) => {
   return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
 };
 
-const StatusBadge = ({ status }: { status: string }) => {
-  const cls: Record<string, string> = {
-    completed: 'bg-[#dafbe1] text-[#1a7f37]',
-    running:   'bg-[#ddf4ff] text-[#0969da]',
-    pending:   'bg-[#fff8c5] text-[#9a6700]',
-    failed:    'bg-[#ffebe9] text-[#cf222e]',
-    cancelled: 'bg-[#f6f8fa] text-[#57606a]',
-  };
-  return (
-    <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium ${cls[status] ?? 'bg-[#f6f8fa] text-[#57606a]'}`}>
-      {status}
-    </span>
-  );
+const STATUS_BADGE_CLS: Record<string, string> = {
+  completed: 'bg-green-bg text-green-fg-2',
+  running:   'bg-orange-bg text-accent',
+  pending:   'bg-amber-bg text-amber-badge-fg',
+  failed:    'bg-red-bg text-red-badge-fg',
+  cancelled: 'bg-surface-2 text-tx-3',
 };
+const StatusBadge = ({ status }: { status: string }) => (
+  <span className={`px-2.75 py-1 rounded-chip text-[11px] font-bold font-mono uppercase ${STATUS_BADGE_CLS[status] ?? 'bg-surface-2 text-tx-3'}`}>
+    {status === 'completed' ? 'passed' : status}
+  </span>
+);
 
-const BentoCard = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
-  <div className={`bg-white border border-[#d0d7de] rounded-md overflow-hidden ${className}`}>
-    {children}
+const Card = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
+  <div className={`bg-surface border border-border rounded-card overflow-hidden ${className}`}>{children}</div>
+);
+
+const CardHeader = ({ title, action }: { title: string; action?: React.ReactNode }) => (
+  <div className="px-6 py-4 border-b border-border flex items-center justify-between gap-3 flex-wrap">
+    <span className="font-display text-[16px] font-semibold">{title}</span>
+    {action}
   </div>
 );
 
-const CardHeader = ({ title }: { title: string }) => (
-  <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa]">
-    <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">{title}</span>
-  </div>
-);
-
-const MetricCell = ({
-  label, value, unit, color,
-}: { label: string; value: number | string; unit?: string; color?: string }) => (
-  <BentoCard>
-    <div className="p-3">
-      <div className="text-[10px] font-mono font-semibold text-[#57606a] uppercase tracking-wide mb-1">{label}</div>
-      <div className={`text-[22px] font-mono font-bold leading-none ${color ?? 'text-[#24292f]'}`}>
+const MetricCell = ({ label, value, unit, color }: { label: string; value: number | string; unit?: string; color?: string }) => (
+  <Card>
+    <div className="px-4.5 py-4">
+      <div className="font-mono text-[10px] tracking-[0.08em] text-tx-4 uppercase">{label}</div>
+      <div className={`font-display text-[28px] font-bold leading-none mt-1.75 ${color ?? ''}`}>
         {value}
-        {unit && <span className="text-[13px] font-normal text-[#57606a] ml-1">{unit}</span>}
+        {unit && <span className="text-[14px] font-normal text-tx-4 ml-1">{unit}</span>}
       </div>
     </div>
-  </BentoCard>
+  </Card>
 );
 
 const StepMetricsTable = ({ steps }: { steps: StepMetric[] }) => (
-  <BentoCard className="col-span-full">
+  <Card className="col-span-full">
     <CardHeader title="Per-step breakdown" />
     <div className="overflow-x-auto">
       <table className="w-full">
         <thead>
-          <tr className="border-b border-[#eaeef2]">
+          <tr className="bg-surface-2 border-b border-border">
             {['Step', 'Requests', 'Failed', 'Avg ms', 'p95 ms'].map(h => (
-              <th key={h} className={`py-2 px-3 text-[11px] font-semibold text-[#57606a] ${h === 'Step' ? 'text-left' : 'text-right'}`}>{h}</th>
+              <th key={h} className={`py-3 px-6 font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase ${h === 'Step' ? 'text-left' : 'text-right'}`}>{h}</th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#eaeef2]">
+        <tbody className="divide-y divide-border-3">
           {steps.map((s, i) => (
-            <tr key={i} className="hover:bg-[#f6f8fa]">
-              <td className="py-2 px-3 text-[13px] font-medium text-[#24292f]">{s.name}</td>
-              <td className="py-2 px-3 text-right font-mono text-[12px] text-[#57606a]">{s.requestsTotal}</td>
-              <td className={`py-2 px-3 text-right font-mono text-[12px] ${s.requestsFailed > 0 ? 'text-[#cf222e] font-semibold' : 'text-[#8c959f]'}`}>{s.requestsFailed}</td>
-              <td className="py-2 px-3 text-right font-mono text-[12px] text-[#57606a]">{Math.round(s.avgResponseTime)}</td>
-              <td className={`py-2 px-3 text-right font-mono text-[12px] font-semibold ${s.p95ResponseTime > 1000 ? 'text-[#cf222e]' : s.p95ResponseTime > 500 ? 'text-[#9a6700]' : 'text-[#1f883d]'}`}>
+            <tr key={i} className="hover:bg-hover">
+              <td className="py-3 px-6 text-[13.5px] font-medium">{s.name}</td>
+              <td className="py-3 px-6 text-right font-mono text-[12.5px] text-tx-3">{s.requestsTotal}</td>
+              <td className={`py-3 px-6 text-right font-mono text-[12.5px] ${s.requestsFailed > 0 ? 'text-red-fg font-semibold' : 'text-tx-4'}`}>{s.requestsFailed}</td>
+              <td className="py-3 px-6 text-right font-mono text-[12.5px] text-tx-3">{Math.round(s.avgResponseTime)}</td>
+              <td className={`py-3 px-6 text-right font-mono text-[12.5px] font-semibold ${s.p95ResponseTime > 1000 ? 'text-red-fg' : s.p95ResponseTime > 500 ? 'text-amber-fg' : 'text-green-fg'}`}>
                 {Math.round(s.p95ResponseTime)}
               </td>
             </tr>
@@ -85,16 +80,16 @@ const StepMetricsTable = ({ steps }: { steps: StepMetric[] }) => (
         </tbody>
       </table>
     </div>
-  </BentoCard>
+  </Card>
 );
 
 type LogLevel = 'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
 const LEVEL_COLOR: Record<string, string> = {
-  ERROR: 'text-[#cf222e]',
-  WARN:  'text-[#9a6700]',
-  DEBUG: 'text-[#8c959f]',
-  INFO:  'text-[#24292f]',
+  ERROR: 'text-red-fg',
+  WARN:  'text-amber-fg',
+  DEBUG: 'text-tx-4',
+  INFO:  'text-tx',
 };
 
 interface LogEntry { level: string; line: string; seq: number }
@@ -157,51 +152,43 @@ function ExecutionLogPanel({
   }, {});
 
   return (
-    <BentoCard className="col-span-full">
+    <Card className="col-span-full">
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa] hover:bg-[#eaeef2] transition-colors"
+        className="w-full flex items-center justify-between px-6 py-4 hover:bg-hover transition-colors"
       >
-        <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide flex items-center gap-2">
+        <span className="font-display text-[16px] font-semibold flex items-center gap-2">
           Execution Log
-          {isRunning && liveLines.length > 0 && (
-            <span className="text-[#0969da] animate-pulse text-[10px]">● LIVE</span>
-          )}
-          {!isRunning && allEntries.length > 0 && (
-            <span className="text-[#8c959f] font-normal normal-case">{allEntries.length} lines</span>
-          )}
+          {isRunning && liveLines.length > 0 && <span className="text-accent text-[10px] font-mono pulse-dot">● LIVE</span>}
+          {!isRunning && allEntries.length > 0 && <span className="text-tx-4 font-mono text-[11px] font-normal">{allEntries.length} lines</span>}
         </span>
-        <span className="text-[11px] text-[#57606a]">{open ? '▲' : '▼'}</span>
+        <span className="text-[11px] text-tx-4">{open ? '▲' : '▼'}</span>
       </button>
 
       {open && (
         <div>
-          {/* Filter + action bar */}
-          <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[#eaeef2] bg-[#f6f8fa] flex-wrap">
+          <div className="flex items-center gap-1.5 px-6 py-2.5 border-t border-border bg-surface-2 flex-wrap">
             {(['ALL', 'INFO', 'WARN', 'ERROR', 'DEBUG'] as LogLevel[]).map(lvl => (
               <button
                 key={lvl}
                 type="button"
                 onClick={() => setFilter(lvl)}
-                className={`px-2 py-0.5 text-[11px] font-mono rounded border transition-colors ${
-                  filter === lvl
-                    ? 'bg-[#0969da] border-[#0969da] text-white'
-                    : 'bg-white border-[#d0d7de] text-[#57606a] hover:bg-[#f6f8fa]'
+                className={`px-2.5 py-0.75 text-[11px] font-mono rounded-chip border transition-colors ${
+                  filter === lvl ? 'bg-sel border-sel text-white' : 'bg-surface border-border text-tx-3 hover:bg-hover'
                 }`}
               >
                 {lvl}{lvl !== 'ALL' && counts[lvl] ? ` (${counts[lvl]})` : ''}
               </button>
             ))}
             <span className="ml-auto flex gap-1.5">
-              <button type="button" onClick={copy}     className="px-2 py-0.5 text-[11px] font-mono rounded border border-[#d0d7de] bg-white text-[#57606a] hover:bg-[#f6f8fa]">Copy</button>
-              <button type="button" onClick={download} className="px-2 py-0.5 text-[11px] font-mono rounded border border-[#d0d7de] bg-white text-[#57606a] hover:bg-[#f6f8fa]">↓ Download</button>
+              <button type="button" onClick={copy} className="px-2.5 py-0.75 text-[11px] font-mono rounded-chip border border-border bg-surface text-tx-3 hover:bg-hover">Copy</button>
+              <button type="button" onClick={download} className="px-2.5 py-0.75 text-[11px] font-mono rounded-chip border border-border bg-surface text-tx-3 hover:bg-hover">↓ Download</button>
             </span>
           </div>
 
-          {/* Log output */}
           {loading ? (
-            <div className="px-3 py-4 text-[12px] font-mono text-[#57606a]">Loading…</div>
+            <div className="px-6 py-4 text-[12px] font-mono text-tx-4">Loading…</div>
           ) : (
             <pre
               ref={scrollRef}
@@ -210,18 +197,18 @@ function ExecutionLogPanel({
                 const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
                 autoScroll.current = scrollHeight - scrollTop - clientHeight < 40;
               }}
-              className="px-3 py-2 text-[11px] font-mono overflow-x-auto overflow-y-auto max-h-[400px] leading-relaxed bg-[#f6f8fa] whitespace-pre-wrap break-all"
+              className="px-6 py-3 text-[11px] font-mono overflow-x-auto overflow-y-auto max-h-[400px] leading-relaxed bg-surface-2 whitespace-pre-wrap break-all"
             >
               {visible.length === 0 ? (
-                <span className="text-[#8c959f]">
+                <span className="text-tx-4">
                   {allEntries.length === 0
                     ? (isRunning ? 'Waiting for log output…' : 'No execution log recorded.')
                     : `No ${filter} entries.`}
                 </span>
               ) : (
                 visible.map((e) => (
-                  <div key={e.seq} className={LEVEL_COLOR[e.level] ?? 'text-[#24292f]'}>
-                    <span className="select-none text-[#8c959f]">[{e.level.padEnd(5)}] </span>
+                  <div key={e.seq} className={LEVEL_COLOR[e.level] ?? 'text-tx'}>
+                    <span className="select-none text-tx-4">[{e.level.padEnd(5)}] </span>
                     {e.line}
                   </div>
                 ))
@@ -230,7 +217,7 @@ function ExecutionLogPanel({
           )}
         </div>
       )}
-    </BentoCard>
+    </Card>
   );
 }
 
@@ -390,18 +377,18 @@ export default function ResultPage() {
   });
 
   if (loading) return (
-    <div className="flex items-center justify-center h-40 text-[#57606a] text-[13px]">Loading…</div>
+    <div className="flex items-center justify-center h-40 text-tx-4 text-[13px]">Loading…</div>
   );
 
   if (!result) return (
     <div className="flex items-center justify-center h-48">
       <div className="text-center">
-        <div className="animate-spin w-6 h-6 border-2 border-[#0969da] border-t-transparent rounded-full mx-auto mb-3" />
-        <p className="text-[#24292f] font-medium text-[13px] mb-1">Generating test script…</p>
-        <p className="text-[#57606a] text-[11px] mb-4">This usually takes 10–30 seconds</p>
+        <div className="animate-spin w-6 h-6 border-2 border-accent border-t-transparent rounded-full mx-auto mb-3" />
+        <p className="font-medium text-[13px] mb-1">Generating test script…</p>
+        <p className="text-tx-4 text-[11px] mb-4">This usually takes 10–30 seconds</p>
         <div className="flex gap-2 justify-center">
-          <Link to="/" className="px-3 py-1.5 bg-[#1f883d] text-white rounded-md text-[12px] font-medium">+ New test</Link>
-          <Link to="/results" className="px-3 py-1.5 border border-[#d0d7de] text-[#24292f] rounded-md text-[12px]">All results</Link>
+          <Link to="/" className="px-3.5 py-2 bg-accent text-white rounded-control text-[12.5px] font-semibold">+ New test</Link>
+          <Link to="/results" className="px-3.5 py-2 border border-border rounded-control text-[12.5px]">All results</Link>
         </div>
       </div>
     </div>
@@ -418,468 +405,324 @@ export default function ResultPage() {
     : 0;
 
   return (
-    <div className="p-4 lg:p-6">
-      {/* Page header */}
-      <div className="mb-1">
-        <Link to="/results" className="text-[11px] text-[#57606a] hover:text-[#0969da] hover:underline">← All Results</Link>
-      </div>
-      <div className="flex items-start justify-between gap-3 mb-4 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h1 className="text-[15px] font-semibold text-[#24292f] font-mono">{result.target_url}</h1>
-          <StatusBadge status={result.status} />
-          {result.reused_script && (
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[#faf5ff] text-[#7c3aed] border border-[#e9d5ff]">script reused</span>
-          )}
-          {result.is_baseline && (
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[#fff8c5] text-[#9a6700] border border-[#e3b341]">baseline</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {(isPending || isRunning) && (
-            <button
-              onClick={handleCancel}
-              disabled={cancelling}
-              className="px-2.5 py-1 rounded-md text-[12px] font-medium border border-[#f4c7c3] text-[#cf222e] hover:bg-[#ffebe9] disabled:opacity-50 transition-colors"
-            >
-              {cancelling ? 'Cancelling…' : 'Cancel'}
-            </button>
-          )}
-          {result.status === 'completed' && (
-            <>
-              <button
-                onClick={handleBaseline}
-                disabled={baselineBusy}
-                className={`px-2.5 py-1 rounded-md text-[12px] font-medium border transition-colors disabled:opacity-50 ${
-                  result.is_baseline
-                    ? 'border-[#e3b341] text-[#9a6700] hover:bg-[#fff8c5]'
-                    : 'border-[#d0d7de] text-[#24292f] hover:bg-[#eaeef2]'
-                }`}
-              >
-                {result.is_baseline ? 'Clear baseline' : 'Set baseline'}
-              </button>
-              <a
-                href={`${import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.pdf`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-2.5 py-1 rounded-md text-[12px] font-medium border border-[#d0d7de] text-[#24292f] hover:bg-[#eaeef2] transition-colors"
-              >
-                ↓ PDF
-              </a>
-              <a
-                href={`${import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.csv`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-2.5 py-1 rounded-md text-[12px] font-medium border border-[#d0d7de] text-[#24292f] hover:bg-[#eaeef2] transition-colors"
-              >
-                ↓ CSV
-              </a>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Progress bar / elapsed bar (running) */}
-      {isRunning && (result.started_at || result.duration_seconds) && (
-        <div className="flex items-center gap-3 mb-4 bg-white border border-[#d0d7de] rounded-md px-3 py-2">
-          <span className="flex items-center gap-1.5 text-[11px] font-mono text-[#0969da] font-semibold whitespace-nowrap">
-            <span className="w-1.5 h-1.5 bg-[#0969da] rounded-full animate-pulse" />
-            LIVE
-          </span>
-          {result.duration_seconds && remainingSecs !== null ? (
-            <>
-              <div className="flex-1 h-1.5 bg-[#eaeef2] rounded-full overflow-hidden">
-                <div className="h-full bg-[#0969da] rounded-full transition-all duration-1000" style={{ width: `${pct}%` }} />
-              </div>
-              <span className="text-[11px] font-mono text-[#57606a] whitespace-nowrap">
-                {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} left`}
-              </span>
-            </>
-          ) : elapsedSecs !== null ? (
-            <>
-              <div className="flex-1" />
-              <span className="text-[11px] font-mono text-[#57606a] whitespace-nowrap">
-                {fmtRemaining(elapsedSecs)} elapsed
-              </span>
-            </>
-          ) : null}
-        </div>
-      )}
-
-      {/* Live chart — shown while running (before metrics arrive) and after completion */}
-      {isBackend && livePoints.length > 0 && (isPending || !m) && (
-        <BentoCard className="mb-3">
-          <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
-          <div className="p-3">
-            <Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense>
-          </div>
-        </BentoCard>
-      )}
-
-      {/* Pending / running / terminal-no-metrics / completed-loading state */}
-      {(isPending || isRunning || !m) ? (
-        <BentoCard>
-          <div className="p-8 text-center">
-            {isTerminal ? (
-              <p className="text-[#57606a] text-[13px]">
-                Test {result.status} — no metrics collected.
-              </p>
-            ) : result.status === 'completed' ? (
-              /* Brief window between WS 'completed' event and full refetch finishing */
-              <div className="animate-pulse">
-                <p className="text-[#57606a] text-[13px]">Loading results…</p>
-              </div>
-            ) : isPending ? (
-              <div className="animate-pulse">
-                <p className="text-[#57606a] text-[13px]">Waiting in queue…</p>
-                <p className="text-[#8c959f] text-[11px] mt-1">AI is generating the test script</p>
-              </div>
-            ) : !isBackend ? (
-              /* Browser test running — show elapsed + what's happening */
-              <div>
-                <div className="animate-spin w-5 h-5 border-2 border-[#0969da] border-t-transparent rounded-full mx-auto mb-3" />
-                <p className="text-[#24292f] font-semibold text-[13px] mb-1">Running browser test…</p>
-                <p className="text-[#57606a] text-[11px] mb-3">Collecting Core Web Vitals · Lighthouse audit · Web page resources</p>
-                {elapsedSecs !== null && (
-                  <div className="inline-flex items-center gap-2 bg-[#f6f8fa] border border-[#d0d7de] rounded px-3 py-1.5 text-[12px] font-mono">
-                    <span className="text-[#57606a]">Elapsed</span>
-                    <span className="text-[#0969da] font-semibold">{fmtRemaining(elapsedSecs)}</span>
-                    {remainingSecs !== null && remainingSecs > 0 && (
-                      <>
-                        <span className="text-[#d0d7de]">·</span>
-                        <span className="text-[#57606a]">{fmtRemaining(remainingSecs)} left</span>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="animate-pulse">
-                <p className="text-[#57606a] text-[13px]">Test is running…</p>
-                <p className="text-[#8c959f] text-[11px] mt-1">
-                  {elapsedSecs !== null ? `${fmtRemaining(elapsedSecs)} elapsed` : 'Page updates in real time'}
-                </p>
-              </div>
-            )}
-            {!isTerminal && result.status_message && (
-              <p className={`text-[11px] font-mono mt-3 ${
-                result.status_message.includes('failed') || result.status_message.includes('unavailable')
-                  ? 'text-[#9a6700]'
-                  : result.status_message.includes('ready') || result.status_message.includes('starting')
-                    ? 'text-[#1f883d]'
-                    : 'text-[#57606a]'
-              }`}>
-                {result.status_message}
-              </p>
-            )}
-            {!isTerminal && remainingSecs !== null && (
-              <div className="mt-4 max-w-xs mx-auto">
-                <p className="text-[12px] font-mono text-[#0969da] mb-2">
-                  {remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} remaining`}
-                </p>
-                {result.duration_seconds && (
-                  <div className="h-1.5 bg-[#eaeef2] rounded-full overflow-hidden">
-                    <div className="h-full bg-[#0969da] rounded-full transition-all duration-1000" style={{ width: `${pct}%` }} />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </BentoCard>
-      ) : (
-        /* ── Bento grid ── */
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-12 gap-3">
-
-          {/* ── Metric cells (top row) ── */}
-          {isBackend ? (
-            <>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell label="Total Requests" value={m.requestsTotal} />
-              </div>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell label="Req / sec" value={(m.rps ?? 0).toFixed(1)} color="text-[#0969da]" />
-              </div>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell
-                  label="Failed"
-                  value={m.requestsFailed}
-                  unit={`/ ${m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : 0}%`}
-                  color={m.requestsFailed > 0 ? 'text-[#cf222e]' : 'text-[#24292f]'}
-                />
-              </div>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell label="p95 Response" value={Math.round(m.p95ResponseTime ?? 0)} unit="ms" />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell label="LCP" value={Math.round(m.lcp ?? 0)} unit="ms" color={(m.lcp ?? 0) > 2500 ? 'text-[#cf222e]' : 'text-[#1f883d]'} />
-              </div>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell label="FCP" value={Math.round(m.fcp ?? 0)} unit="ms" />
-              </div>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell label="TTFB" value={Math.round(m.ttfb ?? 0)} unit="ms" />
-              </div>
-              <div className="col-span-1 md:col-span-1 lg:col-span-3">
-                <MetricCell label="CLS" value={(m.cls ?? 0).toFixed(3)} color={(m.cls ?? 0) > 0.1 ? 'text-[#cf222e]' : 'text-[#1f883d]'} />
-              </div>
-            </>
-          )}
-
-          {/* ── Live / timeline chart (also shown pre-metrics via the block above) ── */}
-          {isBackend && livePoints.length > 0 && (
-            <div className="col-span-full">
-              <BentoCard>
-                <CardHeader title="Test Timeline" />
-                <div className="p-3">
-                  <Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense>
-                </div>
-              </BentoCard>
+    <div>
+      <div className="px-4 md:px-9 pt-6.5">
+        <Link to="/results" className="inline-flex items-center gap-1.5 text-[13px] text-tx-4 hover:text-tx mb-3.5">← Results</Link>
+        <div className="flex items-start justify-between gap-3.5 flex-wrap">
+          <div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="font-display text-[clamp(22px,5.5vw,30px)] font-bold tracking-[-0.02em] font-mono break-all">{result.target_url}</span>
+              <StatusBadge status={result.status} />
+              {result.reused_script && <span className="font-mono text-[11px] text-purple-fg bg-purple-bg border border-purple-bd rounded-chip px-2.25 py-0.75">script reused</span>}
+              {result.is_baseline && <span className="font-mono text-[11px] text-amber-badge-fg bg-amber-bg rounded-chip px-2.25 py-0.75">baseline</span>}
             </div>
-          )}
+            <div className="font-mono text-[12.5px] text-tx-4 mt-2">
+              {result.duration_seconds ? `${result.duration_seconds}s` : ''}{result.status === 'completed' ? ' · finished' : ''} {result.completed_at ? new Date(result.completed_at).toLocaleString() : ''}
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {(isPending || isRunning) && (
+              <button onClick={handleCancel} disabled={cancelling} className="px-3.5 py-2 rounded-control text-[12.5px] font-semibold border border-red-fg/30 text-red-fg hover:bg-red-bg disabled:opacity-50 transition-colors">
+                {cancelling ? 'Cancelling…' : 'Cancel'}
+              </button>
+            )}
+            {result.status === 'completed' && (
+              <>
+                <button onClick={handleBaseline} disabled={baselineBusy}
+                  className={`px-3.5 py-2 rounded-control text-[12.5px] font-semibold border transition-colors disabled:opacity-50 ${
+                    result.is_baseline ? 'border-amber-fg/40 text-amber-badge-fg hover:bg-amber-bg' : 'border-border bg-surface text-tx-2 hover:border-tx'
+                  }`}>
+                  {result.is_baseline ? 'Clear baseline' : 'Set baseline'}
+                </button>
+                <a href={`${import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.pdf`} target="_blank" rel="noreferrer"
+                  className="px-3.5 py-2 rounded-control text-[12.5px] font-semibold border border-border bg-surface text-tx-2 hover:border-tx transition-colors">↓ PDF</a>
+                <a href={`${import.meta.env.VITE_RESULTS_URL || 'http://localhost:3004'}/results/${testId}/report.csv`} target="_blank" rel="noreferrer"
+                  className="px-3.5 py-2 rounded-control text-[12.5px] font-semibold border border-border bg-surface text-tx-2 hover:border-tx transition-colors">↓ CSV</a>
+                <Link to={`/?rerun=${testId}`} className="flex items-center gap-1.5 bg-btn2 text-white rounded-control px-4 py-2 text-[13px] font-semibold">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2a6 6 0 1 0 5.2 3" stroke="var(--accent)" strokeWidth="1.6" /><path d="M13 1v4h-4" stroke="var(--accent)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg> Re-run
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
 
-          {/* ── Backend: more metric cells ── */}
-          {isBackend && (
-            <>
-              <div className="col-span-1 lg:col-span-3">
-                <MetricCell label="Avg Response" value={Math.round(m.avgResponseTime ?? 0)} unit="ms" />
-              </div>
-              <div className="col-span-1 lg:col-span-3">
-                <MetricCell label="p50 Response" value={Math.round(m.p50ResponseTime ?? 0)} unit="ms" />
-              </div>
-              <div className="col-span-1 lg:col-span-3">
-                <MetricCell label="p99 Response" value={Math.round(m.p99ResponseTime ?? 0)} unit="ms" />
-              </div>
-              {((m as any).errorBreakdown || (m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0)) && (
-                <div className="col-span-1 lg:col-span-3">
-                  <BentoCard>
-                    <div className="p-3">
-                      <div className="text-[10px] font-mono font-semibold text-[#57606a] uppercase tracking-wide mb-2">Error Breakdown</div>
-                      {(m as any).errorBreakdown ? (() => {
-                        const eb = (m as any).errorBreakdown;
-                        const total = eb.success + eb.clientError + eb.serverError + eb.timeout + eb.networkError;
-                        const pct = (n: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '0%';
-                        const rows = [
-                          { label: '✓ Success',    count: eb.success,      cls: 'text-[#1f883d]' },
-                          { label: '⚠ Client 4xx', count: eb.clientError,  cls: 'text-[#9a6700]' },
-                          { label: '✗ Server 5xx', count: eb.serverError,  cls: 'text-[#cf222e]' },
-                          { label: '⏱ Timeout',    count: eb.timeout,      cls: 'text-[#cf222e]' },
-                          { label: '✗ Network',    count: eb.networkError, cls: 'text-[#cf222e]' },
-                        ];
-                        return (
-                          <div className="space-y-0.5">
-                            {rows.filter(r => r.count > 0 || r.label.includes('Success')).map(r => (
-                              <div key={r.label} className="flex items-center justify-between text-[11px] font-mono">
-                                <span className={r.cls}>{r.label}</span>
-                                <span className="text-[#57606a]">{r.count.toLocaleString()} <span className="text-[#8c959f]">({pct(r.count)})</span></span>
-                              </div>
-                            ))}
+      <div className="px-4 md:px-9 py-6 flex flex-col gap-5">
+
+        {/* Progress bar / elapsed bar (running) */}
+        {isRunning && (result.started_at || result.duration_seconds) && (
+          <div className="flex items-center gap-3.5 bg-surface border border-border rounded-card px-5 py-3">
+            <span className="flex items-center gap-1.5 font-mono text-[11px] text-accent font-bold whitespace-nowrap">
+              <span className="w-1.5 h-1.5 bg-accent rounded-full pulse-dot" /> LIVE
+            </span>
+            {result.duration_seconds && remainingSecs !== null ? (
+              <>
+                <div className="flex-1 h-1.5 bg-line rounded-full overflow-hidden">
+                  <div className="h-full bg-accent rounded-full transition-all duration-1000" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="font-mono text-[11px] text-tx-3 whitespace-nowrap">{remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} left`}</span>
+              </>
+            ) : elapsedSecs !== null ? (
+              <>
+                <div className="flex-1" />
+                <span className="font-mono text-[11px] text-tx-3 whitespace-nowrap">{fmtRemaining(elapsedSecs)} elapsed</span>
+              </>
+            ) : null}
+          </div>
+        )}
+
+        {/* Live chart — shown while running (before metrics arrive) and after completion */}
+        {isBackend && livePoints.length > 0 && (isPending || !m) && (
+          <Card>
+            <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
+            <div className="p-5"><Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense></div>
+          </Card>
+        )}
+
+        {/* Pending / running / terminal-no-metrics / completed-loading state */}
+        {(isPending || isRunning || !m) ? (
+          <Card>
+            <div className="p-10 text-center">
+              {isTerminal ? (
+                <p className="text-tx-4 text-[13px]">Test {result.status} — no metrics collected.</p>
+              ) : result.status === 'completed' ? (
+                <div className="animate-pulse"><p className="text-tx-4 text-[13px]">Loading results…</p></div>
+              ) : isPending ? (
+                <div className="animate-pulse">
+                  <p className="text-tx-4 text-[13px]">Waiting in queue…</p>
+                  <p className="text-tx-5 text-[11px] mt-1">AI is generating the test script</p>
+                </div>
+              ) : !isBackend ? (
+                <div>
+                  <div className="animate-spin w-5 h-5 border-2 border-accent border-t-transparent rounded-full mx-auto mb-3" />
+                  <p className="font-semibold text-[13px] mb-1">Running browser test…</p>
+                  <p className="text-tx-4 text-[11px] mb-3">Collecting Core Web Vitals · Lighthouse audit · Web page resources</p>
+                  {elapsedSecs !== null && (
+                    <div className="inline-flex items-center gap-2 bg-bg border border-border rounded-control px-3.5 py-2 text-[12px] font-mono">
+                      <span className="text-tx-4">Elapsed</span>
+                      <span className="text-accent font-semibold">{fmtRemaining(elapsedSecs)}</span>
+                      {remainingSecs !== null && remainingSecs > 0 && (<><span className="text-border">·</span><span className="text-tx-4">{fmtRemaining(remainingSecs)} left</span></>)}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="animate-pulse">
+                  <p className="text-tx-4 text-[13px]">Test is running…</p>
+                  <p className="text-tx-5 text-[11px] mt-1">{elapsedSecs !== null ? `${fmtRemaining(elapsedSecs)} elapsed` : 'Page updates in real time'}</p>
+                </div>
+              )}
+              {!isTerminal && result.status_message && (
+                <p className={`text-[11px] font-mono mt-3 ${
+                  result.status_message.includes('failed') || result.status_message.includes('unavailable') ? 'text-amber-badge-fg'
+                    : result.status_message.includes('ready') || result.status_message.includes('starting') ? 'text-green-fg-2' : 'text-tx-4'
+                }`}>{result.status_message}</p>
+              )}
+              {!isTerminal && remainingSecs !== null && (
+                <div className="mt-4 max-w-xs mx-auto">
+                  <p className="text-[12px] font-mono text-accent mb-2">{remainingSecs <= 0 ? 'finishing…' : `${fmtRemaining(remainingSecs)} remaining`}</p>
+                  {result.duration_seconds && (
+                    <div className="h-1.5 bg-line rounded-full overflow-hidden"><div className="h-full bg-accent rounded-full transition-all duration-1000" style={{ width: `${pct}%` }} /></div>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-5">
+
+            {/* Metric cells */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
+              {isBackend ? (
+                <>
+                  <MetricCell label="Total Requests" value={m.requestsTotal} />
+                  <MetricCell label="Req / sec" value={(m.rps ?? 0).toFixed(1)} color="text-accent" />
+                  <MetricCell label="Failed" value={m.requestsFailed} unit={`/ ${m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : 0}%`} color={m.requestsFailed > 0 ? 'text-red-fg' : ''} />
+                  <MetricCell label="p95 Response" value={Math.round(m.p95ResponseTime ?? 0)} unit="ms" />
+                  <MetricCell label="Avg Response" value={Math.round(m.avgResponseTime ?? 0)} unit="ms" />
+                  <MetricCell label="p99 Response" value={Math.round(m.p99ResponseTime ?? 0)} unit="ms" />
+                </>
+              ) : (
+                <>
+                  <MetricCell label="LCP" value={Math.round(m.lcp ?? 0)} unit="ms" color={(m.lcp ?? 0) > 2500 ? 'text-red-fg' : 'text-green-fg'} />
+                  <MetricCell label="FCP" value={Math.round(m.fcp ?? 0)} unit="ms" />
+                  <MetricCell label="TTFB" value={Math.round(m.ttfb ?? 0)} unit="ms" />
+                  <MetricCell label="CLS" value={(m.cls ?? 0).toFixed(3)} color={(m.cls ?? 0) > 0.1 ? 'text-red-fg' : 'text-green-fg'} />
+                </>
+              )}
+            </div>
+
+            {/* Live / timeline chart */}
+            {isBackend && livePoints.length > 0 && (
+              <Card>
+                <CardHeader title="Test Timeline" />
+                <div className="p-5"><Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense></div>
+              </Card>
+            )}
+
+            <div className="grid grid-cols-1 lg:[grid-template-columns:minmax(320px,7fr)_minmax(280px,5fr)] gap-5">
+              <Card>
+                <CardHeader title={isBackend ? 'Response Distribution' : 'Web Vitals'} />
+                <div className="p-5">
+                  <Suspense fallback={null}>
+                    {result.type === 'flow' && (m as any).stepMetrics?.length > 0
+                      ? <FlowStepChart steps={(m as any).stepMetrics} />
+                      : isBackend ? <BackendChart metrics={m as any} /> : <ClientChart metrics={m as any} />}
+                  </Suspense>
+                </div>
+              </Card>
+
+              {result.analysis && (
+                <Card>
+                  <CardHeader title="Analysis" />
+                  <div className="p-5"><Suspense fallback={null}><AnalysisPanel analysis={result.analysis as any} /></Suspense></div>
+                </Card>
+              )}
+            </div>
+
+            {/* Error breakdown + AI diagnose */}
+            {isBackend && ((m as any).errorBreakdown || (m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0)) && (
+              <Card>
+                <CardHeader title="Error Breakdown" />
+                <div className="p-5">
+                  {(m as any).errorBreakdown ? (() => {
+                    const eb = (m as any).errorBreakdown;
+                    const total = eb.success + eb.clientError + eb.serverError + eb.timeout + eb.networkError;
+                    const pctOf = (n: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '0%';
+                    const rows = [
+                      { label: '✓ Success',    count: eb.success,      cls: 'text-green-fg' },
+                      { label: '⚠ Client 4xx', count: eb.clientError,  cls: 'text-amber-fg' },
+                      { label: '✗ Server 5xx', count: eb.serverError,  cls: 'text-red-fg' },
+                      { label: '⏱ Timeout',    count: eb.timeout,      cls: 'text-red-fg' },
+                      { label: '✗ Network',    count: eb.networkError, cls: 'text-red-fg' },
+                    ];
+                    return (
+                      <div className="space-y-1">
+                        {rows.filter(r => r.count > 0 || r.label.includes('Success')).map(r => (
+                          <div key={r.label} className="flex items-center justify-between text-[12px] font-mono">
+                            <span className={r.cls}>{r.label}</span>
+                            <span className="text-tx-3">{r.count.toLocaleString()} <span className="text-tx-4">({pctOf(r.count)})</span></span>
                           </div>
-                        );
-                      })() : (
-                        <div className="space-y-0.5">
-                          {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
-                            <div key={code} className="flex items-center justify-between text-[12px] font-mono">
-                              <span className={code.startsWith('2') ? 'text-[#1f883d]' : code.startsWith('4') || code.startsWith('5') ? 'text-[#cf222e]' : 'text-[#57606a]'}>{code}</span>
-                              <span className="text-[#57606a]">×{count}</span>
+                        ))}
+                      </div>
+                    );
+                  })() : (
+                    <div className="space-y-1">
+                      {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
+                        <div key={code} className="flex items-center justify-between text-[12.5px] font-mono">
+                          <span className={code.startsWith('2') ? 'text-green-fg' : code.startsWith('4') || code.startsWith('5') ? 'text-red-fg' : 'text-tx-3'}>{code}</span>
+                          <span className="text-tx-3">×{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {(m as any).errorBreakdown && m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0 && (
+                    <details className="mt-2.5">
+                      <summary className="text-[11px] text-tx-4 cursor-pointer hover:text-tx-2">Raw status codes</summary>
+                      <div className="space-y-1 mt-1.5">
+                        {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
+                          <div key={code} className="flex items-center justify-between text-[12px] font-mono">
+                            <span className={code.startsWith('2') ? 'text-green-fg' : 'text-red-fg'}>{code}</span>
+                            <span className="text-tx-4">×{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  {(m as any).errorBreakdown && (
+                    <div className="mt-3 pt-3 border-t border-line">
+                      {diagnoses === null && (
+                        <button type="button" disabled={diagnosing} className="text-[12.5px] text-accent hover:underline disabled:opacity-50 font-mono"
+                          onClick={async () => {
+                            setDiagnosing(true); setDiagnoseError(null);
+                            try { const r = await diagnoseErrors(testId!); setDiagnoses(r.diagnoses); }
+                            catch (e) { setDiagnoseError((e as Error).message); }
+                            finally { setDiagnosing(false); }
+                          }}>
+                          {diagnosing ? '⏳ Diagnosing…' : '✨ Diagnose with AI'}
+                        </button>
+                      )}
+                      {diagnoseError && <p className="text-[11px] text-red-fg font-mono mt-1">{diagnoseError}</p>}
+                      {diagnoses && diagnoses.length > 0 && (
+                        <div className="mt-2 space-y-2">
+                          {diagnoses.map((d, i) => (
+                            <div key={i} className="p-2.5 bg-amber-bg border border-amber-fg/25 rounded-control text-[11.5px]">
+                              <div className="font-semibold text-amber-badge-fg font-mono">{d.category} ×{d.count}</div>
+                              <div className="text-tx-3 mt-0.5">⚠ {d.likelyCause}</div>
+                              <div className="text-accent mt-0.5">→ {d.nextStep}</div>
                             </div>
                           ))}
                         </div>
                       )}
-                      {(m as any).errorBreakdown && m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0 && (
-                        <details className="mt-2">
-                          <summary className="text-[10px] text-[#8c959f] cursor-pointer hover:text-[#57606a]">Raw status codes</summary>
-                          <div className="space-y-0.5 mt-1">
-                            {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
-                              <div key={code} className="flex items-center justify-between text-[11px] font-mono">
-                                <span className={code.startsWith('2') ? 'text-[#1f883d]' : 'text-[#cf222e]'}>{code}</span>
-                                <span className="text-[#8c959f]">×{count}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      )}
+                      {diagnoses && diagnoses.length === 0 && <p className="text-[11px] text-tx-4 font-mono mt-1">No actionable diagnoses found.</p>}
                     </div>
-
-                    {/* AI-4: Error diagnosis button */}
-                    {(m as any).errorBreakdown && (
-                      <div className="px-3 pb-3">
-                        {diagnoses === null && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              setDiagnosing(true);
-                              setDiagnoseError(null);
-                              try {
-                                const r = await diagnoseErrors(testId!);
-                                setDiagnoses(r.diagnoses);
-                              } catch (e) {
-                                setDiagnoseError((e as Error).message);
-                              } finally { setDiagnosing(false); }
-                            }}
-                            disabled={diagnosing}
-                            className="text-[12px] text-[#0969da] hover:underline disabled:opacity-50 font-mono"
-                          >
-                            {diagnosing ? '⏳ Diagnosing…' : '✨ Diagnose with AI'}
-                          </button>
-                        )}
-                        {diagnoseError && <p className="text-[11px] text-[#cf222e] font-mono mt-1">{diagnoseError}</p>}
-                        {diagnoses && diagnoses.length > 0 && (
-                          <div className="mt-2 space-y-2">
-                            {diagnoses.map((d, i) => (
-                              <div key={i} className="p-2 bg-[#fff8c5] border border-[#e3b34166] rounded text-[11px]">
-                                <div className="font-semibold text-[#9a6700] font-mono">{d.category} ×{d.count}</div>
-                                <div className="text-[#57606a] mt-0.5">⚠ {d.likelyCause}</div>
-                                <div className="text-[#0969da] mt-0.5">→ {d.nextStep}</div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {diagnoses && diagnoses.length === 0 && (
-                          <p className="text-[11px] text-[#57606a] font-mono mt-1">No actionable diagnoses found.</p>
-                        )}
-                      </div>
-                    )}
-                  </BentoCard>
+                  )}
                 </div>
-              )}
-            </>
-          )}
+              </Card>
+            )}
 
-          {/* ── Chart + Analysis side by side ── */}
-          <div className="col-span-full lg:col-span-7">
-            <BentoCard>
-              <CardHeader title={isBackend ? 'Response Distribution' : 'Web Vitals'} />
-              <div className="p-3">
-                <Suspense fallback={null}>
-                {result.type === 'flow' && (m as any).stepMetrics?.length > 0
-                  ? <FlowStepChart steps={(m as any).stepMetrics} />
-                  : isBackend
-                    ? <BackendChart metrics={m as any} />
-                    : <ClientChart metrics={m as any} />
-                }
-              </Suspense>
-              </div>
-            </BentoCard>
-          </div>
+            {(m as any).stepMetrics?.length > 0 && <StepMetricsTable steps={(m as any).stepMetrics} />}
 
-          {result.analysis && (
-            <div className="col-span-full lg:col-span-5">
-              <BentoCard>
-                <CardHeader title="Analysis" />
-                <div className="p-3">
-                  <Suspense fallback={null}><AnalysisPanel analysis={result.analysis as any} /></Suspense>
-                </div>
-              </BentoCard>
-            </div>
-          )}
-
-          {/* ── Per-step table (flow) ── */}
-          {(m as any).stepMetrics?.length > 0 && (
-            <StepMetricsTable steps={(m as any).stepMetrics} />
-          )}
-
-          {/* ── Trend chart ── */}
-          {trend.length > 1 && (
-            <div className="col-span-full">
-              <BentoCard>
+            {trend.length > 1 && (
+              <Card>
                 <CardHeader title={`Trend — ${trend.length} runs for this URL`} />
-                <div className="p-3">
-                  <Suspense fallback={null}><TrendChart
-                    trend={trend}
-                    metricKey={isBackend ? 'p95ResponseTime' : 'lcp'}
-                    label={isBackend ? 'p95 (ms)' : 'LCP (ms)'}
-                  /></Suspense>
+                <div className="p-5">
+                  <Suspense fallback={null}><TrendChart trend={trend} metricKey={isBackend ? 'p95ResponseTime' : 'lcp'} label={isBackend ? 'p95 (ms)' : 'LCP (ms)'} /></Suspense>
                 </div>
-                {/* AI-7: Regression narrative */}
-                <div className="px-3 pb-3">
+                <div className="px-5 pb-5">
                   {trendNarrative ? (
-                    <p className="text-[12px] text-[#57606a] font-mono border-t border-[#eaeef2] pt-2">{trendNarrative}</p>
+                    <p className="text-[12.5px] text-tx-3 font-mono border-t border-line pt-3">{trendNarrative}</p>
                   ) : (
-                    <button type="button" disabled={trendNarrativeLoading}
+                    <button type="button" disabled={trendNarrativeLoading} className="text-[12.5px] text-accent hover:underline disabled:opacity-50 font-mono"
                       onClick={async () => {
                         setTrendNarrativeLoading(true);
-                        try {
-                          const { narrative } = await getTrendNarrative(trend);
-                          setTrendNarrative(narrative);
-                        } catch { setTrendNarrative('Could not generate narrative.'); }
+                        try { const { narrative } = await getTrendNarrative(trend); setTrendNarrative(narrative); }
+                        catch { setTrendNarrative('Could not generate narrative.'); }
                         finally { setTrendNarrativeLoading(false); }
-                      }}
-                      className="text-[12px] text-[#0969da] hover:underline disabled:opacity-50 font-mono">
+                      }}>
                       {trendNarrativeLoading ? '⏳ Analysing trend…' : '✨ Summarise trend'}
                     </button>
                   )}
                 </div>
-              </BentoCard>
-            </div>
-          )}
+              </Card>
+            )}
 
-          {/* ── External log links ── */}
-          {logSources.length > 0 && result.started_at && (
-            <div className="col-span-full">
-              <BentoCard>
+            {logSources.length > 0 && result.started_at && (
+              <Card>
                 <CardHeader title="External Logs" />
-                <div className="px-3 py-2.5 flex flex-wrap gap-2">
+                <div className="px-5 py-4 flex flex-wrap gap-2.5">
                   {logSources.map(src => (
-                    <a
-                      key={src.id}
-                      href={interpolateLogSourceUrl(src.url_template, result)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#d0d7de] rounded-md text-[12px] text-[#24292f] hover:bg-[#eaeef2] hover:border-[#8c959f] transition-colors font-medium"
-                    >
-                      {src.platform && (
-                        <span className="text-[10px] font-mono bg-[#ddf4ff] text-[#0969da] px-1 py-0.5 rounded">{src.platform}</span>
-                      )}
+                    <a key={src.id} href={interpolateLogSourceUrl(src.url_template, result)} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-border rounded-control text-[12.5px] font-medium hover:border-tx-5 transition-colors">
+                      {src.platform && <span className="text-[10px] font-mono bg-orange-bg text-accent px-1.5 py-0.5 rounded-chip">{src.platform}</span>}
                       {src.name} →
                     </a>
                   ))}
                 </div>
-              </BentoCard>
-            </div>
-          )}
+              </Card>
+            )}
 
-          {/* ── Generated script ── */}
-          {result.script && (
-            <div className="col-span-full">
-              <BentoCard>
-                <div className="px-3 py-2 border-b border-[#d0d7de] bg-[#f6f8fa] flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-[#57606a] uppercase tracking-wide">Generated Script</span>
-                  <button
-                    type="button"
+            {result.script && (
+              <Card>
+                <CardHeader title="Generated Script" action={
+                  <button type="button" className="text-[11px] font-mono text-accent hover:underline"
                     onClick={() => {
                       const blob = new Blob([result.script!], { type: 'text/javascript' });
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `script-${testId.slice(0, 8)}.js`;
-                      a.click();
+                      a.href = url; a.download = `script-${testId.slice(0, 8)}.js`; a.click();
                       URL.revokeObjectURL(url);
-                    }}
-                    className="text-[11px] font-mono text-[#0969da] hover:underline"
-                  >
-                    ↓ Download .js
-                  </button>
-                </div>
-                <pre className="text-[11px] font-mono text-[#57606a] bg-[#f6f8fa] p-4 overflow-auto max-h-64 leading-relaxed">
-                  {result.script}
-                </pre>
-              </BentoCard>
-            </div>
-          )}
+                    }}>↓ Download .js</button>
+                } />
+                <pre className="text-[11px] font-mono text-tx-3 bg-surface-2 p-5 overflow-auto max-h-64 leading-relaxed">{result.script}</pre>
+              </Card>
+            )}
 
-          {/* ── Execution log (completed) ── */}
-          <ExecutionLogPanel testId={testId} isRunning={false} liveLines={liveLogLines} />
-        </div>
-      )}
+            <ExecutionLogPanel testId={testId} isRunning={false} liveLines={liveLogLines} />
+          </div>
+        )}
 
-      {/* ── Execution log (running) — shown below the running state card ── */}
-      {isRunning && (
-        <div className="mt-3">
-          <ExecutionLogPanel testId={testId} isRunning={true} liveLines={liveLogLines} />
-        </div>
-      )}
+        {isRunning && <ExecutionLogPanel testId={testId} isRunning={true} liveLines={liveLogLines} />}
+      </div>
     </div>
   );
 }

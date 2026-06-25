@@ -500,7 +500,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          className="px-3 py-1.5 text-xs font-medium border border-[#d0d7de] text-[#24292f] rounded-md hover:bg-[#f3f4f6]"
+          className="px-3 py-1.5 text-xs font-medium border border-border text-tx rounded-control hover:bg-bg"
         >
           Import from HAR
         </button>
@@ -510,12 +510,12 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
           type="button"
           onClick={recording ? handleStopRecording : handleStartRecording}
           disabled={recording?.status === 'stopping' || recordingLaunching}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors font-mono ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-control border transition-colors font-mono ${
             recording && recording.status !== 'stopping'
-              ? 'bg-[#cf222e] border-[#cf222e] text-white hover:bg-[#a0151a]'
+              ? 'bg-red-fg border-red-fg text-white hover:bg-red-badge-fg'
               : recording?.status === 'stopping'
-                ? 'bg-[#eaeef2] border-[#d0d7de] text-[#57606a] cursor-not-allowed'
-                : 'border-[#d0d7de] text-[#24292f] hover:bg-[#f3f4f6]'
+                ? 'bg-line border-border text-tx-3 cursor-not-allowed'
+                : 'border-border text-tx hover:bg-bg'
           }`}
         >
           {recordingLaunching
@@ -532,7 +532,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
           <button
             type="button"
             onClick={() => setRecording(null)}
-            className="px-2 py-1.5 text-xs rounded-md border border-[#d0d7de] text-[#57606a] hover:bg-[#f3f4f6] transition-colors"
+            className="px-2 py-1.5 text-xs rounded-control border border-border text-tx-3 hover:bg-bg transition-colors"
             title="Dismiss and return to manual editing"
           >
             ✕ Skip
@@ -544,10 +544,10 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
           <button
             type="button"
             onClick={() => setShowIgnore(v => !v)}
-            className={`px-2 py-1.5 text-xs rounded-md border transition-colors ${
+            className={`px-2 py-1.5 text-xs rounded-control border transition-colors ${
               showIgnore || ignorePatterns.length > 0
-                ? 'border-[#0969da] text-[#0969da] bg-[#ddf4ff]'
-                : 'border-[#d0d7de] text-[#57606a] hover:bg-[#f3f4f6]'
+                ? 'border-ink-bd text-accent bg-orange-bg'
+                : 'border-border text-tx-3 hover:bg-bg'
             }`}
             title="Configure URL patterns to ignore during recording"
           >
@@ -560,27 +560,27 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
           <button
             type="button"
             onClick={() => { if (confirm('Clear all steps?')) onChange([]); }}
-            className="ml-auto px-3 py-1.5 text-xs font-medium border border-[#d0d7de] text-[#cf222e] rounded-md hover:bg-[#fff0ee] hover:border-[#cf222e]"
+            className="ml-auto px-3 py-1.5 text-xs font-medium border border-border text-red-fg rounded-control hover:bg-red-bg hover:border-red-fg"
           >
             Clear all
           </button>
         )}
 
-        <span className={`text-xs text-[#57606a] ${steps.length > 0 ? '' : 'ml-auto'}`}>or build steps manually below</span>
+        <span className={`text-xs text-tx-3 ${steps.length > 0 ? '' : 'ml-auto'}`}>or build steps manually below</span>
         <input ref={fileRef} type="file" accept=".har,application/json" className="hidden" onChange={handleHar} />
       </div>
 
       {/* Ignore list panel */}
       {showIgnore && !recording && (
-        <div className="p-3 border border-[#d0d7de] rounded-md bg-[#f6f8fa] text-[12px] space-y-2">
+        <div className="p-3 border border-border rounded-control bg-surface-2 text-[12px] space-y-2">
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-[#24292f]">🚫 Ignore list — URLs matching these patterns won&apos;t be recorded</span>
+            <span className="font-semibold text-tx">🚫 Ignore list — URLs matching these patterns won&apos;t be recorded</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleExportIgnoreList}
                 disabled={ignorePatterns.length === 0}
-                className="text-[11px] text-[#0969da] hover:underline disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline"
+                className="text-[11px] text-accent hover:underline disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline"
                 title="Download ignore list as JSON"
               >
                 ↓ Export
@@ -588,35 +588,35 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               <button
                 type="button"
                 onClick={() => ignoreFileRef.current?.click()}
-                className="text-[11px] text-[#0969da] hover:underline"
+                className="text-[11px] text-accent hover:underline"
                 title="Import ignore list from JSON"
               >
                 ↑ Import
               </button>
               <input ref={ignoreFileRef} type="file" accept=".json,application/json" className="hidden" onChange={handleImportIgnoreList} />
-              <button onClick={() => setShowIgnore(false)} className="text-[#57606a] hover:text-[#24292f]">✕</button>
+              <button onClick={() => setShowIgnore(false)} className="text-tx-3 hover:text-tx">✕</button>
             </div>
           </div>
-          <p className="text-[#57606a]">
-            Enter a substring (e.g. <code className="bg-[#eaeef2] px-1 rounded">analytics</code>, <code className="bg-[#eaeef2] px-1 rounded">localhost:3007</code>) or a regex wrapped in slashes (e.g. <code className="bg-[#eaeef2] px-1 rounded">/\.(png|gif)$/i</code>).
+          <p className="text-tx-3">
+            Enter a substring (e.g. <code className="bg-line px-1 rounded">analytics</code>, <code className="bg-line px-1 rounded">localhost:3007</code>) or a regex wrapped in slashes (e.g. <code className="bg-line px-1 rounded">/\.(png|gif)$/i</code>).
           </p>
           {/* Tag list */}
           {ignorePatterns.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {ignorePatterns.map(p => (
-                <span key={p} className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#eaeef2] rounded font-mono text-[11px] text-[#24292f]">
+                <span key={p} className="inline-flex items-center gap-1 px-2 py-0.5 bg-line rounded font-mono text-[11px] text-tx">
                   {p}
                   <button
                     type="button"
                     onClick={() => setIgnorePatterns(prev => prev.filter(x => x !== p))}
-                    className="text-[#57606a] hover:text-[#cf222e] leading-none"
+                    className="text-tx-3 hover:text-red-fg leading-none"
                   >×</button>
                 </span>
               ))}
               <button
                 type="button"
                 onClick={() => setIgnorePatterns([])}
-                className="text-[11px] text-[#57606a] hover:text-[#cf222e] underline ml-1"
+                className="text-[11px] text-tx-3 hover:text-red-fg underline ml-1"
               >clear all</button>
             </div>
           )}
@@ -628,13 +628,13 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               onChange={e => setIgnoreInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addIgnorePattern(); } }}
               placeholder="analytics.google.com or /hotjar|segment/i"
-              className="flex-1 border border-[#d0d7de] rounded px-2 py-1 text-[12px] font-mono bg-white focus:outline-none focus:border-[#0969da]"
+              className="flex-1 border border-border rounded px-2 py-1 text-[12px] font-mono bg-surface focus:outline-none focus:border-ink-bd"
             />
             <button
               type="button"
               onClick={addIgnorePattern}
               disabled={!ignoreInput.trim()}
-              className="px-3 py-1 text-[12px] bg-[#0969da] text-white rounded hover:bg-[#0550ae] disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 py-1 text-[12px] bg-accent text-white rounded hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Add
             </button>
@@ -644,40 +644,40 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
       {/* Launching info panel — shown while recorder-service starts Chromium (5–10 s) */}
       {recordingLaunching && (
-        <div className="p-3 bg-[#ddf4ff] border border-[#79c0ff] rounded-md text-[12px] space-y-1.5">
-          <p className="font-semibold text-[#0969da] flex items-center gap-2">
+        <div className="p-3 bg-orange-bg border border-orange-bd rounded-control text-[12px] space-y-1.5">
+          <p className="font-semibold text-accent flex items-center gap-2">
             <span className="inline-block animate-spin">⟳</span>
             Launching browser recorder…
           </p>
-          <p className="text-[#57606a]">
+          <p className="text-tx-3">
             Chromium is starting inside the container — this takes <strong>5–10 seconds</strong> on first use.
-            The noVNC browser tab (<code className="bg-[#f6f8fa] border border-[#d0d7de] rounded px-1">localhost:6080</code>) will open automatically when ready.
+            The noVNC browser tab (<code className="bg-surface-2 border border-border rounded px-1">localhost:6080</code>) will open automatically when ready.
           </p>
-          <p className="text-[#57606a]">
+          <p className="text-tx-3">
             Once the browser opens, navigate to your target app using{' '}
-            <code className="bg-[#f6f8fa] border border-[#d0d7de] rounded px-1">host.docker.internal</code>{' '}
-            instead of <code className="bg-[#f6f8fa] border border-[#d0d7de] rounded px-1">localhost</code>.
+            <code className="bg-surface-2 border border-border rounded px-1">host.docker.internal</code>{' '}
+            instead of <code className="bg-surface-2 border border-border rounded px-1">localhost</code>.
           </p>
         </div>
       )}
 
       {/* Recording active overlay */}
       {recording && recording.status === 'active' && (
-        <div className="p-3 bg-[#fff8c5] border border-[#d4a72c] rounded-md text-[12px]">
+        <div className="p-3 bg-amber-bg border border-amber-fg/40 rounded-control text-[12px]">
           <div className="flex items-center justify-between mb-1">
-            <span className="font-semibold text-[#633c01] font-mono">
+            <span className="font-semibold text-amber-badge-fg font-mono">
               🔴 Recording — {recording.stepCount ?? 0} request{recording.stepCount !== 1 ? 's' : ''} captured
             </span>
             <a
               href={recording.noVncUrl}
               target="_blank"
               rel="noreferrer"
-              className="text-[#0969da] hover:underline font-mono text-[11px]"
+              className="text-accent hover:underline font-mono text-[11px]"
             >
               Open Browser ↗
             </a>
           </div>
-          <p className="text-[#633c01]">
+          <p className="text-amber-badge-fg">
             Interact with the target page in the recording browser, then click{' '}
             <strong>⏹ Stop Recording</strong> when done.
             Steps will automatically populate below.
@@ -687,7 +687,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
       {/* AI correlation progress — shown while stop request is in flight */}
       {recording?.status === 'stopping' && (
-        <div className="p-2 bg-[#ddf4ff] border border-[#54aeff66] rounded-md text-[12px] text-[#0550ae] flex items-center gap-2">
+        <div className="p-2 bg-orange-bg border border-orange-bd rounded-control text-[12px] text-accent flex items-center gap-2">
           <span className="animate-spin">⏳</span>
           <span>Running AI correlation detection… this may take 30–60 s. Steps will appear automatically when done.</span>
         </div>
@@ -695,27 +695,27 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
       {/* AI-13: Step deduplication suggestions */}
       {duplicates.length > 0 && (
-        <div className="p-2 bg-[#fff8c5] border border-[#e3b34166] rounded-md text-[12px]">
+        <div className="p-2 bg-amber-bg border border-amber-fg/30 rounded-control text-[12px]">
           <div className="flex items-start justify-between gap-2">
-            <span className="font-semibold text-[#9a6700]">✨ Duplicate steps detected</span>
-            <button onClick={() => setDuplicates([])} className="text-[#9a6700] hover:opacity-70 shrink-0 text-[13px]">✕</button>
+            <span className="font-semibold text-amber-fg">✨ Duplicate steps detected</span>
+            <button onClick={() => setDuplicates([])} className="text-amber-fg hover:opacity-70 shrink-0 text-[13px]">✕</button>
           </div>
           {duplicates.map((d, i) => (
-            <p key={i} className="text-[11px] text-[#57606a] font-mono mt-1">{d.suggestion}</p>
+            <p key={i} className="text-[11px] text-tx-3 font-mono mt-1">{d.suggestion}</p>
           ))}
         </div>
       )}
 
       {/* AI-suggested ignore patterns for next recording */}
       {suggestedIgnore.length > 0 && (
-        <div className="p-2 bg-[#ddf4ff] border border-[#54aeff66] rounded-md text-[12px] text-[#0550ae]">
+        <div className="p-2 bg-orange-bg border border-orange-bd rounded-control text-[12px] text-accent">
           <div className="flex items-start justify-between gap-2">
             <span className="font-semibold">✨ Suggested ignore patterns for next recording</span>
-            <button onClick={() => setSuggestedIgnore([])} className="text-[#0550ae] hover:opacity-70 shrink-0">✕</button>
+            <button onClick={() => setSuggestedIgnore([])} className="text-accent hover:opacity-70 shrink-0">✕</button>
           </div>
           <div className="flex flex-wrap gap-1 mt-1">
             {suggestedIgnore.map(p => (
-              <span key={p} className="px-1.5 py-0.5 bg-white border border-[#54aeff66] rounded text-[11px] font-mono">{p}</span>
+              <span key={p} className="px-1.5 py-0.5 bg-surface border border-orange-bd rounded text-[11px] font-mono">{p}</span>
             ))}
           </div>
           <button
@@ -728,7 +728,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               });
               setSuggestedIgnore([]);
             }}
-            className="mt-1.5 text-[11px] text-[#0550ae] hover:underline font-medium"
+            className="mt-1.5 text-[11px] text-accent hover:underline font-medium"
           >
             + Add all to Ignore list
           </button>
@@ -737,23 +737,23 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
 
       {/* Recording truncation notice */}
       {recordingNote && (
-        <div className="p-2 bg-[#ddf4ff] border border-[#54aeff66] rounded-md text-[12px] text-[#0550ae] flex items-center justify-between">
+        <div className="p-2 bg-orange-bg border border-orange-bd rounded-control text-[12px] text-accent flex items-center justify-between">
           <span>ℹ {recordingNote}</span>
-          <button onClick={() => setRecordingNote(null)} className="text-[#0550ae] ml-2 hover:opacity-70">✕</button>
+          <button onClick={() => setRecordingNote(null)} className="text-accent ml-2 hover:opacity-70">✕</button>
         </div>
       )}
 
       {/* Recording error */}
       {recordingError && (
-        <div className="p-2 bg-[#fff0ee] border border-[#ff818266] rounded-md text-[12px] text-[#cf222e] flex items-center justify-between">
+        <div className="p-2 bg-red-bg border border-red-fg/30 rounded-control text-[12px] text-red-fg flex items-center justify-between">
           <span>⚠ {recordingError}</span>
-          <button onClick={() => setRecordingError(null)} className="text-[#cf222e] ml-2 hover:opacity-70">✕</button>
+          <button onClick={() => setRecordingError(null)} className="text-red-fg ml-2 hover:opacity-70">✕</button>
         </div>
       )}
 
       {/* Too many steps to execute */}
       {steps.length > 20 && (
-        <div className="p-2 bg-[#fff8c5] border border-[#d4a72c66] rounded-md text-[12px] text-[#9a6700]">
+        <div className="p-2 bg-amber-bg border border-amber-fg/30 rounded-control text-[12px] text-amber-fg">
           ⚠ {steps.length} steps recorded — flow tests support a maximum of 20 steps. Remove {steps.length - 20} step{steps.length - 20 === 1 ? '' : 's'} before running.
         </div>
       )}
@@ -772,34 +772,34 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               setDragIndex(null);
             }}
             onDragEnd={() => setDragIndex(null)}
-            className={`border rounded-xl p-4 bg-white space-y-3 transition-opacity ${
-              dragIndex === i ? 'opacity-40 border-[#0969da]' : 'border-gray-200'
+            className={`border rounded-xl p-4 bg-surface space-y-3 transition-opacity ${
+              dragIndex === i ? 'opacity-40 border-ink-bd' : 'border-border'
             }`}
           >
             <div className="flex items-center gap-2">
               <span
-                className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 select-none px-0.5"
+                className="cursor-grab active:cursor-grabbing text-tx-4 hover:text-tx-3 select-none px-0.5"
                 title="Drag to reorder"
                 aria-label={`Drag to reorder step ${i + 1}`}
               >
                 ⠿
               </span>
-              <span className="text-xs font-semibold text-gray-400 w-6">{i + 1}</span>
+              <span className="text-xs font-semibold text-tx-4 w-6">{i + 1}</span>
               {thinkTimes[i] > 500 && (
-                <span className="text-[10px] font-mono text-[#8c959f]" title="Observed think time before this step">⏱ {(thinkTimes[i] / 1000).toFixed(1)}s</span>
+                <span className="text-[10px] font-mono text-tx-4" title="Observed think time before this step">⏱ {(thinkTimes[i] / 1000).toFixed(1)}s</span>
               )}
               <input
                 type="text"
                 placeholder="Step name (e.g. Login)"
                 value={step.name}
                 onChange={e => update(i, { name: e.target.value })}
-                className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 border border-border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
               />
               {i > 0 && (
-                <button type="button" onClick={() => moveStep(i, i - 1)} aria-label={`Move step ${i + 1} up`} className="text-gray-400 hover:text-gray-600 text-xs px-1">↑</button>
+                <button type="button" onClick={() => moveStep(i, i - 1)} aria-label={`Move step ${i + 1} up`} className="text-tx-4 hover:text-tx-3 text-xs px-1">↑</button>
               )}
               {i < steps.length - 1 && (
-                <button type="button" onClick={() => moveStep(i, i + 1)} aria-label={`Move step ${i + 1} down`} className="text-gray-400 hover:text-gray-600 text-xs px-1">↓</button>
+                <button type="button" onClick={() => moveStep(i, i + 1)} aria-label={`Move step ${i + 1} down`} className="text-tx-4 hover:text-tx-3 text-xs px-1">↓</button>
               )}
               <button type="button" onClick={() => removeStep(i)} className="text-red-400 hover:text-red-600 text-xs px-1">✕</button>
             </div>
@@ -808,7 +808,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               <select
                 value={step.method}
                 onChange={e => update(i, { method: e.target.value as FlowStep['method'] })}
-                className="border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="border border-border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent bg-surface"
               >
                 {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
@@ -817,7 +817,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 placeholder="https://api.example.com/endpoint"
                 value={step.url}
                 onChange={e => update(i, { url: e.target.value })}
-                className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 border border-border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
 
@@ -827,15 +827,15 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 placeholder='Request body (JSON): {"key": "value"}'
                 value={step.body ?? ''}
                 onChange={e => update(i, { body: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                className="w-full border border-border rounded-lg px-2 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent resize-none"
               />
             )}
 
             {/* Request headers */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-gray-500 font-medium">Request headers</span>
-                <button type="button" onClick={() => addHeader(i)} aria-label="Add request header" className="text-xs text-blue-600 hover:underline">+ add</button>
+                <span className="text-xs text-tx-4 font-medium">Request headers</span>
+                <button type="button" onClick={() => addHeader(i)} aria-label="Add request header" className="text-xs text-accent hover:underline">+ add</button>
               </div>
               {Object.entries(step.headers ?? {}).map(([key, value], hi) => (
                 <div key={hi} className="flex gap-1 mb-1 items-center">
@@ -844,29 +844,29 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                     placeholder="Header-Name"
                     value={key}
                     onChange={e => setHeaderKey(i, key, e.target.value)}
-                    className="w-40 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
+                    className="w-40 border border-border rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
                   />
-                  <span className="text-gray-400 text-xs">:</span>
+                  <span className="text-tx-4 text-xs">:</span>
                   <input
                     type="text"
                     placeholder="value (supports {{varName}})"
                     value={value}
                     onChange={e => setHeaderValue(i, key, e.target.value)}
-                    className="flex-1 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
+                    className="flex-1 border border-border rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
                   />
-                  <button type="button" onClick={() => removeHeader(i, key)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
+                  <button type="button" onClick={() => removeHeader(i, key)} className="text-tx-4 hover:text-red-fg text-xs">✕</button>
                 </div>
               ))}
               {Object.keys(step.headers ?? {}).length === 0 && (
-                <p className="text-xs text-gray-400">No custom headers.</p>
+                <p className="text-xs text-tx-4">No custom headers.</p>
               )}
             </div>
 
             {/* Extract variables */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-gray-500 font-medium">Extract variables from response</span>
-                <button type="button" onClick={() => addExtract(i)} aria-label="Add extract rule" className="text-xs text-blue-600 hover:underline">+ add</button>
+                <span className="text-xs text-tx-4 font-medium">Extract variables from response</span>
+                <button type="button" onClick={() => addExtract(i)} aria-label="Add extract rule" className="text-xs text-accent hover:underline">+ add</button>
               </div>
               {Object.entries(step.extract ?? {}).map(([key, rule]) => (
                 <div key={key} className="flex gap-1 mb-1 items-center">
@@ -875,13 +875,13 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                     placeholder="varName"
                     value={key}
                     onChange={e => setExtractKey(i, key, e.target.value)}
-                    className="w-24 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none"
+                    className="w-24 border border-border rounded px-2 py-0.5 text-xs focus:outline-none"
                   />
-                  <span className="text-gray-400 text-xs">←</span>
+                  <span className="text-tx-4 text-xs">←</span>
                   <select
                     value={rule.source}
                     onChange={e => setExtractRule(i, key, { source: e.target.value as ExtractSource })}
-                    className="border border-gray-200 rounded px-1 py-0.5 text-xs bg-white focus:outline-none"
+                    className="border border-border rounded px-1 py-0.5 text-xs bg-surface focus:outline-none"
                   >
                     <option value="jsonpath">body</option>
                     <option value="header">header</option>
@@ -893,9 +893,9 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                     placeholder={SOURCE_PLACEHOLDERS[rule.source]}
                     value={rule.expression}
                     onChange={e => setExtractRule(i, key, { expression: e.target.value })}
-                    className="flex-1 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none font-mono"
+                    className="flex-1 border border-border rounded px-2 py-0.5 text-xs focus:outline-none font-mono"
                   />
-                  <button type="button" onClick={() => removeExtract(i, key)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
+                  <button type="button" onClick={() => removeExtract(i, key)} className="text-tx-4 hover:text-red-fg text-xs">✕</button>
                 </div>
               ))}
             </div>
@@ -906,18 +906,18 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
       <button
         type="button"
         onClick={addStep}
-        className="w-full py-2 border-2 border-dashed border-gray-300 text-gray-500 rounded-xl text-sm hover:border-blue-400 hover:text-blue-500 transition-colors"
+        className="w-full py-2 border-2 border-dashed border-border text-tx-3 rounded-xl text-sm hover:border-accent hover:text-accent transition-colors"
       >
         + Add step
       </button>
 
       {/* Env vars */}
-      <div className="border border-gray-200 rounded-xl p-4 bg-white">
+      <div className="border border-border rounded-xl p-4 bg-surface">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-700">Environment variables (credentials)</span>
-          <button type="button" onClick={addEnvVar} className="text-xs text-blue-600 hover:underline">+ add</button>
+          <span className="text-sm font-medium text-tx-3">Environment variables (credentials)</span>
+          <button type="button" onClick={addEnvVar} className="text-xs text-accent hover:underline">+ add</button>
         </div>
-        <p className="text-xs text-gray-400 mb-3">Available in the script as <code className="bg-gray-100 px-1 rounded">__ENV.VAR_NAME</code>. Not stored in the database.</p>
+        <p className="text-xs text-tx-4 mb-3">Available in the script as <code className="bg-bg px-1 rounded">__ENV.VAR_NAME</code>. Not stored in the database.</p>
         {envVars.map((ev, i) => (
           <div key={i} className="flex gap-2 mb-1">
             <input
@@ -925,30 +925,30 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               placeholder="KEY"
               value={ev.key}
               onChange={e => updateEnvVar(i, 'key', e.target.value)}
-              className="w-32 border border-gray-200 rounded px-2 py-1 text-xs font-mono focus:outline-none"
+              className="w-32 border border-border rounded px-2 py-1 text-xs font-mono focus:outline-none"
             />
             <input
               type="password"
               placeholder="value"
               value={ev.value}
               onChange={e => updateEnvVar(i, 'value', e.target.value)}
-              className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs font-mono focus:outline-none"
+              className="flex-1 border border-border rounded px-2 py-1 text-xs font-mono focus:outline-none"
             />
-            <button type="button" onClick={() => removeEnvVar(i)} className="text-gray-400 hover:text-red-500 text-xs">✕</button>
+            <button type="button" onClick={() => removeEnvVar(i)} className="text-tx-4 hover:text-red-fg text-xs">✕</button>
           </div>
         ))}
         {envVars.length === 0 && (
-          <p className="text-xs text-gray-400">No variables. Click + add if your flow requires credentials.</p>
+          <p className="text-xs text-tx-4">No variables. Click + add if your flow requires credentials.</p>
         )}
       </div>
 
       {/* Test data — inline table or CSV */}
-      <div className="border border-gray-200 rounded-xl p-4 bg-white">
+      <div className="border border-border rounded-xl p-4 bg-surface">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-sm font-medium text-gray-700">Test data (parameterization)</span>
+          <span className="text-sm font-medium text-tx-3">Test data (parameterization)</span>
         </div>
-        <p className="text-xs text-gray-400 mb-3">
-          Distribute different data to each VU. Use <code className="bg-gray-100 px-1 rounded">row.columnName</code> in the generated script.
+        <p className="text-xs text-tx-4 mb-3">
+          Distribute different data to each VU. Use <code className="bg-bg px-1 rounded">row.columnName</code> in the generated script.
         </p>
 
         {/* Inline table */}
@@ -960,12 +960,12 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                   <thead>
                     <tr>
                       {columns.map((col, ci) => (
-                        <th key={ci} className="border border-gray-200 px-1 py-0.5">
+                        <th key={ci} className="border border-border px-1 py-0.5">
                           <input
                             type="text"
                             value={col}
                             onChange={e => renameColumn(col, e.target.value)}
-                            className="w-full bg-transparent text-center font-semibold text-gray-600 focus:outline-none"
+                            className="w-full bg-transparent text-center font-semibold text-tx-3 focus:outline-none"
                           />
                         </th>
                       ))}
@@ -976,7 +976,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                     {testData.map((row, ri) => (
                       <tr key={ri}>
                         {columns.map(col => (
-                          <td key={col} className="border border-gray-200 px-1 py-0.5">
+                          <td key={col} className="border border-border px-1 py-0.5">
                             <input
                               type="text"
                               value={row[col] ?? ''}
@@ -986,7 +986,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                           </td>
                         ))}
                         <td className="pl-1">
-                          <button type="button" onClick={() => removeDataRow(ri)} className="text-gray-400 hover:text-red-500">✕</button>
+                          <button type="button" onClick={() => removeDataRow(ri)} className="text-tx-4 hover:text-red-fg">✕</button>
                         </td>
                       </tr>
                     ))}
@@ -998,9 +998,9 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
               <button type="button" onClick={() => {
                 if (testData.length === 0) onTestDataChange([{ col1: '', col2: '' }]);
                 else addDataRow();
-              }} className="text-xs text-blue-600 hover:underline">+ add row</button>
+              }} className="text-xs text-accent hover:underline">+ add row</button>
               {testData.length > 0 && (
-                <button type="button" onClick={addDataColumn} className="text-xs text-blue-600 hover:underline">+ add column</button>
+                <button type="button" onClick={addDataColumn} className="text-xs text-accent hover:underline">+ add column</button>
               )}
               {steps.length > 0 && (
                 <button type="button"
@@ -1016,7 +1016,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                       alert(`Suggested: ${columns.join(', ')}\n${reasoning}`);
                     } catch (e) { alert(`Failed: ${(e as Error).message}`); }
                   }}
-                  className="text-xs text-[#0969da] hover:underline font-mono">
+                  className="text-xs text-accent hover:underline font-mono">
                   ✨ Suggest columns
                 </button>
               )}
@@ -1025,17 +1025,17 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
         )}
 
         {/* CSV upload */}
-        <div className={`${testData.length > 0 ? 'mt-3 pt-3 border-t border-gray-100' : ''}`}>
+        <div className={`${testData.length > 0 ? 'mt-3 pt-3 border-t border-line' : ''}`}>
           {csvFile ? (
-            <div className="flex items-center gap-2 text-xs text-gray-600">
+            <div className="flex items-center gap-2 text-xs text-tx-3">
               <span>📄 {csvFile.name}</span>
-              <button type="button" onClick={() => onCsvChange(null)} className="text-gray-400 hover:text-red-500">✕</button>
+              <button type="button" onClick={() => onCsvChange(null)} className="text-tx-4 hover:text-red-fg">✕</button>
             </div>
           ) : (
             <button
               type="button"
               onClick={() => csvRef.current?.click()}
-              className="text-xs text-blue-600 hover:underline"
+              className="text-xs text-accent hover:underline"
             >
               {testData.length > 0 ? 'Or upload CSV instead' : 'Upload CSV file'}
             </button>
