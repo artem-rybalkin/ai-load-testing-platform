@@ -6,68 +6,96 @@ A distributed, AI-powered load testing platform. Describe what you want to test 
 
 ## Features
 
-- 🤖 **AI script generation** — Describe your test in plain English; Gemini writes the k6 or Puppeteer script
+- 💬 **Chat-based test creation** — Describe a test in a multi-turn conversation; the assistant asks follow-up questions for anything ambiguous (test type, load amount, duration) instead of guessing
+- 🤖 **AI script generation** — Pluggable provider: Gemini, OpenAI, or Claude (Anthropic) generate the k6 or Puppeteer script, with a configurable fallback chain
 - ⚡ **Backend load testing** — k6-powered HTTP tests with VU ramp-up, load profiles (load / spike / capacity / soak), and full metrics (avg, p50, p95, p99, rps, error breakdown)
-- 🌐 **Browser testing** — Puppeteer + Lighthouse: Web Vitals (LCP, FID, CLS, TTFB, FCP) and performance scores
+- 🌐 **Browser testing** — Puppeteer + Lighthouse: Web Vitals (LCP, INP, TBT, CLS, TTFB, FCP) and performance scores
 - 🔗 **Multi-step flow testing** — Build authenticated flows with variable extraction and data parameterization
 - 🔴 **Flow recording** — Open a visible browser, interact naturally, AI auto-detects correlations
 - 📁 **Custom k6 scripts** — Upload or paste your own script; bypass AI entirely
-- 📊 **Live metrics** — Real-time charts streamed every 5 seconds during k6 execution
+- 📊 **Live metrics** — Real-time charts pushed over WebSocket during k6/Puppeteer execution
 - 📈 **Regression detection** — Automatic comparison vs baseline or previous run; 20%+ degradation flagged
 - 🎯 **SLO thresholds** — Per-test pass/fail criteria (p95 < Xms, error rate < Y%, LCP < Zms, etc.)
 - 🗓️ **Scheduled tests** — Cron-based recurring runs with CRUD API
 - 📬 **Webhooks** — Fire on `failed` or `degraded` results with optional HMAC signatures
-- 📄 **PDF reports** — Downloadable report per test result
-- 🔒 **API key auth + CORS** — Production-ready security out of the box
+- 📄 **PDF & CSV reports** — Downloadable report per test result
+- 👥 **Teams, orgs & RBAC** — User accounts, multi-team membership, admin/member/viewer roles, per-team quotas, audit log, and one-click data erasure
+- 🔑 **API key auth + CORS** — Per-team API keys for CI/external callers, production-ready security out of the box
 - 🛡️ **LLM guardrails** — Every AI response is schema-validated before use; user-supplied text is fenced against prompt injection before reaching a prompt
+- 🔭 **LLM observability** — Every AI call optionally traced to Langfuse (prompt, completion, which provider served it)
 - 🚀 **HTTPS via Caddy** — Automatic TLS certificates in production
 
 ---
 
 ## Architecture
 
-```
-Browser / API client
-        │
-        │ POST /tests
-        ▼
-  ┌─────────────┐
-  │ api-service │  :3000  — validates, routes, creates pending record
-  └──────┬──────┘
-         │
-    ┌────┴────┐
-    │no script│                 ┌─────────────┐
-    ▼         │                 │ ai-service  │  :3001
-  ai-requests─┘─────────────────▶  Gemini generates k6 / Puppeteer script
-  (RabbitMQ)                   └──────┬──────┘
-                                      │
-              ┌───────────────────────┤
-              ▼                       ▼
-     backend-tests queue      client-tests queue
-              │                       │
-              ▼                       ▼
-  ┌──────────────────┐    ┌─────────────────────┐
-  │ worker-backend   │    │  worker-client       │
-  │  :3002  (k6)     │    │  :3003 (Puppeteer)   │
-  └────────┬─────────┘    └──────────┬──────────┘
-           │                         │
-           └───────────┬─────────────┘
-                       │ test-results queue
-                       ▼
-            ┌──────────────────┐
-            │ results-service  │  :3004  — stores, analyses, fires webhooks
-            │   PostgreSQL     │
-            └──────────────────┘
-                       │
-                       ▼
-            ┌──────────────────┐
-            │       UI         │  :3006  — Vite + React Router dashboard
-            └──────────────────┘
+```mermaid
+flowchart TD
+    Client(["🖥️ Browser / API client"])
+    UI["🎨 UI :3006<br/>Vite + React Router"]
 
-  ┌─────────────────────┐
-  │  recorder-service   │  :3007 / :6080  — optional; CDP capture + noVNC
-  └─────────────────────┘
+    API["🚪 api-service :3000<br/>routing · auth · quotas · cancel"]
+    Client -- "POST /tests" --> API
+    Client <-.-> UI
+
+    subgraph mq ["📨 RabbitMQ"]
+        direction LR
+        Q1[("ai-requests")]
+        Q2[("backend-tests")]
+        Q3[("client-tests")]
+        Q4[("test-results")]
+    end
+
+    API -- "cache miss /<br/>re-describe" --> Q1
+    API -. "cache hit, no description<br/>(bypass AI)" .-> Q2
+    API -. "cache hit, no description<br/>(bypass AI)" .-> Q3
+
+    AI["🤖 ai-service :3001<br/>Gemini · OpenAI · Claude<br/>generates / reuses script"]
+    Q1 --> AI
+    AI --> Q2
+    AI --> Q3
+
+    subgraph workers ["⚙️ Workers"]
+        WB["worker-backend :3002<br/>k6 runner"]
+        WC["worker-client :3003<br/>Puppeteer + Lighthouse"]
+    end
+    Q2 --> WB
+    Q3 --> WC
+    WB --> Q4
+    WC --> Q4
+
+    RS["📊 results-service :3004<br/>storage · scheduler · RBAC<br/>REST + WebSocket push"]
+    Q4 --> RS
+
+    PG[("🗄️ PostgreSQL")]
+    RDS[("⚡ Redis<br/>rate-limit + WS pub/sub")]
+    RS <--> PG
+    RS <--> RDS
+
+    AN["🔎 analyser-service :3008<br/>thresholds · regression<br/>Gemini insights"]
+    RS -- "POST /analyse" --> AN
+    AN -- "verdict + insights" --> RS
+
+    RS <--> UI
+    RS -- "on failed / degraded" --> WH(["📬 Webhooks"])
+
+    REC["🔴 recorder-service :3007 / :6080<br/>(optional) record → flow steps"]
+    REC -. "AI correlation" .-> AI
+
+    classDef service fill:#fff0eb,stroke:#ff5a2c,stroke-width:2px,color:#1a1712
+    classDef queue fill:#fef3e2,stroke:#d4a72c,stroke-width:1.5px,color:#1a1712
+    classDef store fill:#eaf6ec,stroke:#16a34a,stroke-width:2px,color:#1a1712
+    classDef client fill:#eef2ff,stroke:#6366f1,stroke-width:2px,color:#1a1712
+
+    class Client,UI client
+    class API,AI,WB,WC,RS,AN,REC service
+    class Q1,Q2,Q3,Q4 queue
+    class PG,RDS store
 ```
+
+Two paths aren't shown above to keep the diagram readable:
+- **Cancel** — `POST /tests/:id/cancel` → `api-service` → `results-service` (marks the row cancelled) → broadcasts on a `cancel-fanout` exchange that every worker replica listens to.
+- **Scheduled runs** — a `node-cron` job inside `results-service` calls `POST /tests` on a cron schedule, joining the same flow as a normal user-submitted test.
 
 ---
 
@@ -111,15 +139,16 @@ under the previous Next.js-based UI).
 | Service | Port | Description |
 |---------|------|-------------|
 | `api-service` | 3000 | Fastify REST API — test routing and cancellation |
-| `ai-service` | 3001 | Gemini integration — script generation and comparison |
+| `ai-service` | 3001 | Pluggable AI integration (Gemini / OpenAI / Claude) — script generation and comparison |
 | `worker-backend` | 3002 | k6 runner — backend + flow tests |
 | `worker-client` | 3003 | Puppeteer + Lighthouse — browser tests |
-| `results-service` | 3004 | PostgreSQL storage, analysis, REST API, scheduler |
+| `results-service` | 3004 | PostgreSQL storage, REST API + WebSocket, scheduler, auth/RBAC |
 | `ui` | 3006 | Vite + React Router dashboard |
 | `recorder-service` | 3007 / 6080 | CDP-based flow recorder + noVNC browser viewer |
+| `analyser-service` | 3008 | Deterministic threshold/regression analysis + Gemini AI insights |
 | `postgres` | 5432 | Main database |
 | `rabbitmq` | 5672 / 15672 | Message queue (management UI on 15672) |
-| `redis` | 6379 | Available for caching / rate limiting |
+| `redis` | 6379 | Backs rate limiting and WebSocket pub/sub across replicas |
 
 ---
 
