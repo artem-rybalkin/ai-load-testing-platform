@@ -21,10 +21,11 @@ test.describe('Schedules', () => {
 
     await page.getByRole('button', { name: /^create schedule$/i }).click();
 
-    // Each schedule renders as a direct child of the `divide-y` list container —
-    // scope to that row specifically so it includes both the name and the cron <code>
+    // Each schedule row carries the `border-border-3` separator class, which is
+    // unique to data rows (the header row above it uses plain `border-border`) —
+    // scope to that so it includes both the name and the cron <code>
     // (a plain `div.filter({hasText}).last()` picks an inner wrapper that excludes the buttons).
-    const row = page.locator('.divide-y > div').filter({ hasText: name });
+    const row = page.locator('div.border-border-3').filter({ hasText: name });
     await expect(row.getByText(name)).toBeVisible({ timeout: 10_000 });
     await expect(row.getByText('active')).toBeVisible();
     await expect(row.getByText('backend')).toBeVisible();

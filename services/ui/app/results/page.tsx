@@ -222,7 +222,7 @@ export default function ResultsPage() {
                     <span className={`justify-self-end text-[10.5px] font-bold rounded-chip px-2.25 py-0.75 ${STATUS_BADGE_CLS[statusBadge(r)] ?? 'text-tx-3 bg-surface-2'}`}>{statusBadge(r)}</span>
                     <span className="justify-self-end flex items-center gap-2" onClick={e => e.stopPropagation()}>
                       {r.status === 'completed' && (
-                        <button onClick={() => navigate(`/?rerun=${r.test_id}`)} title="Re-run" className="text-tx-4 hover:text-tx text-[13px]">↻</button>
+                        <button onClick={() => navigate(`/?rerun=${r.test_id}`)} title="Re-run" aria-label="Re-run" className="text-tx-4 hover:text-tx text-[13px]">↻</button>
                       )}
                       <Link to={`/results/${r.test_id}`} className="text-accent text-[12px] hover:underline">View →</Link>
                     </span>

@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Flow Builder', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('button', { name: /multi-step flow/i }).click();
+    await page.getByRole('button', { name: /^flow$/i }).click();
   });
 
   test('adds, edits, reorders, and removes steps', async ({ page }) => {
@@ -58,7 +58,7 @@ test.describe('Flow Builder', () => {
     // Scope to the step card itself — "+ add" also matches the env-vars and
     // data-table sections' own "+ add"/"+ add row" buttons elsewhere on the page,
     // and the per-step "Add request header" button shares the same "+ add" text.
-    const stepCard = page.locator('div.border.border-gray-200.rounded-xl').filter({ has: page.locator('input[placeholder="Step name (e.g. Login)"]') });
+    const stepCard = page.locator('div.border.border-border.rounded-xl').filter({ has: page.locator('input[placeholder="Step name (e.g. Login)"]') });
     await stepCard.getByRole('button', { name: 'Add extract rule' }).click();
     await expect(page.locator('input[placeholder="varName"]')).toBeVisible();
 
@@ -105,8 +105,10 @@ test.describe('Flow Builder', () => {
   test('toggles between k6 and Puppeteer Browser flow runners', async ({ page }) => {
     await page.getByRole('button', { name: /\+ add step/i }).click();
 
-    const k6Btn = page.getByRole('button', { name: /⚡ k6 http/i });
-    const browserBtn = page.getByRole('button', { name: /🌐 puppeteer browser/i });
+    // Scoped by their unique `title` tooltip — a bare name match on "Browser" would
+    // also hit the unrelated Backend/Browser/Flow type-selector segmented control.
+    const k6Btn = page.locator('button[title="Load test with many virtual users"]');
+    const browserBtn = page.locator('button[title="Real browser, Web Vitals, Lighthouse"]');
     await expect(k6Btn).toBeVisible();
     await expect(browserBtn).toBeVisible();
 

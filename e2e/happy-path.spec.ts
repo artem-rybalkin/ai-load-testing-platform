@@ -11,7 +11,7 @@ test.describe('Happy path — create and complete a backend test', () => {
     // Use click+fill+Tab to ensure React commits state before reading it in handleSubmit.
     // Playwright fill() may dispatch programmatic events that React 18 treats as
     // low-priority; pressing Tab triggers blur which forces a synchronous flush.
-    const urlInput = page.locator('input[placeholder*="example"]');
+    const urlInput = page.locator('input[placeholder*="acme"]');
     await urlInput.click();
     await urlInput.fill('http://localhost:3000/health');
     await urlInput.press('Tab');
@@ -33,7 +33,7 @@ test.describe('Happy path — create and complete a backend test', () => {
   test('shows a progress bar or live indicator during execution', async ({ page }) => {
     await page.goto('/');
 
-    const urlInput2 = page.locator('input[placeholder*="example"]');
+    const urlInput2 = page.locator('input[placeholder*="acme"]');
     await urlInput2.click();
     await urlInput2.fill('http://localhost:3000/health');
     await urlInput2.press('Tab');
@@ -53,7 +53,7 @@ test.describe('Happy path — create and complete a backend test', () => {
   test('shows countdown text when test is running', async ({ page }) => {
     await page.goto('/');
 
-    const urlInput3 = page.locator('input[placeholder*="example"]');
+    const urlInput3 = page.locator('input[placeholder*="acme"]');
     await urlInput3.click();
     await urlInput3.fill('http://localhost:3000/health');
     await urlInput3.press('Tab');

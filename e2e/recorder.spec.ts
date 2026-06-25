@@ -17,7 +17,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Flow Recorder', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('button', { name: /multi-step flow/i }).click();
+    await page.getByRole('button', { name: /^flow$/i }).click();
   });
 
   test('starts a recording session and opens the viewer tab', async ({ page, context }) => {

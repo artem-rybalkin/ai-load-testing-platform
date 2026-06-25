@@ -10,7 +10,7 @@ test.describe('Templates', () => {
     await page.goto('/');
 
     // Fill in the form
-    await page.fill('input[type="text"][placeholder*="example"]', 'https://httpbin.org/get');
+    await page.fill('input[type="text"][placeholder*="acme"]', 'https://httpbin.org/get');
     await page.fill('input[placeholder*="test"]', 'Load test 5 VUs 30s');
 
     // Save as preset (renamed from "template" in Phase 20).
@@ -59,7 +59,7 @@ test.describe('Templates', () => {
     await page.waitForTimeout(500);
 
     // URL field should be populated
-    const urlInput = page.locator('input[type="text"][placeholder*="example"]');
+    const urlInput = page.locator('input[type="text"][placeholder*="acme"]');
     const urlValue = await urlInput.inputValue();
     expect(urlValue.length).toBeGreaterThan(0);
   });

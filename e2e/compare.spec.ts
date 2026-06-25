@@ -70,9 +70,11 @@ test.describe('Compare flow', () => {
     await expect(main.locator(`a[href="/results/${idA}"]`).first()).toBeVisible({ timeout: 15_000 });
     await expect(main.locator(`a[href="/results/${idB}"]`).first()).toBeVisible({ timeout: 5_000 });
 
-    // Select both via checkboxes (table row containing the testId link)
-    const rowA = main.locator(`tr:has(a[href="/results/${idA}"])`).first();
-    const rowB = main.locator(`tr:has(a[href="/results/${idB}"])`).first();
+    // Select both via checkboxes — rows are CSS-grid divs (not <tr>), identified
+    // by the `cursor-pointer` class unique to data rows (the table wrapper/header
+    // above them don't carry it), containing the testId link.
+    const rowA = main.locator('div.cursor-pointer').filter({ has: page.locator(`a[href="/results/${idA}"]`) }).first();
+    const rowB = main.locator('div.cursor-pointer').filter({ has: page.locator(`a[href="/results/${idB}"]`) }).first();
 
     await rowA.locator('input[type="checkbox"]').click();
     await rowB.locator('input[type="checkbox"]').click();

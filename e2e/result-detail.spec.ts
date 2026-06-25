@@ -120,7 +120,7 @@ export default function () {
     await expect(page).toHaveURL(new RegExp(`/\\?rerun=${testId}`));
 
     // Form should be pre-filled with the original target URL
-    const urlInput = page.locator('input[placeholder*="example"]');
+    const urlInput = page.locator('input[placeholder*="acme"]');
     await expect(urlInput).toHaveValue(/api-service:3000\/health/, { timeout: 10_000 });
   });
 });
