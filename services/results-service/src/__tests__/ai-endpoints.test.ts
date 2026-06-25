@@ -573,6 +573,13 @@ describe('buildChatParsePrompt', () => {
     expect(prompt).toMatch(/ambiguous/i);
   });
 
+  it('instructs the model to ask rather than invent load/duration values when neither was stated (regression — found live: "Spike test homepage" → "example.com backend" silently resolved to 50 VUs / 5m without ever asking)', () => {
+    const prompt = buildChatParsePrompt([{ role: 'user', content: 'Spike test example.com backend' }]);
+    expect(prompt).toMatch(/concrete number of users\/VUs\/sessions/i);
+    expect(prompt).toMatch(/how long the test should run/i);
+    expect(prompt).toMatch(/never invent or silently default/i);
+  });
+
   // Keeps this prompt's signal words in sync with the home page's applyDescriptionParams
   // regex (services/ui/app/page.tsx) — they were found to disagree on "performance test".
   it('lists the same backend/client-side signal words as the home page auto-detect regex', () => {
