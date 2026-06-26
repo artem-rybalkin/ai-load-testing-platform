@@ -1,6 +1,6 @@
-import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, SLOThresholds, AiProviderName, ChatMessage, ChatParseResponse, ParsedTestIntent } from '@alt/shared';
+import type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, SLOThresholds, AiProviderName, ChatMessage, ChatParseResponse, ParsedTestIntent, BackendMetrics, ClientMetrics } from '@alt/shared';
 
-export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, AiProviderName, ChatMessage, ChatParseResponse, ParsedTestIntent };
+export type { ExtractSource, ExtractRule, FlowStep, SessionUser, TeamRole, TeamQuota, TeamUsage, OrgRole, AiProviderName, ChatMessage, ChatParseResponse, ParsedTestIntent, BackendMetrics, ClientMetrics };
 
 // Base paths — all routed through Vite proxy (same-origin, cookies work)
 const API_URL     = '/api';
@@ -50,7 +50,7 @@ export interface TestResult {
   type: string;
   target_url: string;
   status: string;
-  metrics: Record<string, number>;
+  metrics: BackendMetrics | ClientMetrics | null;
   script: string | null;
   script_description: string | null;
   reused_script: boolean;
@@ -594,64 +594,34 @@ export const switchTeam = (teamId: string): Promise<SessionUser> =>
 export interface TeamMemberRow { userId: string; email: string; name: string | null; role: TeamRole }
 
 export const getTeamMembers = (teamId: string): Promise<TeamMemberRow[]> =>
-  f(`${RESULTS_URL}/teams/${teamId}/members`).then(r => r.json());
+  f(`${RESULTS_URL}/teams/${teamId}/members`).then(orgJson<TeamMemberRow[]>());
 
 export const addTeamMember = (teamId: string, email: string, role: TeamRole = 'member'): Promise<{ success: boolean }> =>
   f(`${RESULTS_URL}/teams/${teamId}/members`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, role }),
-  }).then(async r => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${r.status}`);
-    }
-    return r.json();
-  });
+  }).then(orgJson<{ success: boolean }>());
 
 export const updateTeamMemberRole = (teamId: string, userId: string, role: TeamRole): Promise<{ success: boolean }> =>
   f(`${RESULTS_URL}/teams/${teamId}/members/${userId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role }),
-  }).then(async r => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${r.status}`);
-    }
-    return r.json();
-  });
+  }).then(orgJson<{ success: boolean }>());
 
 export const removeTeamMember = (teamId: string, userId: string): Promise<{ success: boolean }> =>
-  f(`${RESULTS_URL}/teams/${teamId}/members/${userId}`, { method: 'DELETE' }).then(async r => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${r.status}`);
-    }
-    return r.json();
-  });
+  f(`${RESULTS_URL}/teams/${teamId}/members/${userId}`, { method: 'DELETE' }).then(orgJson<{ success: boolean }>());
 
 export const getTeamQuota = (teamId: string): Promise<{ quota: TeamQuota; usage: TeamUsage }> =>
-  f(`${RESULTS_URL}/teams/${teamId}/quotas`).then(async r => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${r.status}`);
-    }
-    return r.json();
-  });
+  f(`${RESULTS_URL}/teams/${teamId}/quotas`).then(orgJson<{ quota: TeamQuota; usage: TeamUsage }>());
 
 export const updateTeamQuota = (teamId: string, quota: Partial<TeamQuota>): Promise<{ quota: TeamQuota }> =>
   f(`${RESULTS_URL}/teams/${teamId}/quotas`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(quota),
-  }).then(async r => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${r.status}`);
-    }
-    return r.json();
-  });
+  }).then(orgJson<{ quota: TeamQuota }>());
 
 export interface AiProviderConfig {
   provider: AiProviderName;
@@ -690,13 +660,7 @@ export interface AuditLogEntry {
 }
 
 export const getAuditLog = (teamId: string): Promise<{ entries: AuditLogEntry[] }> =>
-  f(`${RESULTS_URL}/teams/${teamId}/audit-log`).then(async r => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${r.status}`);
-    }
-    return r.json();
-  });
+  f(`${RESULTS_URL}/teams/${teamId}/audit-log`).then(orgJson<{ entries: AuditLogEntry[] }>());
 
 export interface EraseTeamDataResult {
   success: boolean;
@@ -708,13 +672,7 @@ export const eraseTeamData = (teamId: string): Promise<EraseTeamDataResult> =>
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ confirm: true }),
-  }).then(async r => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${r.status}`);
-    }
-    return r.json();
-  });
+  }).then(orgJson<EraseTeamDataResult>());
 
 // ── Organizations ────────────────────────────────────────────────────────────
 

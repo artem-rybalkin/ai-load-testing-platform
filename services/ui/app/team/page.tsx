@@ -70,37 +70,69 @@ export default function TeamPage() {
 
   const load = async () => {
     if (!teamId || teamId === 'dev') return;
-    try {
-      setMembers(await getTeamMembers(teamId));
-    } catch {
-      setError('Failed to load team members');
-    }
-    try {
-      const { quota: q, usage: u } = await getTeamQuota(teamId);
-      setQuota(q);
-      setUsage(u);
-      setQuotaDraft(q);
-    } catch {
-      setQuotaError('Failed to load usage & limits');
-    }
+
     if (isAdmin) {
-      try {
-        setApiKeys(await getTeamApiKeys(teamId));
-      } catch {
+      const [membersRes, quotaRes, apiKeysRes, auditRes, aiRes] = await Promise.allSettled([
+        getTeamMembers(teamId),
+        getTeamQuota(teamId),
+        getTeamApiKeys(teamId),
+        getAuditLog(teamId),
+        getAiProvider(teamId),
+      ]);
+
+      if (membersRes.status === 'fulfilled') {
+        setMembers(membersRes.value);
+      } else {
+        setError('Failed to load team members');
+      }
+
+      if (quotaRes.status === 'fulfilled') {
+        const { quota: q, usage: u } = quotaRes.value;
+        setQuota(q);
+        setUsage(u);
+        setQuotaDraft(q);
+      } else {
+        setQuotaError('Failed to load usage & limits');
+      }
+
+      if (apiKeysRes.status === 'fulfilled') {
+        setApiKeys(apiKeysRes.value);
+      } else {
         setApiKeyError('Failed to load API keys');
       }
-      try {
-        const { entries } = await getAuditLog(teamId);
-        setAuditLog(entries);
-      } catch {
+
+      if (auditRes.status === 'fulfilled') {
+        setAuditLog(auditRes.value.entries);
+      } else {
         setAuditError('Failed to load audit log');
       }
-      try {
-        const cfg = await getAiProvider(teamId);
+
+      if (aiRes.status === 'fulfilled') {
+        const cfg = aiRes.value;
         setAiProviderState(cfg);
         setAiProviderDraft({ provider: cfg.provider, fallbacks: cfg.fallbacks });
-      } catch {
+      } else {
         setAiProviderError('Failed to load AI provider settings');
+      }
+    } else {
+      const [membersRes, quotaRes] = await Promise.allSettled([
+        getTeamMembers(teamId),
+        getTeamQuota(teamId),
+      ]);
+
+      if (membersRes.status === 'fulfilled') {
+        setMembers(membersRes.value);
+      } else {
+        setError('Failed to load team members');
+      }
+
+      if (quotaRes.status === 'fulfilled') {
+        const { quota: q, usage: u } = quotaRes.value;
+        setQuota(q);
+        setUsage(u);
+        setQuotaDraft(q);
+      } else {
+        setQuotaError('Failed to load usage & limits');
       }
     }
   };

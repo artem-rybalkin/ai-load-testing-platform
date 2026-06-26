@@ -297,67 +297,8 @@ const sendInternalError = (request: FastifyRequest, reply: FastifyReply, err: un
   return reply.code(500).send({ error: 'Internal error — please try again' });
 };
 
-/**
- * For each log source (scoped to projectId, or every source when projectId is null —
- * the dev-mode/no-auth convention used throughout this file) that has a
- * metrics_endpoint_template configured, interpolate the test timestamps, fetch the
- * API, and return truncated JSON. Never throws — returns [] on any error so AI
- * analysis is never blocked. Exported standalone (like consumer.ts's fireWebhooks)
- * so cross-tenant scoping is directly testable without a session/RBAC harness.
- */
-export async function fetchExternalMetrics(
-  pool: Pool,
-  targetUrl: string,
-  startedAt: string | null,
-  completedAt: string | null,
-  projectId: string | null,
-): Promise<Array<{ sourceName: string; platform: string | null; data: string }>> {
-  const { rows } = await pool.query(
-    `SELECT name, platform, metrics_endpoint_template, auth_header
-     FROM log_sources
-     WHERE metrics_endpoint_template IS NOT NULL
-       AND ($1::uuid IS NULL OR project_id = $1::uuid)`,
-    [projectId]
-  );
-  if (rows.length === 0) return [];
-
-  const started  = startedAt  ? new Date(startedAt)  : new Date(Date.now() - 3_600_000);
-  const completed = completedAt ? new Date(completedAt) : new Date();
-
-  const interpolate = (template: string): string =>
-    template
-      .replaceAll('{startedAtMs}',      String(started.getTime()))
-      .replaceAll('{completedAtMs}',    String(completed.getTime()))
-      .replaceAll('{startedAtS}',       String(Math.floor(started.getTime() / 1000)))
-      .replaceAll('{completedAtS}',     String(Math.floor(completed.getTime() / 1000)))
-      .replaceAll('{startedAtISO}',     started.toISOString())
-      .replaceAll('{completedAtISO}',   completed.toISOString())
-      .replaceAll('{targetUrl}',        targetUrl)
-      .replaceAll('{targetUrlEncoded}', encodeURIComponent(targetUrl));
-
-  const results: Array<{ sourceName: string; platform: string | null; data: string }> = [];
-
-  await Promise.allSettled(
-    rows.map(async (row: { name: string; platform: string | null; metrics_endpoint_template: string; auth_header: string | null }) => {
-      try {
-        const url = interpolate(row.metrics_endpoint_template);
-        const headers: Record<string, string> = { 'Accept': 'application/json' };
-        if (row.auth_header) headers['Authorization'] = row.auth_header;
-
-        const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-        if (!res.ok) return;
-        const text = await res.text();
-        results.push({
-          sourceName: row.name,
-          platform: row.platform,
-          data: text.slice(0, 3000), // cap at 3 KB per source
-        });
-      } catch { /* non-fatal */ }
-    })
-  );
-
-  return results;
-}
+import { fetchExternalMetrics } from './externalMetrics';
+export { fetchExternalMetrics };
 
 /** Dummy session user returned by /auth/* when SESSION_SECRET is empty (auth disabled). */
 const DEV_USER: SessionUser = {
@@ -376,6 +317,7 @@ export const buildApp = async (
 ): Promise<FastifyInstance> => {
   // Use read replica for GET queries when available; fall back to primary pool
   const rPool = opts.readPool ?? pool;
+  const AI_RATE_LIMIT_MAX = Number(process.env.AI_RATE_LIMIT_MAX) || 20;
   const app = Fastify({ logger: opts.logger ?? false });
 
   const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
@@ -1699,7 +1641,7 @@ export const buildApp = async (
   // ── AI-5: Cron natural-language assistant ───────────────────────────────
   app.post<{ Body: { phrase: string } }>(
     '/ai/cron',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { phrase } = request.body;
       if (!phrase) return reply.code(400).send({ error: 'phrase is required' });
@@ -1728,7 +1670,7 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`
   // ── AI-7: Trend regression narrative ────────────────────────────────────
   app.post<{ Body: { trend: Array<{ created_at: string; metrics: Record<string, number>; perf_status?: string }> } }>(
     '/ai/trend-narrative',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { trend } = request.body;
       if (!trend || trend.length < 3) return reply.code(422).send({ error: 'Need at least 3 trend points' });
@@ -1762,7 +1704,7 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`
   // ── AI-9: Optimal VU/duration recommendation ─────────────────────────────
   app.get<{ Querystring: { url: string; type?: string } }>(
     '/results/suggest-settings',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
@@ -1802,7 +1744,7 @@ Return ONLY valid JSON:
   // ── AI-11: Webhook alert noise prediction ───────────────────────────────
   app.post<{ Body: { events: string[] } }>(
     '/ai/webhook-noise',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { events } = request.body;
       if (!events?.length) return reply.code(400).send({ error: 'events is required' });
@@ -1842,7 +1784,7 @@ Return ONLY valid JSON:
   // ── AI-14: Preset name + tag suggestion ──────────────────────────────────
   app.post<{ Body: { url: string; type: string; vus?: number; duration?: string; profile?: string; stepCount?: number } }>(
     '/ai/preset-name',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type, vus, duration, profile, stepCount } = request.body;
       if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
@@ -1871,7 +1813,7 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`
   // ── AI-10: Parameterisation suggestions ─────────────────────────────────
   app.post<{ Body: { steps: Array<{ url: string; method: string; body?: string }> } }>(
     '/ai/param-suggestions',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { steps } = request.body;
       if (!steps || steps.length === 0) return reply.code(400).send({ error: 'steps is required' });
@@ -1908,7 +1850,7 @@ Return ONLY valid JSON:
   // pattern as every other /ai/* endpoint in this file.
   app.post<{ Body: { script: string; targetUrl?: string } }>(
     '/ai/translate',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { script, targetUrl } = request.body ?? {};
       if (!script || script.length > 256 * 1024) {
@@ -1947,7 +1889,7 @@ ${fenceUserContent('playwright_script', script.slice(0, 8000))}`
   // ── AI-1: Threshold suggestions ─────────────────────────────────────────
   app.get<{ Querystring: { url: string; type?: string } }>(
     '/results/suggest-thresholds',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
@@ -2051,7 +1993,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
   // ── AI-4: Error root-cause diagnosis ────────────────────────────────────
   app.get<{ Params: { testId: string } }>(
     '/results/:testId/diagnose',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { testId } = request.params;
       if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
@@ -2127,7 +2069,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
   // (per-team aware), not the global-only getAiProviderSetting that aiGenerateText() uses.
   app.post<{ Body: { messages: ChatMessage[] } }>(
     '/chat/parse',
-    { config: { rateLimit: { max: Number(process.env.AI_RATE_LIMIT_MAX) || 20, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { messages } = request.body ?? {};
       if (!Array.isArray(messages) || messages.length === 0) {

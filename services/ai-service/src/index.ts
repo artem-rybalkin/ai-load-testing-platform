@@ -2,7 +2,7 @@ import './tracing';
 import amqplib from 'amqplib';
 import Fastify from 'fastify';
 
-import { EnrichedTestRequest, connectWithBackoff } from '@alt/shared';
+import { EnrichedTestRequest, connectWithBackoff, internalHeaders } from '@alt/shared';
 import { generateScript, compareDescriptions } from './generator';
 import { log } from './logger';
 
@@ -12,11 +12,6 @@ const CLIENT_QUEUE       = 'client-tests';
 const DLQ                = `${CONSUME_QUEUE}.dlq`;
 const MAX_RETRIES        = 3;
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '3');
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
-const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
-  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
-  ...extra,
-});
 
 let queueConnected = false;
 let reconnecting = false;
@@ -137,7 +132,7 @@ const startConsumer = async (): Promise<void> => {
       channel.ack(msg);
     } catch (err) {
       log.error({ testId: test.id, err: (err as Error).message }, 'Script generation failed');
-      const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
+      const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
       if (retryCount < MAX_RETRIES) {
         const attemptsLeft = MAX_RETRIES - retryCount;
         await postMessage(`Gemini unavailable — retrying… (${attemptsLeft} attempt${attemptsLeft !== 1 ? 's' : ''} left)`);

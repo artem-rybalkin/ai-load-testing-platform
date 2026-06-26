@@ -592,6 +592,19 @@ export async function connectWithBackoff<T>(connect: () => Promise<T>, options: 
   }
 }
 
+// ── Internal service-to-service auth ────────────────────────────────────────
+// Shared by api-service, ai-service, worker-backend, worker-client: every
+// outbound HTTP call that targets results-service internal-callback endpoints
+// must include X-Internal-Key when INTERNAL_API_KEY is set.
+
+/** Returns headers for internal service-to-service calls, including X-Internal-Key when configured. */
+export function internalHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    ...(process.env.INTERNAL_API_KEY ? { 'X-Internal-Key': process.env.INTERNAL_API_KEY } : {}),
+    ...extra,
+  };
+}
+
 // ── SSRF guard ──────────────────────────────────────────────────────────────
 // RFC-1918 + link-local + loopback + Docker-internal SSRF blocklist.
 // Shared by recorder-service (recording target URLs) and results-service

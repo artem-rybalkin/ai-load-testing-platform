@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 
-import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, FlowStep, TeamRole } from '@alt/shared';
+import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, FlowStep, TeamRole, internalHeaders } from '@alt/shared';
 import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
 import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount, pool } from './scripts';
 import { getApiSession, hashApiKey } from './session';
@@ -16,11 +16,6 @@ declare module 'fastify' {
   interface FastifyRequest { projectId: string | undefined; role: TeamRole | null; isInternalTrusted?: boolean; }
 }
 
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
-const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
-  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
-  ...extra,
-});
 
 // Parses k6-style durations, including compound forms like "1h30m" or "1m30s"
 // and decimals like "1.5m", or a bare number (interpreted as seconds — JSON

@@ -7,11 +7,14 @@ import * as os from 'os';
 import * as path from 'path';
 import Fastify from 'fastify';
 
-import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint, connectWithBackoff, stripAnsi } from '@alt/shared';
+import { trace } from '@opentelemetry/api';
+import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint, connectWithBackoff, stripAnsi, internalHeaders } from '@alt/shared';
 import { parseK6Output, aggregateWindow, parseK6JsonOutput, LIVE_WINDOW_SEC } from './parser';
 import { log } from './logger';
 
 let queueConnected = false;
+let connection: amqplib.Connection | null = null;
+let channel: amqplib.Channel | null = null;
 
 // Rolling CPU usage sampled every 5 seconds
 let cpuPercent = 0;
@@ -31,11 +34,7 @@ const RESULTS_QUEUE    = 'test-results';
 const DLQ              = `${QUEUE}.dlq`;
 const MAX_RETRIES   = 3;
 const RESULTS_URL   = process.env.RESULTS_URL || 'http://results-service:3004';
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
-const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
-  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
-  ...extra,
-});
+;
 const LIVE_INTERVAL_MS     = LIVE_WINDOW_SEC * 1000;
 const MAX_TEST_DURATION_MS = parseInt(process.env.K6_MAX_DURATION_MS ?? '600000'); // 10 min
 const GRACE_PERIOD_MS      = 30000;
@@ -309,7 +308,7 @@ const handleRetry = (
   dlq: string,
   testId: string
 ): void => {
-  const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
+  const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
   if (retryCount < MAX_RETRIES) {
     log.warn({ testId, retryCount: retryCount + 1, maxRetries: MAX_RETRIES }, 'Retrying message');
     channel.publish('', queue, msg.content, {
@@ -341,7 +340,7 @@ const start = async (): Promise<void> => {
   const url        = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
 
-  const connection = await connectWithBackoff(() => amqplib.connect(url), {
+  connection = await connectWithBackoff(() => amqplib.connect(url), {
     onRetry: (err, attempt, nextDelayMs) =>
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ connection failed — retrying'),
   });
@@ -355,7 +354,7 @@ const start = async (): Promise<void> => {
     scheduleReconnect();
   });
 
-  const channel = await connection.createChannel();
+  channel = await connection.createChannel();
   channel.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
     queueConnected = false;
@@ -395,7 +394,6 @@ const start = async (): Promise<void> => {
     testLog.info('Received backend test');
 
     // Tag the active OTel span so traces are searchable by testId in Tempo
-    const { trace } = await import('@opentelemetry/api');
     const span = trace.getActiveSpan();
     if (span) { span.setAttribute('test.id', test.id); span.setAttribute('test.url', test.targetUrl); }
 
@@ -490,3 +488,15 @@ const startWithQueue = async (): Promise<void> => {
 
 startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
 startWithQueue().catch(err => log.error({ err: (err as Error).message }, 'Worker-backend startup failed'));
+
+async function shutdown(signal: string) {
+  log.info({ signal }, 'Shutting down gracefully');
+  try {
+    if (channel) await channel.close();
+    if (connection) await connection.close();
+  } catch (_) { /* ignore close errors during shutdown */ }
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT',  () => void shutdown('SIGINT'));

@@ -16,7 +16,7 @@ import lighthouse from 'lighthouse';
 import Fastify from 'fastify';
 import * as os from 'os';
 
-import { TestRequest, TestResult, ClientMetrics, LighthouseScore, ResourceBreakdown, connectWithBackoff, stripAnsi } from '@alt/shared';
+import { TestRequest, TestResult, ClientMetrics, LighthouseScore, ResourceBreakdown, connectWithBackoff, stripAnsi, internalHeaders } from '@alt/shared';
 import { log } from './logger';
 import { handleRetry, MAX_RETRIES } from './retry';
 
@@ -24,6 +24,8 @@ const QUEUE              = 'client-tests';
 const CANCEL_EXCHANGE    = 'cancel-fanout';
 let queueConnected = false;
 let reconnecting = false;
+let connection: amqplib.Connection | null = null;
+let channel: amqplib.Channel | null = null;
 
 // Rolling CPU usage sampled every 5 seconds
 let cpuPercent = 0;
@@ -41,11 +43,6 @@ const DLQ                = `${QUEUE}.dlq`;
 const MAX_TEST_DURATION_MS = parseInt(process.env.PUPPETEER_MAX_DURATION_MS ?? '300000'); // 5 min
 const NAV_TIMEOUT_MS = parseInt(process.env.PUPPETEER_NAV_TIMEOUT_MS ?? '60000'); // 1 min
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '2');
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
-const internalHeaders = (extra?: Record<string, string>): Record<string, string> => ({
-  ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
-  ...extra,
-});
 
 import { Browser } from 'puppeteer';
 const runningBrowsers  = new Map<string, Browser>();
@@ -385,7 +382,7 @@ const start = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
 
-  const connection = await connectWithBackoff(() => amqplib.connect(url), {
+  connection = await connectWithBackoff(() => amqplib.connect(url), {
     onRetry: (err, attempt, nextDelayMs) =>
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ connection failed — retrying'),
   });
@@ -399,7 +396,7 @@ const start = async (): Promise<void> => {
     scheduleReconnect();
   });
 
-  const channel = await connection.createChannel();
+  channel = await connection.createChannel();
   channel.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
     queueConnected = false;
@@ -464,7 +461,7 @@ const start = async (): Promise<void> => {
       channel.ack(msg);
     } catch (err) {
       log.error({ testId: test.id, err: (err as Error).message }, 'Client test failed');
-      const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
+      const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
       if (retryCount >= MAX_RETRIES) {
         const partialLog = (err as { partialLog?: string }).partialLog;
         fetch(`${RESULTS_URL}/results/${test.id}/fail`, {
@@ -507,3 +504,15 @@ const startHealthServer = async (): Promise<void> => {
 
 startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
 start().catch(err => log.error({ err: (err as Error).message }, 'Worker-client startup failed'));
+
+async function shutdown(signal: string) {
+  log.info({ signal }, 'Shutting down gracefully');
+  try {
+    if (channel) await channel.close();
+    if (connection) await connection.close();
+  } catch (_) { /* ignore close errors during shutdown */ }
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT',  () => void shutdown('SIGINT'));

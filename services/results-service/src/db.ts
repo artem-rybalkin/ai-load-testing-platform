@@ -374,15 +374,26 @@ export const createSchema = async (p: Pool): Promise<void> => {
     )
   `);
 
-  const { rows } = await p.query<{ version: number }>('SELECT version FROM schema_migrations ORDER BY version');
-  const applied = new Set(rows.map(r => r.version));
+  // Acquire a session-level advisory lock before running migrations.
+  // Use a fixed integer that represents this app's migration lock.
+  const MIGRATION_LOCK_ID = 7_432_801; // arbitrary unique int for this app
+  const lockClient = await p.connect();
+  try {
+    await lockClient.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_ID]);
 
-  for (const migration of MIGRATIONS) {
-    if (applied.has(migration.version)) continue;
-    log.info({ version: migration.version, name: migration.name }, 'Applying migration');
-    await migration.up(p);
-    await p.query('INSERT INTO schema_migrations (version, name) VALUES ($1, $2)', [migration.version, migration.name]);
-    log.info({ version: migration.version }, 'Migration applied');
+    const { rows } = await p.query<{ version: number }>('SELECT version FROM schema_migrations ORDER BY version');
+    const applied = new Set(rows.map(r => r.version));
+
+    for (const migration of MIGRATIONS) {
+      if (applied.has(migration.version)) continue;
+      log.info({ version: migration.version, name: migration.name }, 'Applying migration');
+      await migration.up(p);
+      await p.query('INSERT INTO schema_migrations (version, name) VALUES ($1, $2)', [migration.version, migration.name]);
+      log.info({ version: migration.version }, 'Migration applied');
+    }
+  } finally {
+    await lockClient.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_ID]);
+    lockClient.release();
   }
 };
 

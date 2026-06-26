@@ -1,61 +1,16 @@
 import amqplib from 'amqplib';
 import { createHmac } from 'crypto';
 import { Pool } from 'pg';
+import { trace } from '@opentelemetry/api';
 
 import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult, connectWithBackoff } from '@alt/shared';
 import { pool } from './db';
 import { analyzeResult } from './analyzer';
 import { log } from './logger';
 import { broadcast } from './ws';
+import { fetchExternalMetrics } from './externalMetrics';
 
 const ANALYSER_URL = process.env.ANALYSER_URL || 'http://analyser-service:3008';
-
-/** Fetch external observability data from configured log sources for this test's time window. */
-const fetchExternalMetricsForTest = async (
-  p: Pool,
-  targetUrl: string,
-  startedAt: string | null,
-  completedAt: string | null,
-  projectId?: string | null,
-): Promise<Array<{ sourceName: string; platform: string | null; data: string }>> => {
-  try {
-    const { rows } = await p.query(
-      `SELECT name, platform, metrics_endpoint_template, auth_header
-       FROM log_sources WHERE metrics_endpoint_template IS NOT NULL
-         AND ($1::uuid IS NULL OR project_id = $1::uuid)`,
-      [projectId ?? null]
-    );
-    if (rows.length === 0) return [];
-
-    const started   = startedAt   ? new Date(startedAt)   : new Date(Date.now() - 3_600_000);
-    const completed = completedAt ? new Date(completedAt) : new Date();
-
-    const interpolate = (t: string): string =>
-      t.replaceAll('{startedAtMs}',  String(started.getTime()))
-       .replaceAll('{completedAtMs}', String(completed.getTime()))
-       .replaceAll('{startedAtS}',   String(Math.floor(started.getTime() / 1000)))
-       .replaceAll('{completedAtS}', String(Math.floor(completed.getTime() / 1000)))
-       .replaceAll('{startedAtISO}', started.toISOString())
-       .replaceAll('{completedAtISO}', completed.toISOString())
-       .replaceAll('{targetUrl}', targetUrl)
-       .replaceAll('{targetUrlEncoded}', encodeURIComponent(targetUrl));
-
-    const results: Array<{ sourceName: string; platform: string | null; data: string }> = [];
-    await Promise.allSettled(
-      rows.map(async (row: { name: string; platform: string | null; metrics_endpoint_template: string; auth_header: string | null }) => {
-        try {
-          const headers: Record<string, string> = { 'Accept': 'application/json' };
-          if (row.auth_header) headers['Authorization'] = row.auth_header;
-          const res = await fetch(interpolate(row.metrics_endpoint_template), { headers, signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return;
-          const text = await res.text();
-          results.push({ sourceName: row.name, platform: row.platform, data: text.slice(0, 3000) });
-        } catch { /* non-fatal */ }
-      })
-    );
-    return results;
-  } catch { return []; }
-};
 
 /** Call analyser-service; returns null on any error so caller falls back to local analysis. */
 const callAnalyserService = async (
@@ -70,7 +25,7 @@ const callAnalyserService = async (
   completedAt: string | null = null,
   projectId: string | null = null,
 ): Promise<AnalysisResult | null> => {
-  const externalMetrics = await fetchExternalMetricsForTest(p, targetUrl, startedAt, completedAt, projectId);
+  const externalMetrics = await fetchExternalMetrics(p, targetUrl, startedAt, completedAt, projectId);
   try {
     const res = await fetch(`${ANALYSER_URL}/analyse`, {
       method: 'POST',
@@ -333,7 +288,6 @@ export const startConsumer = async (): Promise<void> => {
     testLog.info('Saving result');
 
     // Tag the active OTel span so traces are searchable by testId in Tempo
-    const { trace } = await import('@opentelemetry/api');
     const span = trace.getActiveSpan();
     if (span) { span.setAttribute('test.id', result.testId); span.setAttribute('test.url', result.targetUrl); }
 
@@ -343,7 +297,7 @@ export const startConsumer = async (): Promise<void> => {
       channel.ack(msg);
     } catch (err) {
       log.error({ testId: result.testId, err: (err as Error).message }, 'Failed to save result');
-      const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
+      const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
       if (retryCount < MAX_RETRIES) {
         log.warn({ testId: result.testId, retryCount: retryCount + 1 }, 'Retrying result save');
         channel.publish('', QUEUE, msg.content, {

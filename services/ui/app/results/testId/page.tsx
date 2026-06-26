@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, diagnoseErrors, getTrendNarrative, getExecutionLog, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource, ErrorDiagnosis } from '@/lib/api';
+import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, diagnoseErrors, getTrendNarrative, getExecutionLog, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource, ErrorDiagnosis, BackendMetrics, ClientMetrics } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 const BackendChart  = lazy(() => import('@/app/components/BackendChart'));
 const ClientChart   = lazy(() => import('@/app/components/ClientChart'));
@@ -394,8 +394,9 @@ export default function ResultPage() {
     </div>
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const m = result.metrics as Record<string, any>;
+  const m = result.metrics;
+  const bm = m as BackendMetrics;
+  const cm = m as ClientMetrics;
   const isBackend = result.type === 'backend' || result.type === 'flow';
   const isRunning   = result.status === 'running';
   const isPending   = result.status === 'pending';
@@ -534,19 +535,19 @@ export default function ResultPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
               {isBackend ? (
                 <>
-                  <MetricCell label="Total Requests" value={m.requestsTotal} />
-                  <MetricCell label="Req / sec" value={(m.rps ?? 0).toFixed(1)} color="text-accent" />
-                  <MetricCell label="Failed" value={m.requestsFailed} unit={`/ ${m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : 0}%`} color={m.requestsFailed > 0 ? 'text-red-fg' : ''} />
-                  <MetricCell label="p95 Response" value={Math.round(m.p95ResponseTime ?? 0)} unit="ms" />
-                  <MetricCell label="Avg Response" value={Math.round(m.avgResponseTime ?? 0)} unit="ms" />
-                  <MetricCell label="p99 Response" value={Math.round(m.p99ResponseTime ?? 0)} unit="ms" />
+                  <MetricCell label="Total Requests" value={bm.requestsTotal} />
+                  <MetricCell label="Req / sec" value={(bm.rps ?? 0).toFixed(1)} color="text-accent" />
+                  <MetricCell label="Failed" value={bm.requestsFailed} unit={`/ ${bm.requestsTotal > 0 ? ((bm.requestsFailed / bm.requestsTotal) * 100).toFixed(1) : 0}%`} color={bm.requestsFailed > 0 ? 'text-red-fg' : ''} />
+                  <MetricCell label="p95 Response" value={Math.round(bm.p95ResponseTime ?? 0)} unit="ms" />
+                  <MetricCell label="Avg Response" value={Math.round(bm.avgResponseTime ?? 0)} unit="ms" />
+                  <MetricCell label="p99 Response" value={Math.round(bm.p99ResponseTime ?? 0)} unit="ms" />
                 </>
               ) : (
                 <>
-                  <MetricCell label="LCP" value={Math.round(m.lcp ?? 0)} unit="ms" color={(m.lcp ?? 0) > 2500 ? 'text-red-fg' : 'text-green-fg'} />
-                  <MetricCell label="FCP" value={Math.round(m.fcp ?? 0)} unit="ms" />
-                  <MetricCell label="TTFB" value={Math.round(m.ttfb ?? 0)} unit="ms" />
-                  <MetricCell label="CLS" value={(m.cls ?? 0).toFixed(3)} color={(m.cls ?? 0) > 0.1 ? 'text-red-fg' : 'text-green-fg'} />
+                  <MetricCell label="LCP" value={Math.round(cm.lcp ?? 0)} unit="ms" color={(cm.lcp ?? 0) > 2500 ? 'text-red-fg' : 'text-green-fg'} />
+                  <MetricCell label="FCP" value={Math.round(cm.fcp ?? 0)} unit="ms" />
+                  <MetricCell label="TTFB" value={Math.round(cm.ttfb ?? 0)} unit="ms" />
+                  <MetricCell label="CLS" value={(cm.cls ?? 0).toFixed(3)} color={(cm.cls ?? 0) > 0.1 ? 'text-red-fg' : 'text-green-fg'} />
                 </>
               )}
             </div>
@@ -564,9 +565,9 @@ export default function ResultPage() {
                 <CardHeader title={isBackend ? 'Response Distribution' : 'Web Vitals'} />
                 <div className="p-5">
                   <Suspense fallback={null}>
-                    {result.type === 'flow' && (m as any).stepMetrics?.length > 0
-                      ? <FlowStepChart steps={(m as any).stepMetrics} />
-                      : isBackend ? <BackendChart metrics={m as any} /> : <ClientChart metrics={m as any} />}
+                    {result.type === 'flow' && bm.stepMetrics?.length > 0
+                      ? <FlowStepChart steps={bm.stepMetrics!} />
+                      : isBackend ? <BackendChart metrics={bm} /> : <ClientChart metrics={cm} />}
                   </Suspense>
                 </div>
               </Card>
@@ -580,12 +581,12 @@ export default function ResultPage() {
             </div>
 
             {/* Error breakdown + AI diagnose */}
-            {isBackend && ((m as any).errorBreakdown || (m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0)) && (
+            {isBackend && (bm.errorBreakdown || (bm.statusCodes && Object.keys(bm.statusCodes).length > 0)) && (
               <Card>
                 <CardHeader title="Error Breakdown" />
                 <div className="p-5">
-                  {(m as any).errorBreakdown ? (() => {
-                    const eb = (m as any).errorBreakdown;
+                  {bm.errorBreakdown ? (() => {
+                    const eb = bm.errorBreakdown!;
                     const total = eb.success + eb.clientError + eb.serverError + eb.timeout + eb.networkError;
                     const pctOf = (n: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '0%';
                     const rows = [
@@ -607,7 +608,7 @@ export default function ResultPage() {
                     );
                   })() : (
                     <div className="space-y-1">
-                      {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
+                      {Object.entries(bm.statusCodes!).sort().map(([code, count]) => (
                         <div key={code} className="flex items-center justify-between text-[12.5px] font-mono">
                           <span className={code.startsWith('2') ? 'text-green-fg' : code.startsWith('4') || code.startsWith('5') ? 'text-red-fg' : 'text-tx-3'}>{code}</span>
                           <span className="text-tx-3">×{count}</span>
@@ -615,11 +616,11 @@ export default function ResultPage() {
                       ))}
                     </div>
                   )}
-                  {(m as any).errorBreakdown && m.statusCodes && Object.keys(m.statusCodes as Record<string,number>).length > 0 && (
+                  {bm.errorBreakdown && bm.statusCodes && Object.keys(bm.statusCodes).length > 0 && (
                     <details className="mt-2.5">
                       <summary className="text-[11px] text-tx-4 cursor-pointer hover:text-tx-2">Raw status codes</summary>
                       <div className="space-y-1 mt-1.5">
-                        {Object.entries(m.statusCodes as Record<string,number>).sort().map(([code, count]) => (
+                        {Object.entries(bm.statusCodes!).sort().map(([code, count]) => (
                           <div key={code} className="flex items-center justify-between text-[12px] font-mono">
                             <span className={code.startsWith('2') ? 'text-green-fg' : 'text-red-fg'}>{code}</span>
                             <span className="text-tx-4">×{count}</span>
@@ -628,7 +629,7 @@ export default function ResultPage() {
                       </div>
                     </details>
                   )}
-                  {(m as any).errorBreakdown && (
+                  {bm.errorBreakdown && (
                     <div className="mt-3 pt-3 border-t border-line">
                       {diagnoses === null && (
                         <button type="button" disabled={diagnosing} className="text-[12.5px] text-accent hover:underline disabled:opacity-50 font-mono"
@@ -660,7 +661,7 @@ export default function ResultPage() {
               </Card>
             )}
 
-            {(m as any).stepMetrics?.length > 0 && <StepMetricsTable steps={(m as any).stepMetrics} />}
+            {bm.stepMetrics?.length > 0 && <StepMetricsTable steps={bm.stepMetrics!} />}
 
             {trend.length > 1 && (
               <Card>
