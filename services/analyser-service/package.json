@@ -4,6 +4,7 @@
   "main": "dist/index.js",
   "dependencies": {
     "@alt/shared": "*",
+    "@alt/tracing": "*",
     "@google/generative-ai": "^0.21.0",
     "fastify": "^5.8.5",
     "pino": "^10.3.1"
