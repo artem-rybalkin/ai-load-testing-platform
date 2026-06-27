@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: alt_user
-      POSTGRES_PASSWORD: alt_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alt_password}
       POSTGRES_DB: alt_db
     ports:
       - "5432:5432"
@@ -51,7 +51,7 @@ services:
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: alt_user
-      RABBITMQ_DEFAULT_PASS: alt_password
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-alt_password}
     ports:
       - "5672:5672"
       - "15672:15672"  # management UI
@@ -75,9 +75,9 @@ services:
       <<: *otel
       OTEL_SERVICE_NAME: api-service
       PORT: 3000
-      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      RABBITMQ_URL: amqp://alt_user:${RABBITMQ_PASSWORD:-alt_password}@rabbitmq:5672
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
+      DATABASE_URL: postgresql://alt_user:${POSTGRES_PASSWORD:-alt_password}@postgres:5432/alt_db
       RESULTS_URL: http://results-service:3004
       API_KEYS: ${API_KEYS:-}          # comma-separated keys; empty = auth disabled (dev only)
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}  # shared secret for service-to-service callbacks; empty = disabled (dev only)
@@ -102,9 +102,9 @@ services:
       <<: *otel
       OTEL_SERVICE_NAME: worker-backend
       PORT: 3002
-      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      RABBITMQ_URL: amqp://alt_user:${RABBITMQ_PASSWORD:-alt_password}@rabbitmq:5672
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
+      DATABASE_URL: postgresql://alt_user:${POSTGRES_PASSWORD:-alt_password}@postgres:5432/alt_db
       RESULTS_URL: http://results-service:3004
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}  # shared secret for service-to-service callbacks; empty = disabled (dev only)
       WORKER_CONCURRENCY: 1          # increase for parallel k6 runs per replica
@@ -128,7 +128,7 @@ services:
       <<: [*otel, *langfuse]
       OTEL_SERVICE_NAME: ai-service
       PORT: 3001
-      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      RABBITMQ_URL: amqp://alt_user:${RABBITMQ_PASSWORD:-alt_password}@rabbitmq:5672
       RESULTS_URL: http://results-service:3004
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}  # shared secret for service-to-service callbacks; empty = disabled (dev only)
       GEMINI_API_KEY: ${GEMINI_API_KEY}
@@ -153,7 +153,7 @@ services:
       <<: *otel
       OTEL_SERVICE_NAME: worker-client
       PORT: 3003
-      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      RABBITMQ_URL: amqp://alt_user:${RABBITMQ_PASSWORD:-alt_password}@rabbitmq:5672
       REDIS_URL: redis://redis:6379
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}  # shared secret for service-to-service callbacks; empty = disabled (dev only)
       WORKER_CONCURRENCY: 2          # Puppeteer is I/O-bound, safe to run 2 per replica
@@ -175,10 +175,10 @@ services:
       <<: [*otel, *langfuse]
       OTEL_SERVICE_NAME: results-service
       PORT: 3004
-      DATABASE_URL: postgresql://alt_user:alt_password@postgres:5432/alt_db
+      DATABASE_URL: postgresql://alt_user:${POSTGRES_PASSWORD:-alt_password}@postgres:5432/alt_db
       READ_DATABASE_URL: ${READ_DATABASE_URL:-}
       REDIS_URL: redis://redis:6379
-      RABBITMQ_URL: amqp://alt_user:alt_password@rabbitmq:5672
+      RABBITMQ_URL: amqp://alt_user:${RABBITMQ_PASSWORD:-alt_password}@rabbitmq:5672
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}

@@ -15,18 +15,18 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER:     alt_user
-      POSTGRES_PASSWORD: alt_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alt_password}
       POSTGRES_DB:       alt_db
       # Standby configuration — streams WAL from primary
       PGUSER:            alt_user
-      PGPASSWORD:        alt_password
+      PGPASSWORD:        ${POSTGRES_PASSWORD:-alt_password}
     command: >
       sh -c "
         if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
           echo 'Taking base backup from primary...'
           pg_basebackup -h postgres -p 5432 -U alt_user -D /var/lib/postgresql/data -Fp -Xs -P -R
           echo 'standby_mode = on' >> /var/lib/postgresql/data/postgresql.auto.conf
-          echo 'primary_conninfo = host=postgres port=5432 user=alt_user password=alt_password' >> /var/lib/postgresql/data/postgresql.auto.conf
+          echo "primary_conninfo = host=postgres port=5432 user=alt_user password=${POSTGRES_PASSWORD:-alt_password}" >> /var/lib/postgresql/data/postgresql.auto.conf
         fi
         exec docker-entrypoint.sh postgres -c hot_standby=on
       "
@@ -57,7 +57,7 @@ services:
   # Override results-service to point reads at the replica
   results-service:
     environment:
-      READ_DATABASE_URL: postgresql://alt_user:alt_password@postgres-replica:5432/alt_db
+      READ_DATABASE_URL: postgresql://alt_user:${POSTGRES_PASSWORD:-alt_password}@postgres-replica:5432/alt_db
     depends_on:
       postgres-replica:
         condition: service_healthy
