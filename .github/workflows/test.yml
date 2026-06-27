@@ -58,6 +58,7 @@ jobs:
       - name: Type check
         run: |
           npm run build:shared
+          npm run build:tracing
           npx tsc --noEmit -p services/api-service/tsconfig.typecheck.json
           npx tsc --noEmit -p services/results-service/tsconfig.typecheck.json
           npx tsc --noEmit -p services/worker-backend/tsconfig.json
