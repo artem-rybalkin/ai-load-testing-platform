@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getResults, TestResult } from '@/lib/api';
+import { getResults, TestResult, BackendMetrics, ClientMetrics } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -54,14 +54,21 @@ function statusBadge(r: TestResult): string {
 
 function p95Value(r: TestResult): string {
   if (!r.metrics) return '—';
-  if (r.type === 'client-side') return r.metrics.lcp != null ? `${Math.round(r.metrics.lcp)}ms` : '—';
-  return r.metrics.p95ResponseTime != null ? `${Math.round(r.metrics.p95ResponseTime)}ms` : '—';
+  if (r.type === 'client-side') {
+    const cm = r.metrics as ClientMetrics;
+    return cm.lcp != null ? `${Math.round(cm.lcp)}ms` : '—';
+  }
+  const bm = r.metrics as BackendMetrics;
+  return bm.p95ResponseTime != null ? `${Math.round(bm.p95ResponseTime)}ms` : '—';
 }
 
 function errValue(r: TestResult): string {
   if (!r.metrics) return '—';
-  if (r.type === 'client-side') return r.metrics.jsErrors != null ? `${r.metrics.jsErrors} errs` : '—';
-  const { requestsTotal, requestsFailed } = r.metrics as { requestsTotal?: number; requestsFailed?: number };
+  if (r.type === 'client-side') {
+    const cm = r.metrics as ClientMetrics;
+    return cm.jsErrors != null ? `${cm.jsErrors} errs` : '—';
+  }
+  const { requestsTotal, requestsFailed } = r.metrics as BackendMetrics;
   if (!requestsTotal) return '—';
   return `${(((requestsFailed ?? 0) / requestsTotal) * 100).toFixed(2)}%`;
 }

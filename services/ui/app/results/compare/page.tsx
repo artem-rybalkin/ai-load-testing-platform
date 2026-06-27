@@ -103,8 +103,8 @@ function CompareContent() {
                 <MetricRow
                   key={key}
                   label={label}
-                  a={(resultA.metrics[key] ?? 0) as number}
-                  b={(resultB.metrics[key] ?? 0) as number}
+                  a={((resultA.metrics as Record<string, number> | null)?.[key] ?? 0) as number}
+                  b={((resultB.metrics as Record<string, number> | null)?.[key] ?? 0) as number}
                   unit={unit}
                 />
               ))}

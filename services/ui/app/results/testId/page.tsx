@@ -565,7 +565,7 @@ export default function ResultPage() {
                 <CardHeader title={isBackend ? 'Response Distribution' : 'Web Vitals'} />
                 <div className="p-5">
                   <Suspense fallback={null}>
-                    {result.type === 'flow' && bm.stepMetrics?.length > 0
+                    {result.type === 'flow' && (bm.stepMetrics?.length ?? 0) > 0
                       ? <FlowStepChart steps={bm.stepMetrics!} />
                       : isBackend ? <BackendChart metrics={bm} /> : <ClientChart metrics={cm} />}
                   </Suspense>
@@ -661,7 +661,7 @@ export default function ResultPage() {
               </Card>
             )}
 
-            {bm.stepMetrics?.length > 0 && <StepMetricsTable steps={bm.stepMetrics!} />}
+            {(bm.stepMetrics?.length ?? 0) > 0 && <StepMetricsTable steps={bm.stepMetrics!} />}
 
             {trend.length > 1 && (
               <Card>
