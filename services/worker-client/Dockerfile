@@ -18,14 +18,17 @@ WORKDIR /app
 COPY package.json ./
 COPY tsconfig.json ./
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/tracing/package.json ./packages/tracing/
 COPY services/worker-client/package.json ./services/worker-client/
 
 RUN --mount=type=cache,target=/root/.npm npm install
 
 COPY packages/shared ./packages/shared
+COPY packages/tracing ./packages/tracing
 COPY services/worker-client ./services/worker-client
 
 RUN npm run build --workspace=packages/shared
+RUN npm run build --workspace=packages/tracing
 RUN npm run build --workspace=@alt/worker-client
 
 # Hand ownership to the built-in non-root node user (UID 1000).

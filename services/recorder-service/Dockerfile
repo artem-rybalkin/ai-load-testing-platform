@@ -30,15 +30,18 @@ WORKDIR /app
 COPY package.json ./
 COPY tsconfig.json ./
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/tracing/package.json ./packages/tracing/
 COPY services/recorder-service/package.json ./services/recorder-service/
 
 RUN --mount=type=cache,target=/root/.npm npm install
 
 COPY packages/shared ./packages/shared
+COPY packages/tracing ./packages/tracing
 COPY services/recorder-service ./services/recorder-service
 
 # Build shared types first, then the recorder-service itself
 RUN npm run build --workspace=packages/shared
+RUN npm run build --workspace=packages/tracing
 RUN npm run build --workspace=services/recorder-service
 
 # Hand ownership to the built-in non-root node user (UID 1000).
