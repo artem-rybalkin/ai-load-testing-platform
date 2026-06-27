@@ -25,7 +25,7 @@ const makeResult = (id: string, status = 'completed') => ({
   type: 'backend',
   target_url: `http://example-${id}.com`,
   status,
-  metrics: { rps: 10, p95ResponseTime: 400 },
+  metrics: { type: 'backend' as const, rps: 10, p95ResponseTime: 400, avgResponseTime: 200, p50ResponseTime: 300, p99ResponseTime: 500, requestsTotal: 100, requestsFailed: 0 },
   script: null,
   script_description: null,
   reused_script: false,

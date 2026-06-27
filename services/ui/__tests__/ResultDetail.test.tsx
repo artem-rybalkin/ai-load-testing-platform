@@ -45,7 +45,7 @@ const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
   type: 'backend',
   target_url: 'http://localhost:8081',
   status: 'pending',
-  metrics: null as unknown as Record<string, number>,
+  metrics: null as TestResult['metrics'],
   script: null,
   script_description: null,
   reused_script: false,

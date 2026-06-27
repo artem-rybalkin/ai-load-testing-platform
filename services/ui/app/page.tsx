@@ -1,6 +1,6 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint } from '@/lib/api';
+import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint, BackendMetrics } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
 import AdvancedSettings from '@/app/components/AdvancedSettings';
 import ThresholdSection from '@/app/components/ThresholdSection';
@@ -123,8 +123,11 @@ function RecentRuns({ recent }: { recent: TestResult[] }) {
       </div>
       {completed.length === 0 && <p className="text-[12.5px] text-tx-4 py-3">No completed runs yet.</p>}
       {completed.map((r, i) => {
-        const metricVal = typeof r.metrics?.p95ResponseTime === 'number' ? `${Math.round(r.metrics.p95ResponseTime)}ms`
-          : typeof r.metrics?.lcp === 'number' ? `${Math.round(r.metrics.lcp)}ms` : '—';
+        const metricVal = r.metrics?.type === 'backend'
+          ? `${Math.round(r.metrics.p95ResponseTime)}ms`
+          : r.metrics?.type === 'client'
+          ? `${Math.round(r.metrics.lcp)}ms`
+          : '—';
         const arrow = r.perf_status === 'passed' ? { sym: '↑', cls: 'text-green-fg' } : r.perf_status === 'failed' ? { sym: '↓', cls: 'text-red-fg' } : { sym: '→', cls: 'text-amber-fg' };
         return (
           <div
@@ -563,10 +566,10 @@ function HomeContent() {
   const completedToday = recent.filter(r => r.status === 'completed' && new Date(r.created_at).toDateString() === new Date().toDateString());
   const passCount = completedToday.filter(r => r.perf_status === 'passed').length;
   const passRate = completedToday.length > 0 ? Math.round((passCount / completedToday.length) * 100) : null;
-  const backendCompleted = completedToday.filter(r => typeof r.metrics?.p95ResponseTime === 'number');
-  const avgP95 = backendCompleted.length > 0 ? Math.round(backendCompleted.reduce((s, r) => s + r.metrics.p95ResponseTime, 0) / backendCompleted.length) : null;
-  const rpsResults = completedToday.filter(r => typeof r.metrics?.rps === 'number');
-  const avgRps = rpsResults.length > 0 ? rpsResults.reduce((s, r) => s + r.metrics.rps, 0) / rpsResults.length : null;
+  const backendCompleted = completedToday.filter(r => r.metrics?.type === 'backend');
+  const avgP95 = backendCompleted.length > 0 ? Math.round(backendCompleted.reduce((s, r) => s + (r.metrics as BackendMetrics).p95ResponseTime, 0) / backendCompleted.length) : null;
+  const rpsResults = backendCompleted;
+  const avgRps = rpsResults.length > 0 ? rpsResults.reduce((s, r) => s + (r.metrics as BackendMetrics).rps, 0) / rpsResults.length : null;
 
   return (
     <div>

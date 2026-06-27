@@ -18,6 +18,7 @@ const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
   target_url: 'https://example.com',
   status: 'completed',
   metrics: {
+    type: 'backend' as const,
     avgResponseTime: 100,
     p50ResponseTime: 90,
     p95ResponseTime: 200,
@@ -77,6 +78,7 @@ describe('ComparePage — successful comparison', () => {
     mockCompareResults.mockResolvedValue({
       resultA: makeResult({ test_id: 't1', perf_status: 'passed' }),
       resultB: makeResult({ test_id: 't2', perf_status: 'degraded', metrics: {
+        type: 'backend' as const,
         avgResponseTime: 150, p50ResponseTime: 130, p95ResponseTime: 300, p99ResponseTime: 400,
         rps: 40, requestsTotal: 900, requestsFailed: 30,
       } }),
@@ -97,8 +99,8 @@ describe('ComparePage — successful comparison', () => {
 
   it('renders client metrics table for client-side results', async () => {
     mockCompareResults.mockResolvedValue({
-      resultA: makeResult({ type: 'client-side', metrics: { lcp: 2000, fcp: 1000, ttfb: 500, fid: 50, cls: 0.05 } }),
-      resultB: makeResult({ type: 'client-side', metrics: { lcp: 2500, fcp: 1200, ttfb: 600, fid: 80, cls: 0.08 } }),
+      resultA: makeResult({ type: 'client-side', metrics: { type: 'client' as const, lcp: 2000, fcp: 1000, ttfb: 500, fid: 50, cls: 0.05 } }),
+      resultB: makeResult({ type: 'client-side', metrics: { type: 'client' as const, lcp: 2500, fcp: 1200, ttfb: 600, fid: 80, cls: 0.08 } }),
     });
     renderAt('/results/compare?a=t1&b=t2');
 
