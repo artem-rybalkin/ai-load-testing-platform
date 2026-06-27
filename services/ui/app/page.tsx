@@ -2,21 +2,13 @@ import { useState, useEffect, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint } from '@/lib/api';
 import FlowBuilder from '@/app/components/FlowBuilder';
+import AdvancedSettings from '@/app/components/AdvancedSettings';
+import ThresholdSection from '@/app/components/ThresholdSection';
 import { useAuth } from '@/lib/AuthContext';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 import { findScriptTemplate } from '@/lib/scriptTemplates';
-
-interface EnvVar { key: string; value: string }
-
-interface Thresholds {
-  p95: string; avg: string; errorRate: string; serverErrorRate: string; timeoutRate: string;
-  lcp: string; fcp: string; ttfb: string; cls: string; inp: string; tbt: string;
-}
-
-const DEFAULT_THRESHOLDS: Thresholds = {
-  p95: '1000', avg: '500', errorRate: '1', serverErrorRate: '1', timeoutRate: '1',
-  lcp: '2500', fcp: '1800', ttfb: '800', cls: '0.1', inp: '200', tbt: '200',
-};
+import type { HomeFormState, Thresholds, EnvVar } from '@/app/home-types';
+import { DEFAULT_THRESHOLDS, DURATION_OPTIONS, toSecs, snapDuration } from '@/app/home-types';
 
 function relTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -150,16 +142,6 @@ function RecentRuns({ recent }: { recent: TestResult[] }) {
   );
 }
 
-const DURATION_OPTIONS = ['30s', '1m', '2m', '3m', '5m', '10m', '30m'];
-const toSecs = (d: string) => {
-  const m = d.match(/^(\d+)(s|m|h)$/);
-  if (!m) return 0;
-  return parseInt(m[1]) * (m[2] === 'h' ? 3600 : m[2] === 'm' ? 60 : 1);
-};
-const snapDuration = (secs: number) =>
-  DURATION_OPTIONS.reduce((best, opt) =>
-    Math.abs(toSecs(opt) - secs) < Math.abs(toSecs(best) - secs) ? opt : best
-  );
 
 function HomeContent() {
   const navigate = useNavigate();
@@ -181,8 +163,8 @@ function HomeContent() {
   const [recent, setRecent] = useState<TestResult[]>([]);
   const [active, setActive] = useState<ActiveTest[]>([]);
   const [rerunFrom, setRerunFrom] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    type: 'backend' as 'backend' | 'client-side' | 'flow',
+  const [form, setForm] = useState<HomeFormState>({
+    type: 'backend',
     targetUrl: '',
     description: '',
     vus: 5,
@@ -191,7 +173,7 @@ function HomeContent() {
     duration: '30s',
     rampUp: '',
     collectWebVitals: true,
-    profile: 'load' as 'load' | 'spike' | 'capacity' | 'soak',
+    profile: 'load',
     httpKeepAlive: true,
     httpTimeout: '',
     httpDiscardBodies: false,
@@ -820,185 +802,33 @@ function HomeContent() {
             )}
 
             {/* Advanced settings */}
-            <div>
-              <button type="button" onClick={() => setShowAdvanced(v => !v)} className="flex items-center gap-1.5 text-[12.5px] text-tx-3 hover:text-tx py-0.5">
-                <span className={`transition-transform inline-block text-[10px] ${showAdvanced ? 'rotate-90' : ''}`}>▶</span>
-                Advanced settings
-                {!showAdvanced && (
-                  <span className="text-[11px] text-tx-4 ml-1 font-mono">
-                    {form.type === 'client-side'
-                      ? `${form.sessions} sessions · ${form.duration}`
-                      : `${form.vus} VUs · ${form.duration}${form.rampUp ? ` · ramp ${form.rampUp}` : ''}${form.type === 'backend' ? ` · ${form.profile}` : ''}`}
-                  </span>
-                )}
-              </button>
-              {showAdvanced && (
-                <div className="mt-2.5 space-y-3.5 p-4 bg-bg rounded-control border border-border">
-                  {form.type === 'backend' && (
-                    <div>
-                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Profile</div>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {([
-                          { id: 'load',     label: 'Load',     hint: 'Constant VUs' },
-                          { id: 'spike',    label: 'Spike',    hint: 'Traffic burst' },
-                          { id: 'capacity', label: 'Capacity', hint: 'Find breakpoint' },
-                          { id: 'soak',     label: 'Soak',     hint: 'Long steady-state' },
-                        ] as const).map(p => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => setForm(f => ({ ...f, profile: p.id }))}
-                            className={`py-2 px-3 rounded-control border text-left transition-colors ${
-                              form.profile === p.id ? 'border-ink-bd bg-surface' : 'border-border bg-surface hover:bg-hover'
-                            }`}
-                          >
-                            <div className="text-[12.5px] font-semibold">{p.label}</div>
-                            <div className="text-[10.5px] text-tx-4">{p.hint}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className="grid grid-cols-2 gap-3">
-                    {form.type === 'client-side' ? (
-                      <div>
-                        <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Browser sessions</div>
-                        <input type="number" min={1} max={10} value={form.sessions}
-                          onChange={e => setForm(f => ({ ...f, sessions: Number(e.target.value) }))} className={inputCls} />
-                      </div>
-                    ) : (
-                      <div>
-                        <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">
-                          {form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Users'}
-                        </div>
-                        <input type="number" min={1} max={100} value={form.vus}
-                          onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))} className={inputCls} />
-                      </div>
-                    )}
-                    <div>
-                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Duration</div>
-                      <select value={form.duration} onChange={e => setForm(f => ({ ...f, duration: e.target.value }))} className={inputCls}>
-                        {DURATION_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  {form.type !== 'client-side' && (
-                    <div>
-                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Ramp-up <span className="normal-case font-normal text-tx-4">(optional, e.g. 30s, 1m)</span></div>
-                      <input type="text" placeholder="30s" value={form.rampUp} onChange={e => setForm(f => ({ ...f, rampUp: e.target.value }))} className={inputCls} />
-                    </div>
-                  )}
-                  {form.type === 'backend' && (form.profile === 'spike' || form.profile === 'capacity') && (
-                    <div>
-                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">
-                        {form.profile === 'spike' ? 'Peak VUs (spike target)' : 'Max VUs (capacity ceiling)'}
-                      </div>
-                      <input type="number" min={form.vus + 1} max={500} value={form.peakVus}
-                        onChange={e => setForm(f => ({ ...f, peakVus: Number(e.target.value) }))} className={inputCls} />
-                    </div>
-                  )}
-
-                  {form.type !== 'client-side' && (
-                    <div className="pt-3 border-t border-line">
-                      <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-2">HTTP Settings</div>
-                      <div className="space-y-2">
-                        <label className="flex items-center gap-2 text-[12.5px] text-tx cursor-pointer">
-                          <input type="checkbox" checked={form.httpKeepAlive} onChange={e => setForm(f => ({ ...f, httpKeepAlive: e.target.checked }))} className="rounded-sm border-border" />
-                          Keep-alive connections
-                        </label>
-                        <label className="flex items-center gap-2 text-[12.5px] text-tx cursor-pointer">
-                          <input type="checkbox" checked={form.httpDiscardBodies} onChange={e => setForm(f => ({ ...f, httpDiscardBodies: e.target.checked }))} className="rounded-sm border-border" />
-                          Discard response bodies <span className="text-tx-4">(faster, saves memory)</span>
-                        </label>
-                        <div>
-                          <div className="text-[11px] text-tx-3 mb-1">Request timeout <span className="text-tx-4">(e.g. 30s, 1m)</span></div>
-                          <input type="text" placeholder="30s" value={form.httpTimeout} onChange={e => setForm(f => ({ ...f, httpTimeout: e.target.value }))} className={inputCls} />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {form.type !== 'flow' && (
-                    <div className="pt-3 border-t border-line">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase">Custom Headers</div>
-                        <button type="button" onClick={() => setCustomHeaders(h => [...h, { key: '', value: '' }])} className="text-[11px] text-accent hover:underline">+ add</button>
-                      </div>
-                      {customHeaders.map((h, i) => (
-                        <div key={i} className="flex gap-1.5 mb-1.5 items-center">
-                          <input type="text" placeholder="Header-Name" value={h.key}
-                            onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
-                            className="w-40 border border-border rounded-control px-2.5 py-1 text-[11px] font-mono bg-surface focus:outline-none" />
-                          <span className="text-tx-4 text-[11px]">:</span>
-                          <input type="text" placeholder="value" value={h.value}
-                            onChange={e => setCustomHeaders(hs => hs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
-                            className="flex-1 border border-border rounded-control px-2.5 py-1 text-[11px] font-mono bg-surface focus:outline-none" />
-                          <button type="button" onClick={() => setCustomHeaders(hs => hs.filter((_, j) => j !== i))} className="text-tx-4 hover:text-red-fg text-[11px]">✕</button>
-                        </div>
-                      ))}
-                      {customHeaders.length === 0 && <p className="text-[11px] text-tx-4">No custom headers. Sent with every request (e.g. API keys, auth tokens).</p>}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <AdvancedSettings
+              form={form}
+              setForm={setForm}
+              showAdvanced={showAdvanced}
+              setShowAdvanced={setShowAdvanced}
+              customHeaders={customHeaders}
+              setCustomHeaders={setCustomHeaders}
+              inputCls={inputCls}
+            />
 
             {/* SLO thresholds */}
-            <div>
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={() => setShowThresholds(v => !v)} className="flex items-center gap-1.5 text-[12.5px] text-tx-3 hover:text-tx py-0.5">
-                  <span className={`transition-transform inline-block text-[10px] ${showThresholds ? 'rotate-90' : ''}`}>▶</span>
-                  SLO thresholds
-                  {showThresholds && <span className="text-[11px] text-accent ml-1">active</span>}
-                </button>
-                {form.targetUrl && form.type !== 'flow' && (
-                  <button type="button" onClick={handleSuggestThresholds} disabled={suggestingThresholds} className="text-[11px] text-accent hover:underline disabled:opacity-50 font-mono" title="Analyse run history and suggest realistic SLO values">
-                    {suggestingThresholds ? '⏳ Analysing…' : '✨ Suggest'}
-                  </button>
-                )}
-              </div>
-              {thresholdSuggestionNote && <p className="text-[11px] text-tx-4 mt-1 font-mono">{thresholdSuggestionNote}</p>}
-              {showThresholds && (
-                <div className="mt-2.5 grid grid-cols-3 gap-2.5 p-4 bg-bg rounded-control border border-border">
-                  {(form.type === 'client-side' ? [
-                    { key: 'lcp',  label: 'LCP ms'  }, { key: 'fcp',  label: 'FCP ms'  }, { key: 'ttfb', label: 'TTFB ms' },
-                    { key: 'cls',  label: 'CLS'     }, { key: 'inp',  label: 'INP ms'  }, { key: 'tbt',  label: 'TBT ms'  },
-                  ] : [
-                    { key: 'p95', label: 'p95 ms' }, { key: 'avg', label: 'Avg ms' }, { key: 'errorRate', label: 'Err %' },
-                    { key: 'serverErrorRate', label: '5xx err %' }, { key: 'timeoutRate', label: 'Timeout %' },
-                  ] as const).map(({ key, label }) => (
-                    <div key={key}>
-                      <div className="text-[10.5px] text-tx-4 mb-1">{label} max</div>
-                      <input type="number" min={0} value={(thresholds as unknown as Record<string, string>)[key]}
-                        onChange={e => setThresholds(t => ({ ...t, [key]: e.target.value }))} className={inputCls} />
-                    </div>
-                  ))}
-                </div>
-              )}
-              {showThresholds && form.targetUrl && (
-                <div className="mt-2">
-                  <button type="button" onClick={handlePreviewThresholds} disabled={previewingThresholds} className="text-[11px] text-accent hover:underline disabled:opacity-50 font-mono" title="Check these thresholds against the most recent completed run for this URL">
-                    {previewingThresholds ? '⏳ Checking…' : '👁 Preview against last run'}
-                  </button>
-                  {thresholdPreviewError && <p className="text-[11px] text-red-fg mt-1 font-mono">{thresholdPreviewError}</p>}
-                  {thresholdPreview && !thresholdPreview.available && <p className="text-[11px] text-tx-4 mt-1 font-mono">No completed run found for this URL yet.</p>}
-                  {thresholdPreview?.available && (
-                    <div className={`mt-1 p-2.5 rounded-control border text-[11px] font-mono ${
-                      thresholdPreview.perfStatus === 'failed' ? 'bg-red-bg border-red-fg/40 text-red-fg'
-                      : thresholdPreview.perfStatus === 'degraded' ? 'bg-amber-bg border-amber-fg/40 text-amber-fg'
-                      : 'bg-green-bg border-green-fg/40 text-green-fg'
-                    }`}>
-                      <p className="font-semibold">
-                        {thresholdPreview.perfStatus === 'failed' ? '✗ Would fail' : thresholdPreview.perfStatus === 'degraded' ? '⚠ Degraded' : '✓ Would pass'}
-                      </p>
-                      {thresholdPreview.thresholdViolations && thresholdPreview.thresholdViolations.length > 0 && (
-                        <ul className="list-disc list-inside mt-1">{thresholdPreview.thresholdViolations.map(v => <li key={v}>{v}</li>)}</ul>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <ThresholdSection
+              testType={form.type}
+              targetUrl={form.targetUrl}
+              thresholds={thresholds}
+              setThresholds={setThresholds}
+              showThresholds={showThresholds}
+              setShowThresholds={setShowThresholds}
+              suggestingThresholds={suggestingThresholds}
+              thresholdSuggestionNote={thresholdSuggestionNote}
+              previewingThresholds={previewingThresholds}
+              thresholdPreviewError={thresholdPreviewError}
+              thresholdPreview={thresholdPreview}
+              handleSuggestThresholds={handleSuggestThresholds}
+              handlePreviewThresholds={handlePreviewThresholds}
+              inputCls={inputCls}
+            />
 
             {error && <p className="text-red-fg text-[12.5px]">{error}</p>}
 
