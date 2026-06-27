@@ -13,7 +13,7 @@ import { parseK6Output, aggregateWindow, parseK6JsonOutput, LIVE_WINDOW_SEC } fr
 import { log } from './logger';
 
 let queueConnected = false;
-let connection: amqplib.Connection | null = null;
+let connection: amqplib.ChannelModel | null = null;
 let channel: amqplib.Channel | null = null;
 
 // Rolling CPU usage sampled every 5 seconds
@@ -344,37 +344,39 @@ const start = async (): Promise<void> => {
     onRetry: (err, attempt, nextDelayMs) =>
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ connection failed — retrying'),
   });
+  const conn = connection;
 
-  connection.on('error', (err) => {
+  conn.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
   });
-  connection.on('close', () => {
+  conn.on('close', () => {
     log.warn('RabbitMQ connection closed — reconnecting');
     queueConnected = false;
     scheduleReconnect();
   });
 
-  channel = await connection.createChannel();
-  channel.on('error', (err) => {
+  channel = await conn.createChannel();
+  const ch = channel;
+  ch.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
     queueConnected = false;
   });
 
-  await channel.assertQueue(QUEUE,         { durable: true });
-  await channel.assertQueue(DLQ,           { durable: true });
-  await channel.assertQueue(RESULTS_QUEUE, { durable: true });
+  await ch.assertQueue(QUEUE,         { durable: true });
+  await ch.assertQueue(DLQ,           { durable: true });
+  await ch.assertQueue(RESULTS_QUEUE, { durable: true });
 
   // s1: each replica gets its own exclusive cancel queue bound to the fanout exchange
-  await channel.assertExchange(CANCEL_EXCHANGE, 'fanout', { durable: true });
-  const { queue: cancelQueue } = await channel.assertQueue('', { exclusive: true, autoDelete: true });
-  await channel.bindQueue(cancelQueue, CANCEL_EXCHANGE, '');
+  await ch.assertExchange(CANCEL_EXCHANGE, 'fanout', { durable: true });
+  const { queue: cancelQueue } = await ch.assertQueue('', { exclusive: true, autoDelete: true });
+  await ch.bindQueue(cancelQueue, CANCEL_EXCHANGE, '');
 
   queueConnected = true;
-  channel.prefetch(WORKER_CONCURRENCY);
+  ch.prefetch(WORKER_CONCURRENCY);
   log.info({ queue: QUEUE, concurrency: WORKER_CONCURRENCY }, 'Worker-backend listening');
 
   // r2: cancel consumer — kills running k6 processes by testId
-  channel.consume(cancelQueue, async (msg) => {
+  ch.consume(cancelQueue, async (msg) => {
     if (!msg) return;
     const { testId } = JSON.parse(msg.content.toString()) as { testId: string };
     const proc = runningTests.get(testId);
@@ -383,10 +385,10 @@ const start = async (): Promise<void> => {
       cancelledTests.add(testId);
       proc.kill('SIGTERM');
     }
-    channel.ack(msg);
+    ch.ack(msg);
   }, { noAck: false });
 
-  channel.consume(QUEUE, async (msg) => {
+  ch.consume(QUEUE, async (msg) => {
     if (!msg) return;
 
     const test: EnrichedTestRequest = JSON.parse(msg.content.toString());
@@ -403,7 +405,7 @@ const start = async (): Promise<void> => {
     );
     if (statusRows[0]?.status === 'cancelled') {
       testLog.info('Test was cancelled before execution, skipping');
-      channel.ack(msg);
+      ch.ack(msg);
       return;
     }
 
@@ -417,7 +419,7 @@ const start = async (): Promise<void> => {
         cancelledTests.delete(test.id);
         await notifyCancelled(test.id);
         testLog.info('Test cancelled during execution');
-        channel.ack(msg);
+        ch.ack(msg);
         return;
       }
 
@@ -433,7 +435,7 @@ const start = async (): Promise<void> => {
         completedAt: new Date().toISOString()
       };
 
-      channel.sendToQueue(
+      ch.sendToQueue(
         RESULTS_QUEUE,
         Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds, projectId: test.projectId, executionLog })),
         { persistent: true }
@@ -441,12 +443,12 @@ const start = async (): Promise<void> => {
 
       testLog.info({ requestsTotal: metrics.requestsTotal, rps: metrics.rps, p95: metrics.p95ResponseTime, errorRate: (metrics.requestsFailed / (metrics.requestsTotal || 1) * 100).toFixed(2) }, 'k6 test completed');
       testLog.debug({ metrics }, 'k6 test full metrics');
-      channel.ack(msg);
+      ch.ack(msg);
     } catch (err) {
       testLog.error({ err: (err as Error).message }, 'Test failed');
       const partialLog = (err as { partialLog?: string }).partialLog;
       await notifyFailed(test.id, partialLog);
-      handleRetry(channel, msg, QUEUE, DLQ, test.id);
+      handleRetry(ch, msg, QUEUE, DLQ, test.id);
     }
   });
 };
