@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 # ── System deps: Chromium + Xvfb virtual display + noVNC browser viewer ───────
 # `novnc` pulls in the `websockify` apk package (and python3) as a transitive
