@@ -24,7 +24,7 @@ const QUEUE              = 'client-tests';
 const CANCEL_EXCHANGE    = 'cancel-fanout';
 let queueConnected = false;
 let reconnecting = false;
-let connection: amqplib.Connection | null = null;
+let connection: amqplib.ChannelModel | null = null;
 let channel: amqplib.Channel | null = null;
 
 // Rolling CPU usage sampled every 5 seconds
@@ -386,36 +386,38 @@ const start = async (): Promise<void> => {
     onRetry: (err, attempt, nextDelayMs) =>
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ connection failed — retrying'),
   });
+  const conn = connection;
 
-  connection.on('error', (err) => {
+  conn.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
   });
-  connection.on('close', () => {
+  conn.on('close', () => {
     log.warn('RabbitMQ connection closed — reconnecting');
     queueConnected = false;
     scheduleReconnect();
   });
 
-  channel = await connection.createChannel();
-  channel.on('error', (err) => {
+  channel = await conn.createChannel();
+  const ch = channel;
+  ch.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
     queueConnected = false;
   });
-  await channel.assertQueue(QUEUE,         { durable: true });
-  await channel.assertQueue(DLQ,           { durable: true });
-  await channel.assertQueue(RESULTS_QUEUE, { durable: true });
+  await ch.assertQueue(QUEUE,         { durable: true });
+  await ch.assertQueue(DLQ,           { durable: true });
+  await ch.assertQueue(RESULTS_QUEUE, { durable: true });
 
   // s1: exclusive cancel queue per replica bound to fanout exchange
-  await channel.assertExchange(CANCEL_EXCHANGE, 'fanout', { durable: true });
-  const { queue: cancelQueue } = await channel.assertQueue('', { exclusive: true, autoDelete: true });
-  await channel.bindQueue(cancelQueue, CANCEL_EXCHANGE, '');
+  await ch.assertExchange(CANCEL_EXCHANGE, 'fanout', { durable: true });
+  const { queue: cancelQueue } = await ch.assertQueue('', { exclusive: true, autoDelete: true });
+  await ch.bindQueue(cancelQueue, CANCEL_EXCHANGE, '');
 
   queueConnected = true;
-  channel.prefetch(WORKER_CONCURRENCY);
+  ch.prefetch(WORKER_CONCURRENCY);
   log.info({ queue: QUEUE, concurrency: WORKER_CONCURRENCY }, 'Worker-client listening');
 
   // r2: cancel consumer — closes running Puppeteer browser by testId
-  channel.consume(cancelQueue, async (msg) => {
+  ch.consume(cancelQueue, async (msg) => {
     if (!msg) return;
     const { testId } = JSON.parse(msg.content.toString()) as { testId: string };
     const browser = runningBrowsers.get(testId);
@@ -424,10 +426,10 @@ const start = async (): Promise<void> => {
       cancelledTests.add(testId);
       await browser.close().catch(() => {});
     }
-    channel.ack(msg);
+    ch.ack(msg);
   }, { noAck: false });
 
-  channel.consume(QUEUE, async (msg) => {
+  ch.consume(QUEUE, async (msg) => {
     if (!msg) return;
 
     const test: TestRequest = JSON.parse(msg.content.toString());
@@ -443,7 +445,7 @@ const start = async (): Promise<void> => {
       if (cancelledTests.has(test.id)) {
         cancelledTests.delete(test.id);
         log.info({ testId: test.id }, 'Client test cancelled during execution');
-        channel.ack(msg);
+        ch.ack(msg);
         return;
       }
 
@@ -456,9 +458,9 @@ const start = async (): Promise<void> => {
         completedAt: new Date().toISOString(),
       };
 
-      channel.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId, executionLog })), { persistent: true });
+      ch.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId, executionLog })), { persistent: true });
       log.info({ testId: test.id, metrics }, 'Client test completed');
-      channel.ack(msg);
+      ch.ack(msg);
     } catch (err) {
       log.error({ testId: test.id, err: (err as Error).message }, 'Client test failed');
       const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
@@ -470,7 +472,7 @@ const start = async (): Promise<void> => {
           body: JSON.stringify({ executionLog: partialLog ?? null }),
         }).catch(() => {});
       }
-      handleRetry(channel, msg, QUEUE, DLQ, test.id);
+      handleRetry(ch, msg, QUEUE, DLQ, test.id);
     }
   });
 };
