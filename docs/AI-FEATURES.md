@@ -259,35 +259,57 @@ Tags:  e-commerce  load  authenticated
 
 ---
 
-## 13. Chat-Based Test Creation
+## 13. Chat-Based Test Creation + Multi-Step Flow Building from Context
 
 **Service:** `results-service` (`POST /chat/parse`)
 **Entry point:** "Chat" tab in the sidebar — a multi-turn conversation, not a single-shot form.
 
-The user describes a test in plain English; Gemini parses the running conversation into one of
-three outcomes on every turn:
+The user describes a test in plain English or provides structured context (Swagger spec, HAR
+recording, documentation, codebase files); Gemini parses the conversation into one of four outcomes:
 
 - **`ready`** — a complete `backend` or `client-side` test config (URL, VUs/sessions, duration,
-  profile, thresholds). Shown as a read-only preview card with **Run Test** / **Keep chatting**.
-  Confirming calls the existing `POST /tests` unchanged — this feature only adds a parsing step in
-  front of test creation, not a new way to run one.
-- **`needsClarification`** — a follow-up question when something required (most commonly the
-  target URL) is missing or ambiguous, shown as a normal assistant reply so the user can just answer.
-- **`redirectToFlowBuilder`** — when the conversation describes multiple sequential steps (e.g.
-  "log in, then check out"), the assistant does not attempt to infer step URLs from prose; it links
-  to the existing Flow Builder instead (`/?type=flow`). Multi-step inference from natural language
-  is intentionally out of scope for v1 — see `docs/TODO.md` for the deferred follow-up.
+  profile, thresholds). Shown as a read-only preview card with **Run Test** / **Edit settings**.
+  Confirming calls the existing `POST /tests` unchanged.
+- **`flowReady`** — **new** — a complete `FlowTestConfig` (`steps: FlowStep[]`, `targetUrl`,
+  `description`, `options`, optional `thresholds`). Returned when multi-step intent is detected
+  **and** the AI can extract concrete step details from attachments or the conversation. The UI
+  renders a step list card with three actions:
+  - **Run flow test** — calls `createTest({ type: 'flow', steps, ... })` immediately; status bubble
+    appears and subscribes to WebSocket `test:status` events for that test.
+  - **Edit in Flow Builder** — stores the steps in `sessionStorage('chatFlowSteps')`, navigates to
+    `/?type=flow&fromChat=1`; the home page reads and clears the key on mount, pre-filling FlowBuilder.
+  - **Adjust settings** — dismisses the card and lets the conversation continue.
+- **`needsClarification`** — a follow-up question when something required is missing (URL, VUs,
+  duration, or which endpoints from the Swagger spec to include), shown as a normal assistant reply.
+- **`redirectToFlowBuilder`** — last resort only; returned when multi-step intent is detected but
+  no usable context was provided to extract step details from. Offers a "Open Flow Builder" link to
+  `/?type=flow`.
 
-Differs from every other AI feature in this doc in one respect: it resolves the **per-team** AI
-provider override (`getEffectiveAiProviderSetting`), not the global-only setting AI-9 (4a above)
-currently uses — a deliberate correction made when this feature was built, not a copy of that
-pre-existing gap.
+**Attachment support** — the request body accepts `attachments?: ChatAttachment[]`; each attachment
+is processed server-side before the AI prompt is built (`processAttachments()` in `helpers.ts`):
 
-The server caps the conversation to the last 20 messages before building the prompt, regardless of
-how much history the UI is still showing — bounds both context-window risk and per-call token cost
-on a long back-and-forth. Each turn meters one Gemini call against the team's daily quota
-(`checkGeminiQuota`/`incrementGeminiUsage`), same as every other AI feature — a multi-turn
-conversation burns quota faster than a single-click "Suggest" button elsewhere in the app.
+| Type | Source | Processing |
+|------|--------|-----------|
+| `swagger_url` | URL | Fetched server-side (SSRF-validated), JSON parsed + endpoints summarized; raw text if YAML |
+| `har` | Uploaded `.json` file | Parsed, static assets filtered out, top-50 entries formatted as `METHOD URL → STATUS` |
+| `documentation` | Any text file | Passed as-is, truncated to 4000 chars |
+| `codebase` | Source files | Same as documentation |
+
+The UI provides three ways to add context: a **paperclip button** (file picker — `.json` files
+become `har`, all others `documentation`), a **Swagger icon** (opens an inline URL input that adds
+a `swagger_url` attachment without triggering a send), and **drag-and-drop** anywhere on the page.
+Pending attachments appear as dismissible chips above the input bar.
+
+When context attachments are present, `buildChatParsePrompt` injects `flowReady` as outcome 1
+(highest priority), pushing single-URL `ready` to 2 and `needsClarification` to 3 — so the AI
+attempts to build a flow before asking questions. Without attachments the prompt is unchanged: only
+three outcomes exist (`ready`, `needsClarification`, `redirectToFlowBuilder`), preserving the
+original single-URL behavior and all existing tests.
+
+Resolves the **per-team** AI provider override (`getEffectiveAiProviderSetting`) — per-team aware,
+unlike AI-9 (`suggest-settings`) which still uses the global-only `getAiProviderSetting`. The
+server caps the conversation to the last 20 messages before building the prompt. Each turn meters
+one call against the team's daily Gemini quota (`checkGeminiQuota`/`incrementGeminiUsage`).
 
 ---
 
