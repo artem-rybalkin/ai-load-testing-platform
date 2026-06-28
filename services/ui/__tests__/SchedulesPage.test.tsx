@@ -20,8 +20,10 @@ vi.mock('@/lib/api', () => ({
   convertCron: mockConvertCron,
 }));
 
+const mockActiveWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
+
 vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
 }));
 
 const makeSchedule = (overrides: Partial<Schedule> = {}): Schedule => ({
@@ -41,6 +43,7 @@ const makeSchedule = (overrides: Partial<Schedule> = {}): Schedule => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockActiveWorkspaceId.current = null;
   mockGetSchedules.mockResolvedValue({ schedules: [] });
 });
 afterEach(() => cleanup());
@@ -178,5 +181,22 @@ describe('SchedulesPage — natural language cron conversion', () => {
 
     await waitFor(() => expect(mockConvertCron).toHaveBeenCalledWith('every weekday at 9am'));
     await waitFor(() => expect(screen.getByText(/Every weekday at 9:00 AM/)).toBeInTheDocument());
+  });
+});
+
+// ─── Workspace filter ─────────────────────────────────────────────────────────
+
+describe('SchedulesPage — workspace filter', () => {
+  it('calls getSchedules with null when no workspace is active', async () => {
+    render(<SchedulesPage />);
+    await waitFor(() => expect(mockGetSchedules).toHaveBeenCalled());
+    expect(mockGetSchedules).toHaveBeenCalledWith(null);
+  });
+
+  it('calls getSchedules with active workspaceId when a workspace is selected', async () => {
+    mockActiveWorkspaceId.current = 'ws-sched';
+    render(<SchedulesPage />);
+    await waitFor(() => expect(mockGetSchedules).toHaveBeenCalled());
+    expect(mockGetSchedules).toHaveBeenCalledWith('ws-sched');
   });
 });

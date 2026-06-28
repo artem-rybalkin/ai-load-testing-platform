@@ -24,8 +24,10 @@ vi.mock('@/lib/api', () => ({
   predictWebhookNoise: mockPredictWebhookNoise,
 }));
 
+const mockActiveWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
+
 vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
 }));
 
 const makeWebhook = (overrides: Partial<Webhook> = {}): Webhook => ({
@@ -50,6 +52,7 @@ const makeLogSource = (overrides: Partial<LogSource> = {}): LogSource => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockActiveWorkspaceId.current = null;
   mockGetWebhooks.mockResolvedValue({ webhooks: [] });
   mockGetLogSources.mockResolvedValue({ logSources: [] });
   mockPredictWebhookNoise.mockResolvedValue({ level: 'ok', warning: null, message: '' });
@@ -216,5 +219,38 @@ describe('WebhooksPage — log source edit and delete flow', () => {
 
     await waitFor(() => expect(mockDeleteLogSource).toHaveBeenCalledWith('ls1'));
     expect(mockGetLogSources).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── Workspace filter ─────────────────────────────────────────────────────────
+
+describe('WebhooksPage — workspace filter', () => {
+  it('calls getWebhooks with null when no workspace is active', async () => {
+    render(<WebhooksPage />);
+    await waitFor(() => expect(mockGetWebhooks).toHaveBeenCalled());
+    expect(mockGetWebhooks).toHaveBeenCalledWith(null);
+  });
+
+  it('calls getWebhooks with active workspaceId when a workspace is selected', async () => {
+    mockActiveWorkspaceId.current = 'ws-hook';
+    render(<WebhooksPage />);
+    await waitFor(() => expect(mockGetWebhooks).toHaveBeenCalled());
+    expect(mockGetWebhooks).toHaveBeenCalledWith('ws-hook');
+  });
+
+  it('passes workspaceId to createWebhook when creating a webhook in an active workspace', async () => {
+    mockActiveWorkspaceId.current = 'ws-hook-create';
+    mockCreateWebhook.mockResolvedValue({ webhook: makeWebhook() });
+    render(<WebhooksPage />);
+    await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('https://your-endpoint.example.com/webhook'), {
+      target: { value: 'https://hook.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /add webhook/i }));
+
+    await waitFor(() => expect(mockCreateWebhook).toHaveBeenCalledWith(
+      'https://hook.example.com', ['failed', 'degraded'], 'generic', 'ws-hook-create'
+    ));
   });
 });

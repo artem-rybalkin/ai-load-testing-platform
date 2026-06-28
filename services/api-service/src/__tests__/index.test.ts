@@ -189,6 +189,37 @@ describe('POST /tests', () => {
   });
 });
 
+// ─── POST /tests — workspaceId contract ──────────────────────────────────────
+
+describe('POST /tests — workspaceId passthrough contract', () => {
+  it('passes workspaceId through to POST /results/pending when provided', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/tests',
+      payload: { ...validBody, workspaceId: '00000000-0000-0000-0000-aabbccddeeff' },
+    });
+    expect(res.statusCode).toBe(200);
+    const pendingBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(pendingBody.workspaceId).toBe('00000000-0000-0000-0000-aabbccddeeff');
+  });
+
+  it('passes workspaceId on the published test message when provided', async () => {
+    await app.inject({
+      method: 'POST', url: '/tests',
+      payload: { ...validBody, workspaceId: '00000000-0000-0000-0000-aabbccddeeff' },
+    });
+    expect(mockPublishTest).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: '00000000-0000-0000-0000-aabbccddeeff' }),
+      false,
+    );
+  });
+
+  it('omits workspaceId from /results/pending body when not provided', async () => {
+    await app.inject({ method: 'POST', url: '/tests', payload: validBody });
+    const pendingBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(pendingBody.workspaceId).toBeUndefined();
+  });
+});
+
 // ─── POST /tests — customScript bypass path ───────────────────────────────────
 
 describe('POST /tests — customScript bypass', () => {

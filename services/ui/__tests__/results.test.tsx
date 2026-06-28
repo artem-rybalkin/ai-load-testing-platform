@@ -16,8 +16,10 @@ vi.mock('@/lib/api', () => ({
   getResults: vi.fn(),
 }));
 
+const mockActiveWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
+
 vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
 }));
 
 import { getResults } from '@/lib/api';
@@ -44,6 +46,7 @@ const makeResult = (id: string, status = 'completed') => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mockPush.mockReset();
+  mockActiveWorkspaceId.current = null;
 });
 
 afterEach(() => cleanup());
@@ -136,5 +139,24 @@ describe('Results page', () => {
     render(<ResultsPage />);
     await waitFor(() => expect(screen.getByText('http://example-aaa.com')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /re-run/i })).not.toBeInTheDocument();
+  });
+});
+
+// ─── Workspace filter ─────────────────────────────────────────────────────────
+
+describe('Results page — workspace filter', () => {
+  it('calls getResults with null workspaceId when no workspace is active', async () => {
+    mockGetResults.mockResolvedValue({ results: [], nextBefore: null });
+    render(<ResultsPage />);
+    await waitFor(() => expect(mockGetResults).toHaveBeenCalled());
+    expect(mockGetResults).toHaveBeenCalledWith(undefined, 50, null);
+  });
+
+  it('calls getResults with the active workspaceId when a workspace is selected', async () => {
+    mockActiveWorkspaceId.current = 'ws-abc';
+    mockGetResults.mockResolvedValue({ results: [], nextBefore: null });
+    render(<ResultsPage />);
+    await waitFor(() => expect(mockGetResults).toHaveBeenCalled());
+    expect(mockGetResults).toHaveBeenCalledWith(undefined, 50, 'ws-abc');
   });
 });

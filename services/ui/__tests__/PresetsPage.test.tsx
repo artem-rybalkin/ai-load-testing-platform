@@ -15,8 +15,10 @@ vi.mock('@/lib/api', () => ({
   deletePreset: mockDeletePreset,
 }));
 
+const mockActiveWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
+
 vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
 }));
 
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -39,6 +41,7 @@ const makePreset = (overrides: Partial<Preset> = {}): Preset => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockActiveWorkspaceId.current = null;
   mockGetPresets.mockResolvedValue({ presets: [] });
 });
 afterEach(() => cleanup());
@@ -156,6 +159,23 @@ describe('PresetsPage — delete flow', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
     expect(mockDeletePreset).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Workspace filter ─────────────────────────────────────────────────────────
+
+describe('PresetsPage — workspace filter', () => {
+  it('calls getPresets with null when no workspace is active', async () => {
+    render(<PresetsPage />);
+    await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
+    expect(mockGetPresets).toHaveBeenCalledWith(null);
+  });
+
+  it('calls getPresets with active workspaceId when a workspace is selected', async () => {
+    mockActiveWorkspaceId.current = 'ws-xyz';
+    render(<PresetsPage />);
+    await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
+    expect(mockGetPresets).toHaveBeenCalledWith('ws-xyz');
   });
 });
 
