@@ -292,6 +292,25 @@ function HomeContent() {
       return;
     }
 
+    // Pre-fill flow steps from chat page (sessionStorage set by handleOpenInFlowBuilder)
+    const fromChat = searchParams.get('fromChat');
+    if (fromChat === '1') {
+      try {
+        const stored = sessionStorage.getItem('chatFlowSteps');
+        if (stored) {
+          const steps = JSON.parse(stored);
+          if (Array.isArray(steps) && steps.length > 0) {
+            setFlowSteps(steps);
+            setForm(f => ({ ...f, type: 'flow' }));
+            sessionStorage.removeItem('chatFlowSteps');
+            return;
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+
     const type = searchParams.get('type') as 'backend' | 'client-side' | 'flow' | null;
     const targetUrl = searchParams.get('targetUrl');
     const description = searchParams.get('description');

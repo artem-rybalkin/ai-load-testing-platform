@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 import {
   parseChatPrompt,
@@ -8,12 +8,25 @@ import {
   ChatMessage,
   ChatParseResponse,
   ParsedTestIntent,
+  ChatAttachment,
+  FlowTestConfig,
+  FlowStep,
 } from '@/lib/api';
+
+// ── Entry types ───────────────────────────────────────────────────────────────
 
 interface PreviewMsg {
   role: 'assistant';
   kind: 'preview';
   config: ParsedTestIntent;
+  dismissed: boolean;
+  started: boolean;
+}
+
+interface FlowPreviewMsg {
+  role: 'assistant';
+  kind: 'flowPreview';
+  flow: FlowTestConfig;
   dismissed: boolean;
   started: boolean;
 }
@@ -35,14 +48,39 @@ interface TextMsg {
   role: 'user' | 'assistant';
   kind: 'text';
   content: string;
+  attachments?: ChatAttachment[];
 }
 
-type ChatEntry = TextMsg | PreviewMsg | RedirectMsg | StatusMsg;
+type ChatEntry = TextMsg | PreviewMsg | FlowPreviewMsg | RedirectMsg | StatusMsg;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const STATIC_ASSET_RE = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|mp4|mp3|pdf|map|xml|avif)(\?.*)?$/i;
+const STATIC_MIME_RE = /^(image|font|video|audio)\//;
+
+/** Parse a HAR file and extract non-static HTTP entries as ChatAttachment content. */
+const parseHarFile = (jsonText: string): string => jsonText;
+
+/** Read a user-uploaded file into a ChatAttachment. */
+const readFileAsAttachment = (file: File): Promise<ChatAttachment> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      if (file.name.endsWith('.json')) {
+        resolve({ type: 'har', content: parseHarFile(content), filename: file.name });
+      } else {
+        resolve({ type: 'documentation', content, filename: file.name });
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsText(file);
+  });
 
 const toThreadMessages = (entries: ChatEntry[]): ChatMessage[] =>
   entries
     .filter((e): e is TextMsg => e.kind === 'text')
-    .map(e => ({ role: e.role, content: e.content }));
+    .map(e => ({ role: e.role, content: e.content, attachments: e.attachments }));
 
 function optionRows(options: ParsedTestIntent['options']): Array<[string, string]> {
   return Object.entries(options as unknown as Record<string, unknown>)
@@ -57,7 +95,24 @@ function thresholdRows(thresholds?: ParsedTestIntent['thresholds']): Array<[stri
     .map(([k, v]) => [k, String(v)]);
 }
 
-const SUGGESTIONS = ['Spike test homepage', 'Soak test for 30m', 'Test the login flow'];
+const METHOD_COLORS: Record<string, string> = {
+  GET: 'text-green-fg',
+  POST: 'text-accent',
+  PUT: 'text-amber-fg',
+  DELETE: 'text-red-fg',
+  PATCH: 'text-purple-600',
+};
+
+const ATTACHMENT_TYPE_LABELS: Record<string, string> = {
+  har: 'HAR recording',
+  swagger_url: 'Swagger/OpenAPI',
+  documentation: 'Documentation',
+  codebase: 'Codebase',
+};
+
+const SUGGESTIONS = ['Spike test my API', 'Test the login flow', 'Load test with Swagger'];
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
 
 const BotIcon = () => (
   <div className="w-7.5 h-7.5 rounded-[9px] bg-accent flex items-center justify-center flex-shrink-0">
@@ -65,14 +120,47 @@ const BotIcon = () => (
   </div>
 );
 
+// ── Flow step list ─────────────────────────────────────────────────────────────
+
+function FlowStepList({ steps }: { steps: FlowStep[] }) {
+  return (
+    <div className="flex flex-col gap-1.5 mt-2.5 mb-3.5">
+      {steps.map((step, i) => (
+        <div key={i} className="flex items-start gap-2.5 bg-bg border border-border rounded-control px-3 py-2.5">
+          <span className="font-mono text-[10px] bg-border text-tx-4 rounded px-1.5 py-0.5 flex-shrink-0 mt-0.5">{i + 1}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`font-mono text-[10.5px] font-bold ${METHOD_COLORS[step.method] ?? 'text-tx-3'}`}>{step.method}</span>
+              <span className="font-mono text-[11px] text-tx-2 break-all">{step.url}</span>
+            </div>
+            <div className="text-[12px] text-tx-4 mt-0.5">{step.name}</div>
+            {step.body && (
+              <div className="font-mono text-[10px] text-tx-5 mt-1 truncate">body: {step.body.slice(0, 80)}{step.body.length > 80 ? '…' : ''}</div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Main page ──────────────────────────────────────────────────────────────────
+
 export default function ChatPage() {
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Tracks ids of tests currently being watched, so the WS handler knows which bubbles to update.
+  // Pending attachments waiting to be sent with the next message
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  // Swagger URL input mode
+  const [swaggerUrl, setSwaggerUrl] = useState('');
+  const [showSwaggerInput, setShowSwaggerInput] = useState(false);
+
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const watchedTestIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -81,25 +169,67 @@ export default function ChatPage() {
 
   const appendEntry = (entry: ChatEntry) => setEntries(prev => [...prev, entry]);
 
+  // ── File upload handler ───────────────────────────────────────────────────
+
+  const handleFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    try {
+      const attachments = await Promise.all(fileArray.map(readFileAsAttachment));
+      setPendingAttachments(prev => [...prev, ...attachments]);
+    } catch {
+      setError('Failed to read one or more files');
+    }
+  };
+
+  const handleAddSwaggerUrl = () => {
+    const url = swaggerUrl.trim();
+    if (!url) return;
+    setPendingAttachments(prev => [
+      ...prev,
+      { type: 'swagger_url', content: url, filename: url },
+    ]);
+    setSwaggerUrl('');
+    setShowSwaggerInput(false);
+  };
+
+  const removeAttachment = (index: number) => {
+    setPendingAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // ── Send message ──────────────────────────────────────────────────────────
+
   const handleSend = async (text?: string) => {
     const content = (text ?? input).trim();
-    if (!content || thinking) return;
+    if ((!content && pendingAttachments.length === 0) || thinking) return;
     setInput('');
     setError(null);
 
-    const userEntry: TextMsg = { role: 'user', kind: 'text', content };
+    const attachmentsToSend = [...pendingAttachments];
+    setPendingAttachments([]);
+    setShowSwaggerInput(false);
+
+    const userEntry: TextMsg = {
+      role: 'user',
+      kind: 'text',
+      content: content || `[${attachmentsToSend.map(a => ATTACHMENT_TYPE_LABELS[a.type]).join(', ')}]`,
+      attachments: attachmentsToSend.length > 0 ? attachmentsToSend : undefined,
+    };
     const nextEntries = [...entries, userEntry];
     setEntries(nextEntries);
     setThinking(true);
 
     try {
-      const response: ChatParseResponse = await parseChatPrompt(toThreadMessages(nextEntries));
+      const response: ChatParseResponse = attachmentsToSend.length > 0
+        ? await parseChatPrompt(toThreadMessages(nextEntries), attachmentsToSend)
+        : await parseChatPrompt(toThreadMessages(nextEntries));
       if (response.status === 'needsClarification') {
         appendEntry({ role: 'assistant', kind: 'text', content: response.question });
       } else if (response.status === 'redirectToFlowBuilder') {
         appendEntry({ role: 'assistant', kind: 'redirect', reason: response.reason });
       } else if (response.status === 'ready') {
         appendEntry({ role: 'assistant', kind: 'preview', config: response.config, dismissed: false, started: false });
+      } else if (response.status === 'flowReady') {
+        appendEntry({ role: 'assistant', kind: 'flowPreview', flow: response.flow, dismissed: false, started: false });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to parse your message');
@@ -108,18 +238,15 @@ export default function ChatPage() {
     }
   };
 
-  const handleKeepChatting = (entry: PreviewMsg) => {
+  // ── Run actions ───────────────────────────────────────────────────────────
+
+  const handleKeepChatting = (entry: PreviewMsg | FlowPreviewMsg) => {
     setEntries(prev => prev.map(e => (e === entry ? { ...e, dismissed: true } : e)));
   };
 
   const handleRunTest = async (entry: PreviewMsg, index: number) => {
-    if (entry.started) return; // already submitted (or in flight) — ignore a duplicate click
+    if (entry.started) return;
     setError(null);
-    // Mark started synchronously, before the request even goes out, so a fast double-click
-    // (or clicking again after the response comes back) can't create a second test. Matched by
-    // index, not object identity — this same entry gets mutated twice (started:true, then
-    // possibly started:false on failure), and `entry === e` would go stale after the first
-    // mutation since that produces a new object reference in state.
     setEntries(prev => prev.map((e, i) => (i === index ? { ...e, started: true } : e)));
     try {
       const result = await createTest({
@@ -135,14 +262,47 @@ export default function ChatPage() {
       appendEntry({ role: 'assistant', kind: 'status', testId, status: 'pending' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create test');
-      // Creation failed — no test was actually started, so allow the user to retry.
       setEntries(prev => prev.map((e, i) => (i === index ? { ...e, started: false } : e)));
     }
   };
 
+  const handleRunFlowTest = async (entry: FlowPreviewMsg, index: number) => {
+    if (entry.started) return;
+    setError(null);
+    setEntries(prev => prev.map((e, i) => (i === index ? { ...e, started: true } : e)));
+    try {
+      const result = await createTest({
+        type: 'flow',
+        targetUrl: entry.flow.targetUrl,
+        description: entry.flow.description,
+        options: entry.flow.options,
+        thresholds: entry.flow.thresholds,
+        steps: entry.flow.steps,
+      });
+      const testId: string = result?.test?.id ?? result?.id;
+      if (!testId) throw new Error('Test created but no id was returned');
+      watchedTestIds.current.add(testId);
+      appendEntry({ role: 'assistant', kind: 'status', testId, status: 'pending' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create flow test');
+      setEntries(prev => prev.map((e, i) => (i === index ? { ...e, started: false } : e)));
+    }
+  };
+
+  const handleOpenInFlowBuilder = (flow: FlowTestConfig) => {
+    // Encode steps into sessionStorage so FlowBuilder can pick them up via ?type=flow&fromChat=1
+    try {
+      sessionStorage.setItem('chatFlowSteps', JSON.stringify(flow.steps));
+    } catch {
+      // sessionStorage unavailable — fall back to navigation without pre-fill
+    }
+    navigate('/?type=flow&fromChat=1');
+  };
+
+  // ── WebSocket ─────────────────────────────────────────────────────────────
+
   useResultsSocket((event) => {
     if (event.type === 'reconnected') {
-      // One-shot re-fetch per watched test — covers any terminal event missed while disconnected.
       watchedTestIds.current.forEach(testId => {
         getResult(testId).then(d => {
           if (!d.result) return;
@@ -160,8 +320,17 @@ export default function ChatPage() {
     }
   });
 
+  // ── Drag-and-drop on the whole page ──────────────────────────────────────
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer.files.length > 0) await handleFiles(e.dataTransfer.files);
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
-    <div>
+    <div onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
       <div className="px-4 md:px-9 pt-7.5">
         <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Assistant</div>
         <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Chat</h1>
@@ -169,21 +338,32 @@ export default function ChatPage() {
 
       <div className="px-4 md:px-9 py-6 flex flex-col gap-4.5">
         <div className="max-w-[760px] w-full mx-auto flex flex-col gap-4">
+          {/* Welcome message */}
           <div className="flex gap-3 items-start">
             <BotIcon />
             <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] leading-[1.55] text-tx-2">
-              Hi — describe what you&apos;d like to load test and I&apos;ll configure the run for you.
+              Hi — describe a test, or attach a Swagger spec, HAR recording, or documentation and I&apos;ll build the flow for you.
             </div>
           </div>
 
+          {/* Chat entries */}
           {entries.map((entry, i) => {
             if (entry.kind === 'text') {
               const isUser = entry.role === 'user';
               if (isUser) {
                 return (
                   <div key={i} className="flex justify-end">
-                    <div className="bg-btn2 text-white rounded-[16px_4px_16px_16px] px-4 py-3.5 text-[14px] leading-[1.55] max-w-[82%]">
-                      {entry.content}
+                    <div className="flex flex-col items-end gap-1.5 max-w-[82%]">
+                      {entry.attachments && entry.attachments.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 justify-end">
+                          {entry.attachments.map((att, j) => (
+                            <AttachmentChip key={j} attachment={att} />
+                          ))}
+                        </div>
+                      )}
+                      <div className="bg-btn2 text-white rounded-[16px_4px_16px_16px] px-4 py-3.5 text-[14px] leading-[1.55]">
+                        {entry.content}
+                      </div>
                     </div>
                   </div>
                 );
@@ -264,6 +444,68 @@ export default function ChatPage() {
               );
             }
 
+            if (entry.kind === 'flowPreview') {
+              if (entry.dismissed) {
+                return (
+                  <div key={i} className="flex gap-3 items-start">
+                    <BotIcon />
+                    <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-tx-4 italic">
+                      Okay — let me know what to adjust.
+                    </div>
+                  </div>
+                );
+              }
+              if (entry.started) {
+                return (
+                  <div key={i} className="flex gap-3 items-start">
+                    <BotIcon />
+                    <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-tx-4 italic">
+                      ✓ Flow test started — see status below.
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <BotIcon />
+                  <div className="flex-1 bg-surface border border-border rounded-[4px_16px_16px_16px] px-4.5 py-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-mono text-[11px] rounded-chip px-2 py-0.5 text-accent bg-orange-bg border border-orange-bd">flow</span>
+                      <p className="text-[14px] text-tx-2">Here&apos;s the flow I built:</p>
+                    </div>
+                    <p className="text-[13px] text-tx-3 mb-0.5">{entry.flow.description}</p>
+                    <p className="font-mono text-[11px] text-tx-4 mb-1">{entry.flow.targetUrl}</p>
+
+                    <FlowStepList steps={entry.flow.steps} />
+
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {optionRows(entry.flow.options).map(([k, v]) => (
+                        <span key={k} className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{k}: {v}</span>
+                      ))}
+                      {thresholdRows(entry.flow.thresholds).map(([k, v]) => (
+                        <span key={k} className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{k}: {v}</span>
+                      ))}
+                    </div>
+
+                    <div className="flex gap-2.5 flex-wrap">
+                      <button type="button" onClick={() => handleRunFlowTest(entry, i)}
+                        className="flex items-center gap-1.5 bg-accent hover:bg-accent-hover text-white rounded-control px-4 py-2.5 text-[13px] font-bold cursor-pointer transition-colors">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="#fff"><path d="M4 3l9 5-9 5z" /></svg>Run flow test
+                      </button>
+                      <button type="button" onClick={() => handleOpenInFlowBuilder(entry.flow)}
+                        className="bg-surface border border-border text-tx-2 rounded-control px-4 py-2.5 text-[13px] font-semibold cursor-pointer">
+                        Edit in Flow Builder
+                      </button>
+                      <button type="button" onClick={() => handleKeepChatting(entry)}
+                        className="bg-surface border border-border text-tx-2 rounded-control px-4 py-2.5 text-[13px] font-semibold cursor-pointer">
+                        Adjust settings
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
             // status bubble
             const isPending = entry.status === 'pending' || entry.status === 'running';
             const label = entry.status === 'pending' ? 'pending…'
@@ -318,27 +560,125 @@ export default function ChatPage() {
             </div>
           )}
 
+          {/* Swagger URL input */}
+          {showSwaggerInput && (
+            <div className="bg-surface border border-border rounded-[12px] px-3.5 py-3 flex gap-2 items-center">
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="flex-shrink-0 text-tx-4"><rect x="2" y="2" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5"/><path d="M6 7h8M6 10h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              <input
+                type="url"
+                value={swaggerUrl}
+                onChange={e => setSwaggerUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleAddSwaggerUrl(); if (e.key === 'Escape') setShowSwaggerInput(false); }}
+                placeholder="https://api.example.com/openapi.json"
+                autoFocus
+                className="flex-1 text-[13px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
+              />
+              <button type="button" onClick={handleAddSwaggerUrl}
+                disabled={!swaggerUrl.trim()}
+                className="text-[12px] font-semibold text-accent disabled:opacity-40 cursor-pointer">
+                Add
+              </button>
+              <button type="button" onClick={() => setShowSwaggerInput(false)}
+                className="text-tx-4 hover:text-tx-2 cursor-pointer">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 3l10 10M13 3L3 13"/></svg>
+              </button>
+            </div>
+          )}
+
+          {/* Pending attachments */}
+          {pendingAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pl-0">
+              {pendingAttachments.map((att, i) => (
+                <div key={i} className="flex items-center gap-1.5 bg-bg border border-border rounded-full px-2.5 py-1 text-[12px] text-tx-3">
+                  <AttachmentIcon type={att.type} />
+                  <span className="max-w-[160px] truncate">{att.filename ?? ATTACHMENT_TYPE_LABELS[att.type]}</span>
+                  <button type="button" onClick={() => removeAttachment(i)}
+                    className="text-tx-5 hover:text-tx-2 cursor-pointer flex-shrink-0">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 2l8 8M10 2L2 10"/></svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Input bar */}
           <div className="flex items-center gap-2.5 bg-surface border border-border rounded-[14px] px-2 py-2 pl-4 mt-1">
+            {/* Attachment button */}
+            <div className="relative flex-shrink-0 flex items-center gap-1">
+              <button
+                type="button"
+                title="Attach file (HAR, Swagger JSON, docs, codebase)"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-8 h-8 rounded-[8px] flex items-center justify-center text-tx-4 hover:text-tx-2 hover:bg-bg transition-colors cursor-pointer"
+              >
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M16.5 11l-6 6a5 5 0 01-7.07-7.07l7.07-7.07a3 3 0 014.24 4.24L8.12 13.7a1 1 0 01-1.41-1.41l6.37-6.37"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                title="Add Swagger / OpenAPI URL"
+                onClick={() => setShowSwaggerInput(prev => !prev)}
+                className={`w-8 h-8 rounded-[8px] flex items-center justify-center transition-colors cursor-pointer ${showSwaggerInput ? 'bg-orange-bg text-accent' : 'text-tx-4 hover:text-tx-2 hover:bg-bg'}`}
+              >
+                <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+                  <rect x="2" y="3" width="16" height="14" rx="2.5"/>
+                  <path d="M6 8h8M6 11h5"/>
+                </svg>
+              </button>
+            </div>
+
             <input
               type="text"
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              placeholder="Describe a test, or ask a question…"
+              placeholder="Describe a test, paste a URL, or attach a file…"
               className="flex-1 text-[14px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
             />
             <button
               type="button"
               onClick={() => handleSend()}
-              disabled={thinking || !input.trim()}
+              disabled={thinking || (!input.trim() && pendingAttachments.length === 0)}
               aria-label="Send"
               className="w-9.5 h-9.5 rounded-[10px] bg-accent flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer"
             >
               <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10h11M10 5l5 5-5 5" /></svg>
             </button>
           </div>
+
+          <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+            Drop a <strong>.json</strong> HAR file, a Swagger JSON spec, or any text doc to build a flow automatically
+          </p>
         </div>
       </div>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,.yaml,.yml,.txt,.md,.ts,.js,.py,.java,.go,.cs,.rb,.php"
+        multiple
+        className="hidden"
+        onChange={e => { if (e.target.files) handleFiles(e.target.files); e.target.value = ''; }}
+      />
+    </div>
+  );
+}
+
+// ── Small helper components ───────────────────────────────────────────────────
+
+function AttachmentIcon({ type }: { type: string }) {
+  if (type === 'har') return <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>;
+  if (type === 'swagger_url') return <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/></svg>;
+  return <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 2h8a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M5 6h6M5 9h4"/></svg>;
+}
+
+function AttachmentChip({ attachment }: { attachment: ChatAttachment }) {
+  return (
+    <div className="flex items-center gap-1.5 bg-bg/80 border border-border rounded-full px-2.5 py-1 text-[11px] text-tx-4">
+      <AttachmentIcon type={attachment.type} />
+      <span className="max-w-[140px] truncate">{attachment.filename ?? ATTACHMENT_TYPE_LABELS[attachment.type]}</span>
     </div>
   );
 }

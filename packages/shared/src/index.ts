@@ -154,9 +154,19 @@ export interface ClientTestOptions {
 
 // ── Chat-based "one prompt" test creation ───────────────────────────────────
 
+export type ChatAttachmentType = 'swagger_url' | 'documentation' | 'codebase' | 'har';
+
+export interface ChatAttachment {
+  type: ChatAttachmentType;
+  /** URL for swagger_url; raw text for documentation/codebase; JSON string for har */
+  content: string;
+  filename?: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  attachments?: ChatAttachment[];
 }
 
 export interface ParsedTestIntent {
@@ -167,10 +177,19 @@ export interface ParsedTestIntent {
   thresholds?: SLOThresholds;
 }
 
+export interface FlowTestConfig {
+  steps: FlowStep[];
+  targetUrl: string;
+  description: string;
+  options: BackendTestOptions;
+  thresholds?: SLOThresholds;
+}
+
 export type ChatParseResponse =
   | { status: 'needsClarification'; question: string }
   | { status: 'ready'; config: ParsedTestIntent }
-  | { status: 'redirectToFlowBuilder'; reason: string }; // multi-step intent detected — flow inference is out of scope
+  | { status: 'flowReady'; flow: FlowTestConfig }
+  | { status: 'redirectToFlowBuilder'; reason: string };
 
 export interface AiInsights {
   narrative: string;

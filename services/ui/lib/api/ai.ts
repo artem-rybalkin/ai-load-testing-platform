@@ -1,7 +1,7 @@
-import type { FlowStep, ChatMessage, ChatParseResponse } from '@alt/shared';
+import type { FlowStep, ChatMessage, ChatParseResponse, ChatAttachment, FlowTestConfig } from '@alt/shared';
 import { f, RESULTS_URL } from './core';
 
-export type { ChatMessage, ChatParseResponse };
+export type { ChatMessage, ChatParseResponse, ChatAttachment, FlowTestConfig };
 
 export interface ThresholdSuggestion {
   p95: number;
@@ -30,10 +30,13 @@ const aiJson = async <T>(res: Response): Promise<T> => {
 export const diagnoseErrors = async (testId: string): Promise<{ diagnoses: ErrorDiagnosis[]; message?: string }> =>
   aiJson(await f(`${RESULTS_URL}/results/${testId}/diagnose`, { cache: 'no-store' }));
 
-export const parseChatPrompt = async (messages: ChatMessage[]): Promise<ChatParseResponse> =>
+export const parseChatPrompt = async (
+  messages: ChatMessage[],
+  attachments?: ChatAttachment[],
+): Promise<ChatParseResponse> =>
   aiJson(await f(`${RESULTS_URL}/chat/parse`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, ...(attachments?.length ? { attachments } : {}) }),
   }));
 
 export const predictWebhookNoise = async (events: string[]): Promise<{ level: string; warning: string | null; message: string }> =>

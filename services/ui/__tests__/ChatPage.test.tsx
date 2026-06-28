@@ -4,10 +4,12 @@ import { render, screen, waitFor, cleanup, fireEvent, act } from '@testing-libra
 import ChatPage from '../app/chat/page';
 import type { WSEvent } from '@/lib/useResultsSocket';
 
+const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
   return {
     ...actual,
+    useNavigate: () => mockNavigate,
     Link: ({ to, children, ...props }: { to: string; children: React.ReactNode; [key: string]: unknown }) => (
       <a href={String(to)} {...(props as React.HTMLAttributes<HTMLAnchorElement>)}>{children}</a>
     ),

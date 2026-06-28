@@ -1,7 +1,7 @@
 // Barrel re-export — all consumers import from this file unchanged.
 // Domain modules live under lib/api/*.
 
-export type { ExtractSource, ExtractRule, FlowStep, ParsedTestIntent } from '@alt/shared';
+export type { ExtractSource, ExtractRule, FlowStep, ParsedTestIntent, ChatAttachment, FlowTestConfig } from '@alt/shared';
 
 export { RECORDER_URL } from './api/core';
 

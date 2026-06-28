@@ -5,7 +5,7 @@
  */
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
-import type { SLOThresholds, BackendMetrics, ClientMetrics, ChatMessage } from '@alt/shared';
+import type { SLOThresholds, BackendMetrics, ClientMetrics, ChatMessage, ChatAttachment } from '@alt/shared';
 import { isProviderConfigured, generateAIText, extractAndParseAIJson, fenceUserContent, USER_DATA_INSTRUCTION } from '@alt/shared';
 import { checkGeminiQuota, incrementGeminiUsage } from '../quotas';
 import { getEffectiveAiProviderSetting } from '../settings';
@@ -17,6 +17,7 @@ import {
   sendInternalError,
   buildChatParsePrompt,
   isValidChatParseResponse,
+  processAttachments,
   isValidCronResponse,
   isValidTrendNarrativeResponse,
   isValidSuggestSettingsResponse,
@@ -450,11 +451,11 @@ Return ONLY valid JSON array. Include only categories with count > 0:
   // ── POST /chat/parse ──────────────────────────────────────────────────────
   // Uses getEffectiveAiProviderSetting (per-team aware), unlike the other AI
   // endpoints which use the global-only aiGenerateText() helper.
-  app.post<{ Body: { messages: ChatMessage[] } }>(
+  app.post<{ Body: { messages: ChatMessage[]; attachments?: ChatAttachment[] } }>(
     '/chat/parse',
     { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
-      const { messages } = request.body ?? {};
+      const { messages, attachments } = request.body ?? {};
       if (!Array.isArray(messages) || messages.length === 0) {
         return reply.code(400).send({ error: 'messages is required' });
       }
@@ -467,7 +468,11 @@ Return ONLY valid JSON array. Include only categories with count > 0:
       if (quotaError) return reply.code(429).send({ error: quotaError });
 
       try {
-        const prompt = buildChatParsePrompt(messages);
+        const attachmentContext = Array.isArray(attachments) && attachments.length > 0
+          ? await processAttachments(attachments)
+          : undefined;
+
+        const prompt = buildChatParsePrompt(messages, attachmentContext);
         const text = (await generateAIText(prompt, setting)).trim();
         await incrementGeminiUsage(pool, request.projectId);
 

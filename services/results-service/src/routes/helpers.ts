@@ -11,6 +11,8 @@ import type {
   OrgMembership,
   OrgRole,
   ChatMessage,
+  ChatAttachment,
+  FlowStep,
 } from '@alt/shared';
 import {
   isProviderConfigured,
@@ -18,6 +20,7 @@ import {
   coerceNumericValue,
   fenceUserContent,
   USER_DATA_INSTRUCTION,
+  validateSsrfSafeUrl,
 } from '@alt/shared';
 import { getAiProviderSetting } from '../settings';
 
@@ -52,6 +55,117 @@ export const sendInternalError = (
   return reply.code(500).send({ error: 'Internal error — please try again' });
 };
 
+// ── Chat attachment processing ────────────────────────────────────────────────
+
+const STATIC_ASSET_RE = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|mp4|mp3|pdf|map|xml|avif)(\?.*)?$/i;
+const STATIC_MIME_RE = /^(image|font|video|audio)\//;
+const HAR_ENTRY_CAP = 50;
+const CONTEXT_CHAR_CAP = 4000;
+
+/** Summarise a parsed OpenAPI/Swagger spec object into a compact endpoint list. */
+const summarizeOpenApiSpec = (spec: Record<string, unknown>): string => {
+  const paths = spec.paths as Record<string, unknown> | undefined;
+  if (!paths || typeof paths !== 'object') return '[No paths found in spec]';
+
+  const title = (spec.info as Record<string, unknown> | undefined)?.title ?? 'API';
+  const lines: string[] = [`API: ${title}`];
+
+  for (const [path, methods] of Object.entries(paths)) {
+    if (!methods || typeof methods !== 'object') continue;
+    for (const [method, op] of Object.entries(methods as Record<string, unknown>)) {
+      if (method === 'parameters' || method === 'summary' || method === 'description') continue;
+      const operation = op as Record<string, unknown>;
+      const summary = (operation.summary ?? operation.description ?? '') as string;
+      const reqBody = operation.requestBody as Record<string, unknown> | undefined;
+      const bodyNote = reqBody ? ' (has request body)' : '';
+      lines.push(`${method.toUpperCase()} ${path}${summary ? ` — ${summary}` : ''}${bodyNote}`);
+      if (lines.length >= 80) { lines.push('... (truncated)'); break; }
+    }
+    if (lines.length >= 80) break;
+  }
+
+  return lines.join('\n').slice(0, CONTEXT_CHAR_CAP);
+};
+
+/** Fetch and summarise a Swagger/OpenAPI URL into an endpoint list for the prompt. */
+export const fetchAndSummarizeSwagger = async (url: string): Promise<string> => {
+  const ssrfError = validateSsrfSafeUrl(url);
+  if (ssrfError) return `[Swagger fetch blocked: ${ssrfError}]`;
+
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return `[Swagger fetch failed: HTTP ${res.status}]`;
+
+    const text = await res.text();
+
+    try {
+      const spec = JSON.parse(text) as Record<string, unknown>;
+      return summarizeOpenApiSpec(spec);
+    } catch {
+      // Not valid JSON — pass raw text (may be YAML or HTML error page), capped
+      return text.slice(0, CONTEXT_CHAR_CAP);
+    }
+  } catch (err) {
+    return `[Swagger fetch error: ${(err as Error).message ?? 'timeout'}]`;
+  }
+};
+
+/** Summarise HAR entries into a compact request list, filtering static assets. */
+const summarizeHar = (harJson: string): string => {
+  try {
+    const har = JSON.parse(harJson) as { log?: { entries?: unknown[] } };
+    const entries = har.log?.entries ?? [];
+
+    const relevant = entries.filter((e: unknown) => {
+      const entry = e as { request?: { url?: string }; response?: { content?: { mimeType?: string } } };
+      const url = entry.request?.url ?? '';
+      const mime = entry.response?.content?.mimeType ?? '';
+      return !STATIC_ASSET_RE.test(url) && !STATIC_MIME_RE.test(mime);
+    }).slice(0, HAR_ENTRY_CAP);
+
+    if (relevant.length === 0) return '[No relevant HTTP requests found in HAR]';
+
+    return relevant.map((e: unknown) => {
+      const entry = e as {
+        request: { method: string; url: string; postData?: { text?: string } };
+        response: { status: number };
+      };
+      const body = entry.request.postData?.text
+        ? ` body=${JSON.stringify(entry.request.postData.text).slice(0, 120)}`
+        : '';
+      return `${entry.request.method} ${entry.request.url} → ${entry.response.status}${body}`;
+    }).join('\n').slice(0, CONTEXT_CHAR_CAP);
+  } catch {
+    return '[Error parsing HAR file — invalid JSON]';
+  }
+};
+
+/**
+ * Process all chat attachments and return a combined context string for the prompt.
+ * Swagger URLs are fetched server-side; other types are summarised/truncated.
+ */
+export const processAttachments = async (attachments: ChatAttachment[]): Promise<string> => {
+  if (attachments.length === 0) return '';
+
+  const parts: string[] = [];
+
+  for (const att of attachments) {
+    if (att.type === 'swagger_url') {
+      const summary = await fetchAndSummarizeSwagger(att.content);
+      parts.push(`<swagger_spec${att.filename ? ` file="${att.filename}"` : ''}>\n${summary}\n</swagger_spec>`);
+    } else if (att.type === 'har') {
+      const summary = summarizeHar(att.content);
+      parts.push(`<har_recording${att.filename ? ` file="${att.filename}"` : ''}>\n${summary}\n</har_recording>`);
+    } else if (att.type === 'documentation') {
+      parts.push(`<documentation${att.filename ? ` file="${att.filename}"` : ''}>\n${att.content.slice(0, CONTEXT_CHAR_CAP)}\n</documentation>`);
+    } else if (att.type === 'codebase') {
+      parts.push(`<codebase${att.filename ? ` file="${att.filename}"` : ''}>\n${att.content.slice(0, CONTEXT_CHAR_CAP)}\n</codebase>`);
+    }
+  }
+
+  return parts.join('\n\n');
+};
+
 // ── Chat-parse helpers ────────────────────────────────────────────────────────
 
 /** Most recent N messages to include in the chat-parse prompt. */
@@ -60,48 +174,82 @@ export const CHAT_HISTORY_LIMIT = 20;
 /**
  * Builds the Gemini prompt for POST /chat/parse. Exported standalone for unit
  * testability. Truncates to the last CHAT_HISTORY_LIMIT messages.
+ *
+ * When `attachmentContext` is provided (processed from user-uploaded files/URLs),
+ * the prompt gains a 4th outcome — "flowReady" — that returns a full FlowStep[].
  */
-export const buildChatParsePrompt = (messages: ChatMessage[]): string => {
+export const buildChatParsePrompt = (messages: ChatMessage[], attachmentContext?: string): string => {
   const recent = messages.slice(-CHAT_HISTORY_LIMIT);
   const transcript = recent
     .map(m => `${m.role.toUpperCase()}: ${fenceUserContent('user_message', m.content)}`)
     .join('\n');
 
-  return `You are an assistant that turns a free-text conversation about a desired load/performance test into a structured test configuration. ${USER_DATA_INSTRUCTION}
+  const contextSection = attachmentContext
+    ? `\nContext provided by the user (API spec, documentation, recorded traffic, or codebase):\n${attachmentContext}\n`
+    : '';
 
+  const flowOutcome = attachmentContext ? `
+1. If the user's intent involves multiple sequential steps OR if context is provided above, try to build a complete flow. Return "flowReady" when you have enough information (steps, load settings):
+{"status": "flowReady", "flow": {
+  "steps": [
+    {"name": "<step name>", "url": "<full URL>", "method": "GET|POST|PUT|DELETE|PATCH", "body": "<optional JSON string>", "headers": {}, "extract": {}},
+    ...
+  ],
+  "targetUrl": "<base URL of the first step>",
+  "description": "<one-sentence human-readable summary of the flow>",
+  "options": {"vus": <number>, "duration": "<e.g. 2m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"},
+  "thresholds": {"p95": <number>, "errorRate": <number>}
+}}
+Rules for "flowReady":
+- Extract steps from the provided context (HAR recording, Swagger spec, or described sequence). Each step MUST have a name, url, and method. Include body only when the user/spec indicates a request body.
+- "targetUrl" is the base URL (hostname only, e.g. "https://api.example.com") taken from the first step's URL.
+- "options.vus" and "options.duration" MUST be stated by the user. If they have not stated them yet, use "needsClarification" instead.
+- "thresholds" is optional — include only when the user mentioned performance targets.
+- Every threshold value MUST be a plain JSON number with no unit suffix.
+- For HAR recordings: include only the non-static-asset requests (skip images, JS, CSS files). Preserve the recorded order.
+- For Swagger specs: pick the endpoints that form the flow described by the user. If the user has not said which flow to test, ask.
+- "extract" should be populated if one step's response feeds a variable into a later step (e.g. auth token extraction). Leave as empty {} if no extraction is needed.
+` : '';
+
+  const readyOutcomeNumber = attachmentContext ? '2' : '1';
+  const clarificationOutcomeNumber = attachmentContext ? '3' : '2';
+  const redirectOutcomeNumber = attachmentContext ? '4' : '3';
+
+  return `You are an assistant that turns conversations and API documentation into load/performance test configurations. ${USER_DATA_INSTRUCTION}
+${contextSection}
 Conversation so far:
 ${transcript}
 
-Decide which ONE of the following three outcomes applies, and return ONLY valid JSON matching exactly one of these shapes:
-
-1. Return "ready" ONLY if ALL FOUR of these were explicitly stated by the user somewhere in the conversation — never invent or silently default any of them:
+Decide which ONE of the following outcomes applies, and return ONLY valid JSON matching exactly one of these shapes:
+${flowOutcome}
+${readyOutcomeNumber}. Return "ready" ONLY if ALL FOUR of these were explicitly stated by the user somewhere in the conversation — never invent or silently default any of them:
    (a) a single target URL
-   (b) which test type — backend or client-side (see the signal-word rule under outcome 2)
+   (b) which test type — backend or client-side (see the signal-word rule below)
    (c) a concrete number of users/VUs/sessions to simulate
    (d) how long the test should run
-   If even one of (a)-(d) is missing, you MUST use outcome 2 instead — do not guess a number or duration just because the rest of the request is clear.
-{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<human-readable one-sentence summary>", "options": { ... }, "thresholds": { ... } }}
-- For "backend": options must look like {"vus": <number>, "duration": "<e.g. 1m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"}.
-- For "client-side": options must look like {"sessions": <number>, "duration": "<e.g. 1m>", "collectWebVitals": true}.
-- "thresholds" is optional; include only fields the user actually mentioned (p95, avg, errorRate, lcp, fcp, ttfb, cls, inp, tbt). Every threshold value MUST be a plain JSON number with NO unit suffix — write {"p95": 1000}, NEVER {"p95": "1000ms"} or {"p95": "1000"}.
+   If even one of (a)-(d) is missing, you MUST use the "needsClarification" outcome instead.
+{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<one-sentence summary>", "options": { ... }, "thresholds": { ... } }}
+- For "backend": options = {"vus": <number>, "duration": "<e.g. 1m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"}.
+- For "client-side": options = {"sessions": <number>, "duration": "<e.g. 1m>", "collectWebVitals": true}.
+- Threshold values MUST be plain JSON numbers ({"p95": 1000}, never {"p95": "1000ms"}).
 
-2. If any of (a)-(d) above is missing or ambiguous, return:
-{"status": "needsClarification", "question": "<one short follow-up question to ask the user>"}
+${clarificationOutcomeNumber}. If any required information is missing or ambiguous, return:
+{"status": "needsClarification", "question": "<one short follow-up question>"}
 - Always ask if there is no target URL.
-- Always ask if the test type is not explicitly signaled. Words like "user(s)", "session(s)", a number, or "for N minutes" do NOT by themselves indicate which type — a backend test counts "users" as virtual users (VUs) and a browser test counts "users" as browser sessions, so these words alone are ambiguous. Only infer "backend" from explicit signals like "API", "backend", "load test", "http test", "k6", "performance test", "endpoint". Only infer "client-side" from explicit signals like "browser", "real browser", "page", "web vitals", "Lighthouse", "Puppeteer", "client-side". If neither signal is present, ask which type the user wants rather than guessing.
-- Always ask if the user has not stated a concrete number of users/VUs/sessions to simulate anywhere in the conversation — words like "spike test" or "soak test" name a load *shape*, not a load *amount*, and never imply a number on their own. Always ask if the user has not stated how long the test should run anywhere in the conversation. These are load-test parameters that materially change the test — never invent or silently default them. If both are missing, ask one combined question covering both; if only one is missing, ask for that one specifically.
+- Always ask if the test type is not explicitly signaled. Words like "user(s)", "session(s)", a number, or "for N minutes" do NOT by themselves indicate which type — the test type is ambiguous without explicit signals. Only infer "backend" from: "API", "backend", "load test", "http test", "k6", "performance test", "endpoint". Only infer "client-side" from: "browser", "real browser", "page", "web vitals", "Lighthouse", "Puppeteer", "client-side". If neither signal is present, ask which type.
+- Always ask if the user has not stated a concrete number of users/VUs/sessions to simulate anywhere in the conversation — words like "spike test" or "soak test" name a load shape, not an amount. Always ask if the user has not stated how long the test should run anywhere in the conversation. Never invent or silently default these values.
+- For flows: ask if the user has not said which specific flow/endpoints to test, or if VUs/duration are missing.
 
-3. If the user's intent clearly spans multiple sequential steps or endpoints, DO NOT attempt to infer the steps. Instead return:
-{"status": "redirectToFlowBuilder", "reason": "<one short sentence explaining why this needs the Flow Builder>"}
-Trigger this whenever the user mentions: a named user journey that implies multiple HTTP steps (e.g. "login flow", "checkout flow", "registration flow", "auth flow", "signup flow", "purchase flow"), explicit sequential actions ("log in, then add to cart, then checkout"), the word "flow" in the context of a user journey, "multi-step", "end-to-end", "e2e", or any scenario where reaching the goal clearly requires more than one HTTP request in sequence. A "login flow" always involves multiple steps (load page → submit credentials → handle redirect) — never treat it as a single-URL test.
+${redirectOutcomeNumber}. Only if multi-step intent is detected AND no context was provided AND you cannot determine steps from the conversation:
+{"status": "redirectToFlowBuilder", "reason": "<one sentence>"}
+${attachmentContext ? 'IMPORTANT: When context is provided above, prefer "flowReady" or "needsClarification" over "redirectToFlowBuilder".' : 'Trigger this for: named user journeys ("login flow", "checkout flow", "registration flow"), explicit step sequences ("log in then add to cart then checkout"), "flow", "multi-step", "end-to-end", "e2e".'}
 
-Example (this exact pattern is the most common mistake — study it closely):
+Example (most common mistake):
 USER: Spike test homepage
 ASSISTANT: Could you provide the target URL and whether this should be a backend or client-side test?
 USER: example.com backend
-Even though URL and type are now both known, the user STILL never gave a number of VUs or a duration — "spike test" alone does not imply 50 VUs / 5m / any number. The correct response here is:
-{"status": "needsClarification", "question": "How many virtual users would you like to simulate, and for how long should the spike test run?"}
-Returning "ready" with invented numbers at this point is WRONG, even though it feels like the conversation has enough information to "complete" the request.
+→ {"status": "needsClarification", "question": "How many virtual users would you like to simulate, and for how long should the spike test run?"}
+Returning "ready" with invented numbers at this point is WRONG — VUs and duration were never stated.
 
 Return ONLY the JSON object, nothing else.`;
 };
@@ -144,6 +292,18 @@ const normalizeTargetUrlInPlace = (config: Record<string, unknown>): boolean => 
   }
 };
 
+const VALID_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']);
+
+const isValidFlowStep = (step: unknown): step is FlowStep => {
+  if (!step || typeof step !== 'object') return false;
+  const s = step as Record<string, unknown>;
+  return (
+    typeof s.name === 'string' && s.name.length > 0 &&
+    typeof s.url === 'string' && s.url.length > 0 &&
+    VALID_METHODS.has(s.method as string)
+  );
+};
+
 /** Validates a parsed Gemini response matches ChatParseResponse. */
 export const isValidChatParseResponse = (value: unknown): boolean => {
   if (!value || typeof value !== 'object') return false;
@@ -159,6 +319,17 @@ export const isValidChatParseResponse = (value: unknown): boolean => {
     if (!config.options || typeof config.options !== 'object') return false;
     if (!normalizeTargetUrlInPlace(config)) return false;
     if (!normalizeThresholdsInPlace(config)) return false;
+    return true;
+  }
+  if (v.status === 'flowReady') {
+    const flow = v.flow as Record<string, unknown> | undefined;
+    if (!flow || typeof flow !== 'object') return false;
+    if (!Array.isArray(flow.steps) || flow.steps.length === 0) return false;
+    if (!flow.steps.every(isValidFlowStep)) return false;
+    if (typeof flow.targetUrl !== 'string' || flow.targetUrl.length === 0) return false;
+    if (typeof flow.description !== 'string') return false;
+    if (!flow.options || typeof flow.options !== 'object') return false;
+    if (flow.thresholds !== undefined && !normalizeThresholdsInPlace(flow)) return false;
     return true;
   }
   return false;
