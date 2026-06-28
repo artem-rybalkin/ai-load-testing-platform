@@ -317,7 +317,7 @@ describe('performance', () => {
     await generateAiInsights(makeCtx({ metrics: metricsWithErrors }));
 
     const prompt = mock.mock.calls[0][0] as string;
-    expect(prompt).toContain('Error breakdown: 30 server (5xx), 50 client (4xx), 15 timeouts, 5 network');
+    expect(prompt).toContain('Error breakdown: 30 HTTP 5xx (server errors), 50 HTTP 4xx (request errors), 15 timeouts, 5 network errors');
 
     // Even with 50 steps + error breakdown, the prompt stays well within a
     // reasonable token budget (~4 chars/token; 20000 chars ≈ 5000 tokens).
