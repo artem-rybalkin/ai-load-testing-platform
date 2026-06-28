@@ -13,6 +13,7 @@ import { systemRoutes } from './routes/system';
 import { resultRoutes } from './routes/results';
 import { aiRoutes } from './routes/ai';
 import { resourceRoutes } from './routes/resources';
+import { workspaceRoutes } from './routes/workspaces';
 
 // Augment Fastify request type with session info — must be at module level
 declare module 'fastify' {
@@ -187,6 +188,7 @@ export const buildApp = async (
   await app.register(resultRoutes, { pool, rPool });
   await app.register(aiRoutes, { pool, rPool });
   await app.register(resourceRoutes, { pool, rPool });
+  await app.register(workspaceRoutes, { pool });
 
   return app;
 };

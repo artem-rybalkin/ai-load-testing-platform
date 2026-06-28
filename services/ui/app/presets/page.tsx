@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getPresets, createPreset, deletePreset, Preset } from '@/lib/api';
+import { useWorkspace } from '@/lib/WorkspaceContext';
 
 const EMPTY_FORM = {
   name: '',
@@ -14,6 +15,7 @@ const EMPTY_FORM = {
 
 export default function PresetsPage() {
   const navigate = useNavigate();
+  const { activeWorkspaceId } = useWorkspace();
   const [presets, setPresets] = useState<Preset[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -23,7 +25,7 @@ export default function PresetsPage() {
 
   const load = async () => {
     try {
-      const data = await getPresets();
+      const data = await getPresets(activeWorkspaceId);
       setPresets(data.presets ?? []);
     } catch {
       setError('Could not reach results-service — check that it is running.');
@@ -32,7 +34,7 @@ export default function PresetsPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [activeWorkspaceId]);
 
   const handleCreate = async () => {
     if (!form.name) { setError('Name is required'); return; }

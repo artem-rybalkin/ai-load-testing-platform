@@ -16,6 +16,10 @@ vi.mock('@/lib/api', () => ({
   getResults: vi.fn(),
 }));
 
+vi.mock('@/lib/WorkspaceContext', () => ({
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+}));
+
 import { getResults } from '@/lib/api';
 const mockGetResults = vi.mocked(getResults);
 

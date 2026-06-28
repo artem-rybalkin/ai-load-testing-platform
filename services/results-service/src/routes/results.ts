@@ -80,12 +80,12 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
     '/results/pending',
     async (request, reply) => {
       try {
-        const { testId, type, targetUrl, durationSeconds, steps, testData, projectId } = request.body;
+        const { testId, type, targetUrl, durationSeconds, steps, testData, projectId, workspaceId } = request.body;
         await pool.query(
-          `INSERT INTO test_results (test_id, type, target_url, status, duration_seconds, steps, test_data, project_id)
-           VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7)
+          `INSERT INTO test_results (test_id, type, target_url, status, duration_seconds, steps, test_data, project_id, workspace_id)
+           VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8)
            ON CONFLICT (test_id) DO NOTHING`,
-          [testId, type, targetUrl, durationSeconds ?? null, steps ? JSON.stringify(steps) : null, testData ? JSON.stringify(testData) : null, projectId ?? null],
+          [testId, type, targetUrl, durationSeconds ?? null, steps ? JSON.stringify(steps) : null, testData ? JSON.stringify(testData) : null, projectId ?? null, workspaceId ?? null],
         );
         return { success: true };
       } catch {
@@ -127,7 +127,7 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
   );
 
   // ── GET /results ──────────────────────────────────────────────────────────
-  app.get<{ Querystring: { before?: string; limit?: string } }>(
+  app.get<{ Querystring: { before?: string; limit?: string; workspaceId?: string } }>(
     '/results',
     async (request, reply) => {
       try {
@@ -135,6 +135,7 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
         const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
         const before = request.query.before;
         const projectId = request.projectId ?? null;
+        const workspaceId = request.query.workspaceId ?? null;
 
         const { rows } = before
           ? await rPool.query(
@@ -142,17 +143,19 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
                FROM test_results r
                LEFT JOIN test_scripts s ON r.script_id = s.id
                WHERE ($1::uuid IS NULL OR r.project_id = $1::uuid)
-                 AND r.created_at < $2
-               ORDER BY r.created_at DESC LIMIT $3`,
-              [projectId, before, limit],
+                 AND ($2::uuid IS NULL OR r.workspace_id = $2::uuid)
+                 AND r.created_at < $3
+               ORDER BY r.created_at DESC LIMIT $4`,
+              [projectId, workspaceId, before, limit],
             )
           : await rPool.query(
               `SELECT r.*, s.description AS script_description
                FROM test_results r
                LEFT JOIN test_scripts s ON r.script_id = s.id
                WHERE ($1::uuid IS NULL OR r.project_id = $1::uuid)
-               ORDER BY r.created_at DESC LIMIT $2`,
-              [projectId, limit],
+                 AND ($2::uuid IS NULL OR r.workspace_id = $2::uuid)
+               ORDER BY r.created_at DESC LIMIT $3`,
+              [projectId, workspaceId, limit],
             );
         return { results: rows, nextBefore: rows.length === limit ? rows[rows.length - 1].created_at : null };
       } catch {
@@ -240,15 +243,17 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
   );
 
   // ── GET /scripts ──────────────────────────────────────────────────────────
-  app.get('/scripts', async (request, reply) => {
+  app.get<{ Querystring: { workspaceId?: string } }>('/scripts', async (request, reply) => {
     try {
       const projectId = request.projectId ?? null;
+      const workspaceId = request.query.workspaceId ?? null;
       const { rows } = await rPool.query(
         `SELECT id, target_url, test_type, used_count, created_at, updated_at
          FROM test_scripts
          WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
+           AND ($2::uuid IS NULL OR workspace_id = $2::uuid)
          ORDER BY used_count DESC`,
-        [projectId],
+        [projectId, workspaceId],
       );
       return { scripts: rows };
     } catch {

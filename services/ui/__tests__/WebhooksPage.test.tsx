@@ -24,6 +24,10 @@ vi.mock('@/lib/api', () => ({
   predictWebhookNoise: mockPredictWebhookNoise,
 }));
 
+vi.mock('@/lib/WorkspaceContext', () => ({
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+}));
+
 const makeWebhook = (overrides: Partial<Webhook> = {}): Webhook => ({
   id: 'wh1',
   url: 'https://hooks.example.com/notify',
@@ -99,7 +103,7 @@ describe('WebhooksPage — webhook create flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /add webhook/i }));
 
     await waitFor(() => expect(mockCreateWebhook).toHaveBeenCalledWith(
-      'https://my-hook.example.com', ['failed', 'degraded'], 'generic'
+      'https://my-hook.example.com', ['failed', 'degraded'], 'generic', undefined
     ));
     expect(mockGetWebhooks).toHaveBeenCalledTimes(2);
   });

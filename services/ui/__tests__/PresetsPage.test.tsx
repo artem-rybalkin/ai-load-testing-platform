@@ -15,6 +15,10 @@ vi.mock('@/lib/api', () => ({
   deletePreset: mockDeletePreset,
 }));
 
+vi.mock('@/lib/WorkspaceContext', () => ({
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+}));
+
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
   return { ...actual, useNavigate: () => mockNavigate };

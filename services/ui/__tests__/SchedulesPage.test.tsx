@@ -20,6 +20,10 @@ vi.mock('@/lib/api', () => ({
   convertCron: mockConvertCron,
 }));
 
+vi.mock('@/lib/WorkspaceContext', () => ({
+  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+}));
+
 const makeSchedule = (overrides: Partial<Schedule> = {}): Schedule => ({
   id: 's1',
   name: 'Hourly smoke test',

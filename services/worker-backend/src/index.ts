@@ -53,6 +53,7 @@ const saveScript = async (
   scriptId?: string,
   description?: string,
   projectId?: string,
+  workspaceId?: string,
 ): Promise<string> => {
   if (scriptId) {
     await pool.query(
@@ -62,13 +63,14 @@ const saveScript = async (
     return scriptId;
   }
   const { rows } = await pool.query(
-    `INSERT INTO test_scripts (target_url, test_type, script, description, project_id)
-     VALUES ($1, 'backend', $2, $3, $4)
+    `INSERT INTO test_scripts (target_url, test_type, script, description, project_id, workspace_id)
+     VALUES ($1, 'backend', $2, $3, $4, $5)
      ON CONFLICT (target_url, test_type) DO UPDATE
      SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW(),
-         project_id = COALESCE(test_scripts.project_id, EXCLUDED.project_id)
+         project_id = COALESCE(test_scripts.project_id, EXCLUDED.project_id),
+         workspace_id = COALESCE(test_scripts.workspace_id, EXCLUDED.workspace_id)
      RETURNING id`,
-    [targetUrl, script, description ?? null, projectId ?? null]
+    [targetUrl, script, description ?? null, projectId ?? null, workspaceId ?? null]
   );
   return rows[0].id;
 };
@@ -424,7 +426,7 @@ const start = async (): Promise<void> => {
       }
 
       const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
-      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description, test.projectId);
+      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description, test.projectId, test.workspaceId);
 
       const result: TestResult = {
         testId: test.id,

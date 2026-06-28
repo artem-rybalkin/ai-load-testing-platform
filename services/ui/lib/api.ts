@@ -33,6 +33,9 @@ export { interpolateLogSourceUrl, getLogSources, createLogSource, updateLogSourc
 export type { RecordingSession } from './api/recording';
 export { startRecording, stopRecording, getRecording } from './api/recording';
 
+export type { Workspace } from './api/workspaces';
+export { getWorkspaces, createWorkspace, updateWorkspace, deleteWorkspace } from './api/workspaces';
+
 export type {
   ThresholdSuggestion, ErrorDiagnosis, SettingsSuggestion, ChatMessage, ChatParseResponse,
 } from './api/ai';

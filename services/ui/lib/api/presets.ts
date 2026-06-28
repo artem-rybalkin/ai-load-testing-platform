@@ -12,12 +12,13 @@ export interface Preset {
   created_at: string;
 }
 
-export const getPresets = async (): Promise<{ presets: Preset[] }> => {
-  const res = await f(`${RESULTS_URL}/presets`, { cache: 'no-store' });
+export const getPresets = async (workspaceId?: string | null): Promise<{ presets: Preset[] }> => {
+  const params = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+  const res = await f(`${RESULTS_URL}/presets${params}`, { cache: 'no-store' });
   return res.json();
 };
 
-export const createPreset = async (data: Omit<Preset, 'id' | 'used_count' | 'created_at'>): Promise<{ preset: Preset }> => {
+export const createPreset = async (data: Omit<Preset, 'id' | 'used_count' | 'created_at'> & { workspaceId?: string }): Promise<{ preset: Preset }> => {
   const res = await f(`${RESULTS_URL}/presets`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

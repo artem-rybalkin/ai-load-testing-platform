@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getSchedules, createSchedule, updateSchedule, deleteSchedule, runSchedule, convertCron, Schedule } from '@/lib/api';
+import { useWorkspace } from '@/lib/WorkspaceContext';
 
 const EMPTY_FORM = {
   name: '',
@@ -16,6 +17,7 @@ const EMPTY_FORM = {
 };
 
 export default function SchedulesPage() {
+  const { activeWorkspaceId } = useWorkspace();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -28,7 +30,7 @@ export default function SchedulesPage() {
 
   const load = async () => {
     try {
-      const data = await getSchedules();
+      const data = await getSchedules(activeWorkspaceId);
       setSchedules(data.schedules ?? []);
     } catch {
       setError('Could not reach results-service — check that it is running.');
@@ -37,7 +39,7 @@ export default function SchedulesPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [activeWorkspaceId]);
 
   const handleConvertCron = async () => {
     if (!cronPhrase) return;
@@ -68,6 +70,7 @@ export default function SchedulesPage() {
         options,
         thresholds: null,
         enabled: form.enabled,
+        workspaceId: activeWorkspaceId ?? undefined,
       });
       setForm(EMPTY_FORM);
       setShowForm(false);

@@ -14,12 +14,13 @@ export interface Schedule {
   created_at: string;
 }
 
-export const getSchedules = async (): Promise<{ schedules: Schedule[] }> => {
-  const res = await f(`${RESULTS_URL}/schedules`, { cache: 'no-store' });
+export const getSchedules = async (workspaceId?: string | null): Promise<{ schedules: Schedule[] }> => {
+  const params = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+  const res = await f(`${RESULTS_URL}/schedules${params}`, { cache: 'no-store' });
   return res.json();
 };
 
-export const createSchedule = async (data: Omit<Schedule, 'id' | 'last_run_at' | 'created_at'>): Promise<{ schedule: Schedule }> => {
+export const createSchedule = async (data: Omit<Schedule, 'id' | 'last_run_at' | 'created_at'> & { workspaceId?: string }): Promise<{ schedule: Schedule }> => {
   const res = await f(`${RESULTS_URL}/schedules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

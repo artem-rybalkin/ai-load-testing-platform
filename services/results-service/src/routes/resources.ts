@@ -12,29 +12,31 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
 
   // ── Webhook CRUD ─────────────────────────────────────────────────────────────
 
-  app.post<{ Body: { url: string; events?: string[]; secret?: string; format?: string } }>(
+  app.post<{ Body: { url: string; events?: string[]; secret?: string; format?: string; workspaceId?: string } }>(
     '/webhooks',
     async (request, reply) => {
-      const { url, events = ['failed', 'degraded'], secret, format = 'generic' } = request.body;
+      const { url, events = ['failed', 'degraded'], secret, format = 'generic', workspaceId } = request.body;
       if (!url) return reply.code(400).send({ error: 'url is required' });
       const ssrfError = validateSsrfSafeUrl(url);
       if (ssrfError) return reply.code(400).send({ error: ssrfError });
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
-        `INSERT INTO webhooks (url, events, secret, format, project_id) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [url, events, secret ?? null, format, projectId]
+        `INSERT INTO webhooks (url, events, secret, format, project_id, workspace_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [url, events, secret ?? null, format, projectId, workspaceId ?? null]
       );
       return reply.code(201).send({ webhook: rows[0] });
     }
   );
 
-  app.get('/webhooks', async (request) => {
+  app.get<{ Querystring: { workspaceId?: string } }>('/webhooks', async (request) => {
     const projectId = request.projectId ?? null;
+    const workspaceId = request.query.workspaceId ?? null;
     const { rows } = await rPool.query(
       `SELECT id, url, events, format, created_at FROM webhooks
        WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
+         AND ($2::uuid IS NULL OR workspace_id = $2::uuid)
        ORDER BY created_at DESC`,
-      [projectId]
+      [projectId, workspaceId]
     );
     return { webhooks: rows };
   });
@@ -125,19 +127,21 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
 
   // ── Scheduled tests ───────────────────────────────────────────────────────────
 
-  app.get('/schedules', async (request) => {
+  app.get<{ Querystring: { workspaceId?: string } }>('/schedules', async (request) => {
     const projectId = request.projectId ?? null;
+    const workspaceId = request.query.workspaceId ?? null;
     const { rows } = await rPool.query(
-      `SELECT * FROM schedules WHERE ($1::uuid IS NULL OR project_id = $1::uuid) ORDER BY created_at DESC`,
-      [projectId]
+      `SELECT * FROM schedules WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
+         AND ($2::uuid IS NULL OR workspace_id = $2::uuid) ORDER BY created_at DESC`,
+      [projectId, workspaceId]
     );
     return { schedules: rows };
   });
 
-  app.post<{ Body: { name: string; cron: string; type: string; target_url: string; description?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown>; enabled?: boolean } }>(
+  app.post<{ Body: { name: string; cron: string; type: string; target_url: string; description?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown>; enabled?: boolean; workspaceId?: string } }>(
     '/schedules',
     async (request, reply) => {
-      const { name, cron, type, target_url, description, options, thresholds, enabled = true } = request.body;
+      const { name, cron, type, target_url, description, options, thresholds, enabled = true, workspaceId } = request.body;
       if (!name || !cron || !type || !target_url || !options) return reply.code(400).send({ error: 'name, cron, type, target_url, options are required' });
       if (!cronValidator.validate(cron)) return reply.code(400).send({ error: 'Invalid cron expression' });
       if (enabled) {
@@ -146,9 +150,9 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
       }
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
-        `INSERT INTO schedules (name, cron, type, target_url, description, options, thresholds, enabled, project_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [name, cron, type, target_url, description ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, enabled, projectId]
+        `INSERT INTO schedules (name, cron, type, target_url, description, options, thresholds, enabled, project_id, workspace_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [name, cron, type, target_url, description ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, enabled, projectId, workspaceId ?? null]
       );
       await reloadSchedule(pool, rows[0].id);
       return reply.code(201).send({ schedule: rows[0] });
@@ -244,25 +248,27 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
 
   // ── Test presets ──────────────────────────────────────────────────────────────
 
-  app.get('/presets', async (request) => {
+  app.get<{ Querystring: { workspaceId?: string } }>('/presets', async (request) => {
     const projectId = request.projectId ?? null;
+    const workspaceId = request.query.workspaceId ?? null;
     const { rows } = await rPool.query(
-      `SELECT * FROM test_presets WHERE ($1::uuid IS NULL OR project_id = $1::uuid) ORDER BY used_count DESC, created_at DESC`,
-      [projectId]
+      `SELECT * FROM test_presets WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
+         AND ($2::uuid IS NULL OR workspace_id = $2::uuid) ORDER BY used_count DESC, created_at DESC`,
+      [projectId, workspaceId]
     );
     return { presets: rows };
   });
 
-  app.post<{ Body: { name: string; description?: string; type: string; target_url?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown> } }>(
+  app.post<{ Body: { name: string; description?: string; type: string; target_url?: string; options: Record<string, unknown>; thresholds?: Record<string, unknown>; workspaceId?: string } }>(
     '/presets',
     async (request, reply) => {
-      const { name, description, type, target_url, options, thresholds } = request.body;
+      const { name, description, type, target_url, options, thresholds, workspaceId } = request.body;
       if (!name || !type || !options) return reply.code(400).send({ error: 'name, type, options are required' });
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
-        `INSERT INTO test_presets (name, description, type, target_url, options, thresholds, project_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [name, description ?? null, type, target_url ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, projectId]
+        `INSERT INTO test_presets (name, description, type, target_url, options, thresholds, project_id, workspace_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [name, description ?? null, type, target_url ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, projectId, workspaceId ?? null]
       );
       return reply.code(201).send({ preset: rows[0] });
     }

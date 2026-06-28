@@ -346,6 +346,28 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`ALTER TABLE test_results ADD CONSTRAINT test_results_script_id_fkey FOREIGN KEY (script_id) REFERENCES test_scripts(id) ON DELETE SET NULL`);
     },
   },
+  {
+    version: 14,
+    name: 'workspaces',
+    up: async (p): Promise<void> => {
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS workspaces (
+          id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          team_id     UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          name        TEXT NOT NULL,
+          description TEXT,
+          created_at  TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(team_id, name)
+        )
+      `);
+      await p.query(`CREATE INDEX IF NOT EXISTS workspaces_team_id_idx ON workspaces(team_id)`);
+      await p.query(`ALTER TABLE test_results  ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL`);
+      await p.query(`ALTER TABLE test_scripts  ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL`);
+      await p.query(`ALTER TABLE test_presets  ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL`);
+      await p.query(`ALTER TABLE schedules     ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL`);
+      await p.query(`ALTER TABLE webhooks      ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL`);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────

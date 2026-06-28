@@ -5,6 +5,7 @@ import FlowBuilder from '@/app/components/FlowBuilder';
 import AdvancedSettings from '@/app/components/AdvancedSettings';
 import ThresholdSection from '@/app/components/ThresholdSection';
 import { useAuth } from '@/lib/AuthContext';
+import { useWorkspace } from '@/lib/WorkspaceContext';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 import { findScriptTemplate } from '@/lib/scriptTemplates';
 import type { HomeFormState, Thresholds, EnvVar } from '@/app/home-types';
@@ -150,6 +151,7 @@ function HomeContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
+  const { activeWorkspaceId } = useWorkspace();
   const isViewer = user?.role === 'viewer';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -399,6 +401,7 @@ function HomeContent() {
         target_url: form.targetUrl || null,
         options,
         thresholds: savedThresholds ?? null,
+        workspaceId: activeWorkspaceId ?? undefined,
       });
       const data = await getPresets();
       setPresets(data.presets ?? []);
@@ -531,6 +534,7 @@ function HomeContent() {
             steps: flowSteps,
             envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
             thresholds: buildThresholds(),
+            workspaceId: activeWorkspaceId ?? undefined,
           });
           if (res.test?.id) navigate(`/results/${res.test.id}`);
           return;
@@ -547,6 +551,7 @@ function HomeContent() {
           csvData: flowCsvFile?.data,
           csvFilename: flowCsvFile?.name,
           thresholds: buildThresholds(),
+          workspaceId: activeWorkspaceId ?? undefined,
         });
         if (res.test?.id) navigate(`/results/${res.test.id}`);
         return;
@@ -570,6 +575,7 @@ function HomeContent() {
         ...(isCustomScript ? { customScript: customScript.trim() } : {}),
         options,
         thresholds: buildThresholds(),
+        workspaceId: activeWorkspaceId ?? undefined,
       });
 
       if (res.test?.id) navigate(`/results/${res.test.id}`);

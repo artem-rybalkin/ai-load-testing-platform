@@ -124,6 +124,15 @@ export interface TestRequest {
   csvFilename?: string;                      // original filename hint
   customScript?: string;                     // user-supplied k6 script; bypasses AI generation entirely
   projectId?: string;                        // set by api-service from session; filters DB scope
+  workspaceId?: string;                      // optional sub-project grouping within a team
+  createdAt: string;
+}
+
+export interface Workspace {
+  id: string;
+  teamId: string;
+  name: string;
+  description?: string | null;
   createdAt: string;
 }
 

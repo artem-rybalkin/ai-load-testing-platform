@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Outlet, Navigate } from 'react-router-dom
 import { ResultsSocketProvider } from '@/lib/ResultsSocketContext';
 import { HealthProvider } from '@/lib/HealthContext';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { WorkspaceProvider } from '@/lib/WorkspaceContext';
 import Sidebar from '@/app/components/Sidebar';
 import TopBar from '@/app/components/TopBar';
 import ActiveTests from '@/app/components/ActiveTests';
@@ -21,6 +22,7 @@ const SchedulesPage    = lazy(() => import('@/app/schedules/page'));
 const WebhooksPage     = lazy(() => import('@/app/webhooks/page'));
 const TeamPage         = lazy(() => import('@/app/team/page'));
 const OrgPage          = lazy(() => import('@/app/org/page'));
+const WorkspacesPage   = lazy(() => import('@/app/workspaces/page'));
 const LoginPage        = lazy(() => import('@/app/login/page'));
 
 function AuthGate() {
@@ -58,6 +60,7 @@ function RootLayout() {
 export default function App() {
   return (
     <AuthProvider>
+      <WorkspaceProvider>
       <ResultsSocketProvider>
         <HealthProvider>
           <BrowserRouter>
@@ -76,12 +79,14 @@ export default function App() {
                   <Route path="/webhooks"        element={<WebhooksPage />} />
                   <Route path="/team"            element={<TeamPage />} />
                   <Route path="/org"             element={<OrgPage />} />
+                  <Route path="/workspaces"      element={<WorkspacesPage />} />
                 </Route>
               </Route>
             </Routes>
           </BrowserRouter>
         </HealthProvider>
       </ResultsSocketProvider>
+      </WorkspaceProvider>
     </AuthProvider>
   );
 }

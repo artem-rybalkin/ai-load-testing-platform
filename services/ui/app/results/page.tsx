@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getResults, TestResult, BackendMetrics, ClientMetrics } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
+import { useWorkspace } from '@/lib/WorkspaceContext';
 import { Link, useNavigate } from 'react-router-dom';
 
 function relTime(iso: string) {
@@ -81,6 +82,7 @@ const DATE_RANGES = [
 ] as const;
 
 export default function ResultsPage() {
+  const { activeWorkspaceId } = useWorkspace();
   const [results, setResults] = useState<TestResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -93,7 +95,7 @@ export default function ResultsPage() {
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = async () => {
-    const data = await getResults();
+    const data = await getResults(undefined, 50, activeWorkspaceId);
     setResults(data.results || []);
     setNextBefore(data.nextBefore ?? null);
     setLoading(false);
@@ -103,7 +105,7 @@ export default function ResultsPage() {
     if (!nextBefore || loadingMore) return;
     setLoadingMore(true);
     try {
-      const data = await getResults(nextBefore);
+      const data = await getResults(nextBefore, 50, activeWorkspaceId);
       setResults(prev => [...prev, ...(data.results || [])]);
       setNextBefore(data.nextBefore ?? null);
     } finally {
@@ -111,8 +113,8 @@ export default function ResultsPage() {
     }
   };
 
-  // Initial load
-  useEffect(() => { refresh(); }, []);
+  // Reload when workspace filter changes
+  useEffect(() => { setLoading(true); setResults([]); setNextBefore(null); refresh(); }, [activeWorkspaceId]);
 
   // Real-time updates via WebSocket — replaces 5s polling.
   // Debounced 50ms: consumer broadcasts both test:status + tests:changed together;

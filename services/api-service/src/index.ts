@@ -172,7 +172,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
     '/tests',
     async (request, reply) => {
-      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript, projectId: bodyProjectId } = request.body;
+      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript, projectId: bodyProjectId, workspaceId } = request.body;
 
       // Internal callers authenticated via the global API_KEYS list or the
       // trusted INTERNAL_API_KEY channel (e.g. the scheduler) may scope a
@@ -224,6 +224,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         csvFilename,
         customScript,
         projectId: effectiveProjectId,
+        workspaceId: workspaceId ?? undefined,
         scriptCacheKey: flowCacheKey,
         createdAt: new Date().toISOString(),
       };
@@ -250,7 +251,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         {
           method: 'POST',
           headers: internalHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ testId: test.id, type: test.type, targetUrl: test.targetUrl, durationSeconds, steps: test.steps, testData: test.testData, projectId: test.projectId }),
+          body: JSON.stringify({ testId: test.id, type: test.type, targetUrl: test.targetUrl, durationSeconds, steps: test.steps, testData: test.testData, projectId: test.projectId, workspaceId: test.workspaceId }),
           signal: AbortSignal.timeout(5000),
         }
       ).catch(() => {});

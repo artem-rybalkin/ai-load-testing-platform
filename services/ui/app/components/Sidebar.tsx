@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useDarkMode } from '@/lib/useDarkMode';
 import { useAuth } from '@/lib/AuthContext';
 import { useHealth } from '@/lib/HealthContext';
+import { useWorkspace } from '@/lib/WorkspaceContext';
 import { getActiveTests, ActiveTest } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 
@@ -34,6 +35,9 @@ const NAV = [
   { href: '/org', label: 'Org', icon: (
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round"><path d="M10 3l6 3.5v7L10 17l-6-3.5v-7z" /></svg>
   ) },
+  { href: '/workspaces', label: 'Projects', icon: (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="14" height="12" rx="1.5" /><path d="M3 8h14M7 5V3.5M13 5V3.5" /></svg>
+  ) },
 ];
 
 const ROLE_LABEL: Record<string, string> = { admin: 'Admin', member: 'Member', viewer: 'Viewer' };
@@ -57,6 +61,7 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
   const { dark, toggle: toggleDark } = useDarkMode();
   const { user, logout, switchTeam } = useAuth();
   const { services } = useHealth();
+  const { workspaces, activeWorkspaceId, setActiveWorkspaceId } = useWorkspace();
   const [active, setActive] = useState<ActiveTest[]>([]);
 
   const refreshActive = async () => {
@@ -108,6 +113,20 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
           );
         })}
       </nav>
+
+      {workspaces.length > 0 && (
+        <div className="mt-4 pt-3.5 border-t border-sidebar-border">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sidebar-muted-2 mb-1.5 px-1">Project</div>
+          <select
+            value={activeWorkspaceId ?? ''}
+            onChange={e => setActiveWorkspaceId(e.target.value || null)}
+            className="w-full bg-sidebar-panel border border-sidebar-border text-[12.5px] text-sidebar-bright rounded-[9px] px-2.5 py-1.5 focus:outline-none cursor-pointer"
+          >
+            <option value="">All projects</option>
+            {workspaces.map(w => <option key={w.id} value={w.id} className="text-black">{w.name}</option>)}
+          </select>
+        </div>
+      )}
 
       <div className="flex-1" />
 

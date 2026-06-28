@@ -8,16 +8,17 @@ export interface Webhook {
   created_at: string;
 }
 
-export const getWebhooks = async (): Promise<{ webhooks: Webhook[] }> => {
-  const res = await f(`${RESULTS_URL}/webhooks`, { cache: 'no-store' });
+export const getWebhooks = async (workspaceId?: string | null): Promise<{ webhooks: Webhook[] }> => {
+  const params = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+  const res = await f(`${RESULTS_URL}/webhooks${params}`, { cache: 'no-store' });
   return res.json();
 };
 
-export const createWebhook = async (url: string, events?: string[], format?: string): Promise<{ webhook: Webhook }> => {
+export const createWebhook = async (url: string, events?: string[], format?: string, workspaceId?: string): Promise<{ webhook: Webhook }> => {
   const res = await f(`${RESULTS_URL}/webhooks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, events, format }),
+    body: JSON.stringify({ url, events, format, workspaceId }),
   });
   return res.json();
 };

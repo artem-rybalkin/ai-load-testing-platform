@@ -6,6 +6,7 @@ import {
   getLogSources, createLogSource, updateLogSource, deleteLogSource, LogSource,
   predictWebhookNoise,
 } from '@/lib/api';
+import { useWorkspace } from '@/lib/WorkspaceContext';
 
 const PLATFORMS = ['Grafana', 'Datadog', 'Kibana', 'Loki', 'OpenSearch', 'Custom'] as const;
 
@@ -40,6 +41,7 @@ const WEBHOOK_FORMATS = [
 ] as const;
 
 function WebhooksSection() {
+  const { activeWorkspaceId } = useWorkspace();
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<string[]>(['failed', 'degraded']);
@@ -51,21 +53,21 @@ function WebhooksSection() {
 
   const load = async () => {
     try {
-      const data = await getWebhooks();
+      const data = await getWebhooks(activeWorkspaceId);
       setWebhooks(data.webhooks ?? []);
     } catch {
       setError('Could not reach results-service — check that it is running.');
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [activeWorkspaceId]);
 
   const handleAdd = async () => {
     if (!url.trim()) { setError('URL is required'); return; }
     setSaving(true);
     setError('');
     try {
-      await createWebhook(url.trim(), events, format);
+      await createWebhook(url.trim(), events, format, activeWorkspaceId ?? undefined);
       setUrl('');
       setFormat('generic');
       await load();

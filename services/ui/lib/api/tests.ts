@@ -29,6 +29,7 @@ export interface TestRequest {
     p95?: number; avg?: number; errorRate?: number; serverErrorRate?: number; timeoutRate?: number;
     lcp?: number; fcp?: number; ttfb?: number; cls?: number;
   };
+  workspaceId?: string;
 }
 
 export interface TestResult {
@@ -116,9 +117,10 @@ export const createTest = async (data: TestRequest) => {
   return res.json();
 };
 
-export const getResults = async (before?: string, limit = 50): Promise<{ results: TestResult[]; nextBefore: string | null }> => {
+export const getResults = async (before?: string, limit = 50, workspaceId?: string | null): Promise<{ results: TestResult[]; nextBefore: string | null }> => {
   const params = new URLSearchParams({ limit: String(limit) });
   if (before) params.set('before', before);
+  if (workspaceId) params.set('workspaceId', workspaceId);
   const res = await f(`${RESULTS_URL}/results?${params}`, { cache: 'no-store' });
   return res.json();
 };
@@ -128,8 +130,9 @@ export const getResult = async (testId: string): Promise<{ result: TestResult }>
   return res.json();
 };
 
-export const getScripts = async () => {
-  const res = await f(`${RESULTS_URL}/scripts`, { cache: 'no-store' });
+export const getScripts = async (workspaceId?: string | null) => {
+  const params = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+  const res = await f(`${RESULTS_URL}/scripts${params}`, { cache: 'no-store' });
   return res.json();
 };
 
