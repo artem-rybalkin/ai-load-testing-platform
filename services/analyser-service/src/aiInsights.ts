@@ -172,7 +172,7 @@ const formatMetrics = (p: AnalysisPromptPayload): string => {
       `p99: ${m.p99ResponseTimeMs}ms`,
     ];
     if (m.serverErrors !== undefined)
-      lines.push(`Error breakdown: ${m.serverErrors} server (5xx), ${m.clientErrors} client (4xx), ${m.timeouts} timeouts, ${m.networkErrors} network`);
+      lines.push(`Error breakdown: ${m.serverErrors} HTTP 5xx (server errors), ${m.clientErrors} HTTP 4xx (request errors), ${m.timeouts} timeouts, ${m.networkErrors} network errors`);
     if (m.topStepsByP95?.length)
       lines.push(`Top steps by p95: ${m.topStepsByP95.map(s => `${s.name} avg=${s.avgResponseTime}ms p95=${s.p95ResponseTime}ms`).join(', ')}`);
     return lines.join('\n');
