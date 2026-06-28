@@ -76,7 +76,7 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
   );
 
   // ── POST /results/pending (internal) ─────────────────────────────────────
-  app.post<{ Body: { testId: string; type: string; targetUrl: string; durationSeconds?: number; steps?: unknown[]; testData?: unknown[]; projectId?: string } }>(
+  app.post<{ Body: { testId: string; type: string; targetUrl: string; durationSeconds?: number; steps?: unknown[]; testData?: unknown[]; projectId?: string; workspaceId?: string } }>(
     '/results/pending',
     async (request, reply) => {
       try {
