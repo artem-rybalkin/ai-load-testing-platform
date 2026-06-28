@@ -26,7 +26,7 @@ const STATUS_BADGE_CLS: Record<string, string> = {
 };
 const StatusBadge = ({ status }: { status: string }) => (
   <span className={`px-2.75 py-1 rounded-chip text-[11px] font-bold font-mono uppercase ${STATUS_BADGE_CLS[status] ?? 'bg-surface-2 text-tx-3'}`}>
-    {status === 'completed' ? 'passed' : status}
+    {status}
   </span>
 );
 
