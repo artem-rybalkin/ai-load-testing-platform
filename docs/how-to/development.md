@@ -89,7 +89,7 @@ import { TestRequest, TestResult, FlowStep } from '@alt/shared';
 npm test
 ```
 
-~261 tests across 14 files. Runs in ~30–60 seconds.
+~1359 tests across 64 files. Unit tests run in ~30–60 seconds; integration tests (Testcontainers) take 3–5 minutes.
 
 ### Watch mode
 

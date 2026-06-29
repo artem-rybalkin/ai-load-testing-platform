@@ -5,7 +5,6 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { Readable } from 'stream';
 import type { ChildProcess } from 'child_process';
 
 // ─── Hoisted mocks ────────────────────────────────────────────────────────────
@@ -48,14 +47,17 @@ const K6_OUTPUT = [
   '     http_req_failed...............: 0.00% ✓ 0   ✗ 100',
 ].join('\n');
 
-/** Create a fake ChildProcess (EventEmitter) with controllable stdout/stderr. */
-function makeProc(opts: { stdout?: string; stderr?: string } = {}) {
+/** Create a fake ChildProcess (EventEmitter) with controllable stdout/stderr.
+ *  stdout/stderr are plain EventEmitters so tests can emit 'data' synchronously.
+ *  The opts parameter is accepted but ignored — callers emit data manually instead.
+ */
+function makeProc(_opts: { stdout?: string; stderr?: string } = {}) {
   const proc = new EventEmitter() as EventEmitter & {
-    stdout: Readable; stderr: Readable;
+    stdout: EventEmitter; stderr: EventEmitter;
     kill: ReturnType<typeof vi.fn>;
   };
-  proc.stdout = Readable.from(opts.stdout ? [opts.stdout] : []);
-  proc.stderr = Readable.from(opts.stderr ? [opts.stderr] : []);
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
   proc.kill   = vi.fn();
   return proc;
 }
@@ -73,8 +75,16 @@ function makeCtx(runningTests = new Map<string, ChildProcess>()) {
   };
 }
 
-/** Setup all fs/promises mocks so runK6Test doesn't throw on file ops. */
+/** Setup all fs/promises mocks so runK6Test doesn't throw on file ops.
+ *  Also clears call history so accumulated calls from previous tests don't bleed through.
+ */
 function setupFs() {
+  mockSpawn.mockClear();
+  mockMkdir.mockClear();
+  mockWriteFile.mockClear();
+  mockRm.mockClear();
+  mockReadFile.mockClear();
+  mockOpen.mockClear();
   mockMkdir.mockResolvedValue(undefined);
   mockWriteFile.mockResolvedValue(undefined);
   mockRm.mockResolvedValue(undefined);
@@ -140,8 +150,12 @@ describe('runK6Test — exit code handling', () => {
 
     const promise = runK6Test('test-0', 'export default function(){}', undefined, undefined, undefined, makeCtx());
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
     await Promise.resolve();
+    await Promise.resolve();
+    run.stdout.emit('data', Buffer.from(K6_OUTPUT));
     run.emit('close', 0);
 
     const result = await promise;
@@ -156,8 +170,12 @@ describe('runK6Test — exit code handling', () => {
 
     const promise = runK6Test('test-99', 'export default function(){}', undefined, undefined, undefined, makeCtx());
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
     await Promise.resolve();
+    await Promise.resolve();
+    run.stdout.emit('data', Buffer.from(K6_OUTPUT));
     run.emit('close', 99);
 
     const result = await promise;
@@ -172,7 +190,10 @@ describe('runK6Test — exit code handling', () => {
 
     const promise = runK6Test('test-fail', 'bad script', undefined, undefined, undefined, makeCtx());
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
+    await Promise.resolve();
     await Promise.resolve();
     run.emit('close', 1);
 
@@ -187,8 +208,12 @@ describe('runK6Test — exit code handling', () => {
 
     const promise = runK6Test('test-partial', 'export default function(){}', undefined, undefined, undefined, makeCtx());
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
     await Promise.resolve();
+    await Promise.resolve();
+    run.stdout.emit('data', Buffer.from(K6_OUTPUT));
     run.emit('close', 127);
 
     const result = await promise;
@@ -203,7 +228,10 @@ describe('runK6Test — exit code handling', () => {
 
     const promise = runK6Test('test-log', 'export default function(){}', undefined, undefined, undefined, makeCtx());
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
+    await Promise.resolve();
     await Promise.resolve();
     run.emit('close', 0);
 
@@ -226,6 +254,8 @@ describe('runK6Test — validateScript failure cleans up runDir', () => {
     mockSpawn.mockReturnValueOnce(validate);
 
     const promise = runK6Test('test-val-fail', 'bad script', undefined, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    await Promise.resolve();
     await Promise.resolve();
     validate.stderr.emit('data', Buffer.from('SyntaxError'));
     validate.emit('close', 1);
@@ -261,8 +291,12 @@ describe('runK6Test — data file writing', () => {
       makeCtx(),
     );
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
     await Promise.resolve();
+    await Promise.resolve();
+    run.stdout.emit('data', Buffer.from(K6_OUTPUT));
     run.emit('close', 0);
     await promise;
   }
@@ -316,12 +350,16 @@ describe('runK6Test — envVar injection safety', () => {
 
     const promise = runK6Test(testId, 'export default function(){}', envVars, undefined, undefined, makeCtx());
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
     await Promise.resolve();
+    await Promise.resolve();
+    run.stdout.emit('data', Buffer.from(K6_OUTPUT));
     run.emit('close', 0);
     await promise;
 
-    return mockSpawn.mock.calls[1][1] as string[]; // second spawn call = k6 run
+    return mockSpawn.mock.calls[1][1] as string[]; // second spawn call = k6 run (calls cleared in setupFs beforeEach)
   }
 
   it('passes valid env vars as --env KEY=VALUE args', async () => {
@@ -389,7 +427,10 @@ describe('runK6Test — SIGTERM/SIGKILL escalation', () => {
 
     const promise = runK6Test('test-sigterm', 'export default function(){}', undefined, undefined, undefined, ctx);
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
+    await Promise.resolve();
     await Promise.resolve();
 
     vi.advanceTimersByTime(10_001);
@@ -413,7 +454,10 @@ describe('runK6Test — SIGTERM/SIGKILL escalation', () => {
 
     const promise = runK6Test('test-sigkill', 'export default function(){}', undefined, undefined, undefined, ctx);
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     validate.emit('close', 0);
+    await Promise.resolve();
     await Promise.resolve();
 
     // runningTests still has the entry so SIGKILL is sent
@@ -446,8 +490,14 @@ describe('runK6Test — runningTests map', () => {
     const ctx = makeCtx(runningTests);
 
     const promise = runK6Test('test-map', 'export default function(){}', undefined, undefined, undefined, ctx);
+    // runK6Test awaits mkdir then writeFile before calling validateScript:
+    // tick 1 → past mkdir; tick 2 → past writeFile Promise.all; now validateScript listener is registered
+    await Promise.resolve();
+    await Promise.resolve();
     await Promise.resolve();
     validate.emit('close', 0);
+    // tick 3 → validateScript promise resolves; tick 4 → .catch chain propagates, k6 spawned, runningTests.set
+    await Promise.resolve();
     await Promise.resolve();
 
     // While running, the process is tracked
@@ -468,8 +518,13 @@ describe('runK6Test — runningTests map', () => {
 
     const ctx = makeCtx();
     const promise = runK6Test('test-notify', 'export default function(){}', undefined, undefined, undefined, ctx);
+    // tick 1 → past mkdir; tick 2 → past writeFile Promise.all; now validateScript listener is registered
+    await Promise.resolve();
+    await Promise.resolve();
     await Promise.resolve();
     validate.emit('close', 0);
+    // tick 3 → validateScript resolves; tick 4 → k6 spawned, notifyRunning called; run can now close
+    await Promise.resolve();
     await Promise.resolve();
     run.emit('close', 0);
     await promise;

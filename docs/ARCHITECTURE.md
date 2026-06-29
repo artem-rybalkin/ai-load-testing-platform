@@ -130,12 +130,15 @@ Scheduled path:
 
 | Layer | Framework | Isolation | Count |
 |-------|-----------|-----------|-------|
-| Unit | Vitest | In-process | ~131 tests |
-| Integration | Vitest + Testcontainers | Real PostgreSQL | ~262 tests |
-| UI | Vitest + RTL + jsdom | DOM simulation | ~80 tests |
-| E2E | Playwright | Full stack (docker compose up) | 3 suites |
+| Unit | Vitest | In-process | ~165 tests |
+| Integration | Vitest + Testcontainers | Real PostgreSQL | ~1000 tests |
+| UI | Vitest + RTL + jsdom | DOM simulation | ~200 tests |
+| E2E | Playwright | Full stack (docker compose up) | 11 specs |
 
-**Total: ~897 tests** (incl. Phase 25 additions: `api-service/session.test.ts` + `quotas.test.ts`, `results-service/quotas.test.ts` + `orgs.test.ts` + `apiKeys.test.ts`, and `ui/OrgPage.test.tsx` + expanded `TeamPage.test.tsx`)
+**Total: ~1359 tests** across 64 test files (verified 2026-06-28). Includes worker-backend
+`runner.test.ts` (35 tests — `runK6Test` via dependency injection context), worker-client
+`runner.test.ts` (22 tests — `runClientTest` via dependency injection), `ui/ResultDetailPage.test.tsx`
+(result detail page, baseline toggle), `results-service/db.test.ts` (schema idempotency).
 
 ## AI Feature Architecture
 
@@ -148,7 +151,7 @@ All 14 AI features follow a consistent pattern: lazy Gemini calls (only when use
 | AI-3 Ignore suggestions | Automatic after recording stop | `suggestIgnorePatterns()` in correlator.ts | GEMINI_MODEL |
 | AI-4 Error diagnosis | `✨ Diagnose with AI` on result page | `GET /results/:id/diagnose` | GEMINI_MODEL |
 | AI-5 Cron assistant | Text box in Schedules form | `POST /ai/cron` | GEMINI_MODEL |
-| AI-6 Playwright translator | File upload in Custom Script mode | `POST /translate` (ai-service) | GEMINI_MODEL |
+| AI-6 Playwright translator | File upload in Custom Script mode | `POST /ai/translate` (results-service) | GEMINI_MODEL |
 | AI-7 Trend narrative | `✨ Summarise trend` on Trend chart | `POST /ai/trend-narrative` | GEMINI_MODEL |
 | AI-8 PDF summary | Auto on every PDF download | inline in `/results/:id/report.pdf` | GEMINI_MODEL |
 | AI-9 Settings recommendation | `✨ Suggest settings` below URL | `GET /results/suggest-settings` | GEMINI_MODEL |

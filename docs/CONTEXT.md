@@ -24,7 +24,7 @@ AI-powered distributed load testing platform. Users describe what they want to t
 - **Load profiles** — load / spike / capacity / soak profiles with configurable VUs, duration, ramp-up
 - **External log links** — deep-link buttons to Grafana, Datadog, Kibana, etc. for test time window
 - **PDF reports** — downloadable PDF for sharing results
-- **Project-scoped auth** — HMAC-SHA256 cookie sessions; each project's data (tests, scripts, schedules, webhooks) is isolated by `project_id`
+- **Project-scoped auth** — DB-backed opaque token sessions with org/team RBAC; each team's data (tests, scripts, schedules, webhooks) is isolated by `project_id`
 - **Extended browser metrics** — INP, TBT, TTI, JS errors, long task count, DOM node count, resource breakdown (in addition to Core Web Vitals)
 
 ## Users
@@ -42,4 +42,4 @@ AI-powered distributed load testing platform. Users describe what they want to t
 
 ## Current Status
 
-Production-ready across 23+ completed phases. All core features implemented and tested (~430 tests). Deployable to cloud via docker-compose.prod.yml + Caddy HTTPS. Includes project-scoped multi-tenancy with cookie-session authentication.
+Production-ready across 23+ completed phases. All core features implemented and tested (~1359 tests across 64 files). Deployable to cloud via docker-compose.prod.yml + Caddy HTTPS. Includes full org/team multi-tenancy with DB-backed sessions, per-team API keys, per-team AI provider overrides, and per-team quotas.

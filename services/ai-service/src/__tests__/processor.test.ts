@@ -297,7 +297,7 @@ describe('processAiRequest — DLQ routing after MAX_RETRIES', () => {
     const { mockFetch, deps } = makeDeps({
       generateScript: vi.fn().mockRejectedValue(new Error('Gemini 429')),
     });
-    const firstMsg = makeMsg({ 'x-retry-count': 1 }); // 1 already tried → 1 left
+    const firstMsg = makeMsg({ 'x-retry-count': 2 }); // 2 already retried → 1 left (MAX_RETRIES - 2 = 1)
     deps.msg = firstMsg;
 
     await processAiRequest(BASE_TEST, deps);
