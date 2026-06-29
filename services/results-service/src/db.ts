@@ -375,7 +375,7 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
 // The postgres docker image restarts its server once after initdb completes;
 // a connection made during that window is reset. Retry the first query so
 // Testcontainers-based tests don't fail on that transient restart.
-const queryWithRetry = async (p: Pool, sql: string, retries = 5, delayMs = 1000): Promise<void> => {
+export const queryWithRetry = async (p: Pool, sql: string, retries = 5, delayMs = 1000): Promise<void> => {
   for (let attempt = 1; ; attempt++) {
     try {
       await p.query(sql);

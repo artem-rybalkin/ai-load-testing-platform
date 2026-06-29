@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { Pool, QueryResult } from 'pg';
 import { createTestDatabase } from '../../../../test-support/sharedPostgres';
-import { createSchema } from '../db';
+import { createSchema, queryWithRetry } from '../db';
 
 let dbUri: string;
 let dropDb: () => Promise<void>;
@@ -78,5 +78,99 @@ describe('db — readPool fallback', () => {
 
     await pool.end();
     await readPool.end();
+  });
+});
+
+// ─── M7: queryWithRetry retry / backoff logic ─────────────────────────────────
+
+describe('queryWithRetry (M7)', () => {
+  it('resolves immediately when the first query succeeds', async () => {
+    const mockPool = { query: vi.fn().mockResolvedValue({ rows: [] }) } as unknown as Pool;
+    await expect(queryWithRetry(mockPool, 'SELECT 1', 3, 0)).resolves.toBeUndefined();
+    expect(mockPool.query).toHaveBeenCalledOnce();
+  });
+
+  it('retries and succeeds on the second attempt', async () => {
+    const mockPool = {
+      query: vi.fn()
+        .mockRejectedValueOnce(new Error('ECONNRESET — transient'))
+        .mockResolvedValue({ rows: [] }),
+    } as unknown as Pool;
+
+    await expect(queryWithRetry(mockPool, 'SELECT 1', 3, 0)).resolves.toBeUndefined();
+    expect(mockPool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries N-1 times and throws after exhausting all retries', async () => {
+    const error = new Error('DB always down');
+    const mockPool = { query: vi.fn().mockRejectedValue(error) } as unknown as Pool;
+
+    await expect(queryWithRetry(mockPool, 'SELECT 1', 3, 0)).rejects.toThrow('DB always down');
+    // Called exactly `retries` times (1 initial + 2 retries = 3 total)
+    expect(mockPool.query).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses the default retries=5 when not specified', async () => {
+    const error = new Error('persistent failure');
+    const mockPool = { query: vi.fn().mockRejectedValue(error) } as unknown as Pool;
+
+    await expect(queryWithRetry(mockPool, 'SELECT 1', 5, 0)).rejects.toThrow();
+    expect(mockPool.query).toHaveBeenCalledTimes(5);
+  });
+
+  it('throws immediately on the first failure when retries=1', async () => {
+    const mockPool = {
+      query: vi.fn().mockRejectedValueOnce(new Error('boom')),
+    } as unknown as Pool;
+
+    await expect(queryWithRetry(mockPool, 'SELECT 1', 1, 0)).rejects.toThrow('boom');
+    expect(mockPool.query).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── M8: createSchema idempotency ────────────────────────────────────────────
+
+describe('createSchema — idempotency (M8)', () => {
+  let idempotPool: Pool;
+
+  beforeAll(async () => {
+    const { pool: p } = await createTestDatabase();
+    idempotPool = p;
+    // First run
+    await createSchema(idempotPool);
+  }, 60_000);
+
+  afterAll(async () => {
+    await idempotPool.end();
+  });
+
+  it('does not re-apply any migration when called a second time', async () => {
+    const { rows: before } = await idempotPool.query<{ version: number }>(
+      'SELECT version FROM schema_migrations ORDER BY version',
+    );
+    const countBefore = before.length;
+
+    // Second call — should be entirely a no-op
+    await createSchema(idempotPool);
+
+    const { rows: after } = await idempotPool.query<{ version: number }>(
+      'SELECT version FROM schema_migrations ORDER BY version',
+    );
+    expect(after.length).toBe(countBefore);
+  });
+
+  it('schema_migrations row count equals the number of migrations in MIGRATIONS array (14)', async () => {
+    const { rows } = await idempotPool.query<{ version: number }>(
+      'SELECT version FROM schema_migrations ORDER BY version',
+    );
+    expect(rows.length).toBe(14);
+  });
+
+  it('schema_migrations contains sequential versions 1..14', async () => {
+    const { rows } = await idempotPool.query<{ version: number }>(
+      'SELECT version FROM schema_migrations ORDER BY version',
+    );
+    const versions = rows.map(r => r.version);
+    expect(versions).toEqual(Array.from({ length: 14 }, (_, i) => i + 1));
   });
 });

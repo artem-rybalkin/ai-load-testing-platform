@@ -1,0 +1,589 @@
+/**
+ * Unit tests for worker-backend runner.ts
+ * Covers: validateScript, runK6Test (exit codes, data files, env vars, SIGTERM/SIGKILL, cleanup),
+ *         handleRetry (DLQ routing and retry counter).
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
+import { Readable } from 'stream';
+import type { ChildProcess } from 'child_process';
+
+// ─── Hoisted mocks ────────────────────────────────────────────────────────────
+
+const mockSpawn    = vi.hoisted(() => vi.fn());
+const mockWriteFile = vi.hoisted(() => vi.fn());
+const mockMkdir    = vi.hoisted(() => vi.fn());
+const mockRm       = vi.hoisted(() => vi.fn());
+const mockOpen     = vi.hoisted(() => vi.fn());
+const mockReadFile = vi.hoisted(() => vi.fn());
+
+vi.mock('child_process', () => ({ spawn: mockSpawn }));
+vi.mock('fs/promises', () => ({
+  writeFile: mockWriteFile,
+  mkdir:     mockMkdir,
+  rm:        mockRm,
+  open:      mockOpen,
+  readFile:  mockReadFile,
+}));
+vi.mock('../logger', () => ({
+  log: {
+    info:  vi.fn(),
+    warn:  vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
+  },
+}));
+vi.mock('@alt/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alt/shared')>();
+  return { ...actual, stripAnsi: (s: string) => s };
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** k6 text output with one valid http_reqs line so parseK6Output returns requestsTotal > 0. */
+const K6_OUTPUT = [
+  '     http_req_duration.............: avg=200ms min=50ms med=180ms max=400ms p(90)=350ms p(95)=380ms p(99)=400ms',
+  '     http_reqs.....................: 100    10/s',
+  '     http_req_failed...............: 0.00% ✓ 0   ✗ 100',
+].join('\n');
+
+/** Create a fake ChildProcess (EventEmitter) with controllable stdout/stderr. */
+function makeProc(opts: { stdout?: string; stderr?: string } = {}) {
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: Readable; stderr: Readable;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  proc.stdout = Readable.from(opts.stdout ? [opts.stdout] : []);
+  proc.stderr = Readable.from(opts.stderr ? [opts.stderr] : []);
+  proc.kill   = vi.fn();
+  return proc;
+}
+
+/** Build a no-op RunnerContext for tests that don't care about notifications. */
+function makeCtx(runningTests = new Map<string, ChildProcess>()) {
+  return {
+    runningTests,
+    notifyRunning:  vi.fn().mockResolvedValue(undefined),
+    postLogLine:    vi.fn().mockResolvedValue(undefined),
+    postLiveMetric: vi.fn().mockResolvedValue(undefined),
+    maxDurationMs:  600_000,
+    gracePeriodMs:  30_000,
+    liveIntervalMs: 5_000,
+  };
+}
+
+/** Setup all fs/promises mocks so runK6Test doesn't throw on file ops. */
+function setupFs() {
+  mockMkdir.mockResolvedValue(undefined);
+  mockWriteFile.mockResolvedValue(undefined);
+  mockRm.mockResolvedValue(undefined);
+  mockReadFile.mockResolvedValue('');
+  mockOpen.mockResolvedValue({
+    stat: vi.fn().mockResolvedValue({ size: 0 }),
+    read: vi.fn().mockResolvedValue({ bytesRead: 0 }),
+    close: vi.fn().mockResolvedValue(undefined),
+  });
+}
+
+// ─── validateScript ───────────────────────────────────────────────────────────
+
+describe('validateScript', () => {
+  beforeEach(() => { vi.resetModules(); });
+
+  it('resolves when k6 inspect exits with code 0', async () => {
+    const { validateScript } = await import('../runner');
+    const proc = makeProc();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const p = validateScript('/tmp/script.js');
+    proc.emit('close', 0);
+    await expect(p).resolves.toBeUndefined();
+  });
+
+  it('rejects with a descriptive error when k6 inspect exits non-zero', async () => {
+    const { validateScript } = await import('../runner');
+    const proc = makeProc({ stderr: 'GoError: invalid JS' });
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const p = validateScript('/tmp/bad.js');
+    proc.stdout.emit('data', Buffer.from(''));
+    proc.stderr.emit('data', Buffer.from('GoError: invalid JS'));
+    proc.emit('close', 1);
+    await expect(p).rejects.toThrow(/k6 script validation failed.*exit 1/);
+  });
+
+  it('rejects when the spawn itself errors (k6 not found)', async () => {
+    const { validateScript } = await import('../runner');
+    const proc = makeProc();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const p = validateScript('/tmp/script.js');
+    proc.emit('error', new Error('ENOENT: k6 not found'));
+    await expect(p).rejects.toThrow('ENOENT');
+  });
+});
+
+// ─── runK6Test — exit code handling ───────────────────────────────────────────
+
+describe('runK6Test — exit code handling', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setupFs();
+  });
+
+  it('resolves with metrics on exit code 0 (success)', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const promise = runK6Test('test-0', 'export default function(){}', undefined, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 0);
+
+    const result = await promise;
+    expect(result.metrics.requestsTotal).toBeGreaterThan(0);
+  });
+
+  it('resolves on exit code 99 (threshold violation — test ran)', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const promise = runK6Test('test-99', 'export default function(){}', undefined, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 99);
+
+    const result = await promise;
+    expect(result.metrics.requestsTotal).toBeGreaterThan(0);
+  });
+
+  it('rejects on non-zero/non-99 exit when requestsTotal === 0', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stderr: 'fatal error' }); // no stdout → requestsTotal = 0
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const promise = runK6Test('test-fail', 'bad script', undefined, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 1);
+
+    await expect(promise).rejects.toThrow(/k6 exited with code 1/);
+  });
+
+  it('resolves with partial metrics on non-zero exit when requestsTotal > 0', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT, stderr: 'warning' });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const promise = runK6Test('test-partial', 'export default function(){}', undefined, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 127);
+
+    const result = await promise;
+    expect(result.metrics.requestsTotal).toBeGreaterThan(0);
+  });
+
+  it('attaches executionLog to the resolved result', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT + '\nINFO some message' });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const promise = runK6Test('test-log', 'export default function(){}', undefined, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 0);
+
+    const result = await promise;
+    expect(typeof result.executionLog).toBe('string');
+  });
+});
+
+// ─── runK6Test — validateScript failure → rm cleanup ─────────────────────────
+
+describe('runK6Test — validateScript failure cleans up runDir', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setupFs();
+  });
+
+  it('removes the runDir when k6 inspect fails', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc({ stderr: 'SyntaxError in script' });
+    mockSpawn.mockReturnValueOnce(validate);
+
+    const promise = runK6Test('test-val-fail', 'bad script', undefined, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    validate.stderr.emit('data', Buffer.from('SyntaxError'));
+    validate.emit('close', 1);
+
+    await expect(promise).rejects.toThrow(/validation failed/);
+    expect(mockRm).toHaveBeenCalledWith(
+      expect.stringContaining('k6-run-test-val-fail'),
+      { recursive: true, force: true },
+    );
+  });
+});
+
+// ─── runK6Test — data file writing ───────────────────────────────────────────
+
+describe('runK6Test — data file writing', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setupFs();
+  });
+
+  async function runToCompletion(testId: string, extra?: { testData?: unknown[]; csvData?: string }) {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const promise = runK6Test(
+      testId,
+      'export default function(){}',
+      undefined,
+      extra?.testData as Array<Record<string, string>> | undefined,
+      extra?.csvData,
+      makeCtx(),
+    );
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 0);
+    await promise;
+  }
+
+  it('writes data.json when testData is non-empty', async () => {
+    const testData = [{ userId: '1', token: 'abc' }];
+    await runToCompletion('test-data-json', { testData });
+
+    const dataWrite = mockWriteFile.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('data.json'));
+    expect(dataWrite).toBeDefined();
+    expect(dataWrite![1]).toBe(JSON.stringify(testData));
+  });
+
+  it('does NOT write data.json when testData is empty array', async () => {
+    await runToCompletion('test-no-data', { testData: [] });
+    const dataWrite = mockWriteFile.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('data.json'));
+    expect(dataWrite).toBeUndefined();
+  });
+
+  it('does NOT write data.json when testData is undefined', async () => {
+    await runToCompletion('test-no-data2');
+    const dataWrite = mockWriteFile.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('data.json'));
+    expect(dataWrite).toBeUndefined();
+  });
+
+  it('writes data.csv when csvData (base64) is provided', async () => {
+    const csvContent = 'name,value\nfoo,bar';
+    const csvData    = Buffer.from(csvContent).toString('base64');
+    await runToCompletion('test-csv', { csvData });
+
+    const csvWrite = mockWriteFile.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('data.csv'));
+    expect(csvWrite).toBeDefined();
+    expect(Buffer.isBuffer(csvWrite![1])).toBe(true);
+    expect(csvWrite![1].toString()).toBe(csvContent);
+  });
+});
+
+// ─── runK6Test — envVar injection safety ─────────────────────────────────────
+
+describe('runK6Test — envVar injection safety', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setupFs();
+  });
+
+  async function getRunArgs(testId: string, envVars: Record<string, string>): Promise<string[]> {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const promise = runK6Test(testId, 'export default function(){}', envVars, undefined, undefined, makeCtx());
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 0);
+    await promise;
+
+    return mockSpawn.mock.calls[1][1] as string[]; // second spawn call = k6 run
+  }
+
+  it('passes valid env vars as --env KEY=VALUE args', async () => {
+    const args = await getRunArgs('test-env-valid', { API_KEY: 'secret', BASE_URL: 'https://x.com' });
+    const envPairs = args.filter((_: string, i: number) => args[i - 1] === '--env');
+    expect(envPairs).toContain('API_KEY=secret');
+    expect(envPairs).toContain('BASE_URL=https://x.com');
+  });
+
+  it('strips keys that start with a digit', async () => {
+    const args = await getRunArgs('test-env-digit', { '1INVALID': 'nope', VALID: 'ok' });
+    const envPairs = args.filter((_: string, i: number) => args[i - 1] === '--env');
+    expect(envPairs).toContain('VALID=ok');
+    expect(envPairs.some((a: string) => a.startsWith('1INVALID'))).toBe(false);
+  });
+
+  it('strips keys that contain spaces', async () => {
+    const args = await getRunArgs('test-env-space', { 'KEY WITH SPACE': 'nope', VALID: 'ok' });
+    const envPairs = args.filter((_: string, i: number) => args[i - 1] === '--env');
+    expect(envPairs.some((a: string) => a.startsWith('KEY WITH'))).toBe(false);
+  });
+
+  it('strips values that contain newlines', async () => {
+    const args = await getRunArgs('test-env-newline', { SAFE: 'good', BAD: 'bad\nvalue' });
+    const envPairs = args.filter((_: string, i: number) => args[i - 1] === '--env');
+    expect(envPairs).toContain('SAFE=good');
+    expect(envPairs.some((a: string) => a.includes('bad\n'))).toBe(false);
+  });
+
+  it('strips values that contain null bytes', async () => {
+    const args = await getRunArgs('test-env-null', { SAFE: 'good', BAD: 'bad\0value' });
+    const envPairs = args.filter((_: string, i: number) => args[i - 1] === '--env');
+    expect(envPairs.some((a: string) => a.includes('\0'))).toBe(false);
+  });
+
+  it('skips if no envVars provided', async () => {
+    const args = await getRunArgs('test-env-empty', {});
+    expect(args).not.toContain('--env');
+  });
+});
+
+// ─── runK6Test — SIGTERM / SIGKILL escalation ─────────────────────────────────
+
+describe('runK6Test — SIGTERM/SIGKILL escalation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    vi.resetModules();
+    setupFs();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sends SIGTERM to the k6 process when maxDurationMs elapses', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const ctx = makeCtx();
+    ctx.maxDurationMs  = 10_000;
+    ctx.gracePeriodMs  = 30_000;
+    ctx.liveIntervalMs = 5_000;
+
+    const promise = runK6Test('test-sigterm', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+
+    vi.advanceTimersByTime(10_001);
+    expect(run.kill).toHaveBeenCalledWith('SIGTERM');
+
+    run.emit('close', 0);
+    await promise;
+  });
+
+  it('sends SIGKILL after gracePeriodMs if the process has not exited after SIGTERM', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const runningTests = new Map<string, ChildProcess>();
+    const ctx = makeCtx(runningTests);
+    ctx.maxDurationMs  = 10_000;
+    ctx.gracePeriodMs  = 30_000;
+    ctx.liveIntervalMs = 5_000;
+
+    const promise = runK6Test('test-sigkill', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+
+    // runningTests still has the entry so SIGKILL is sent
+    vi.advanceTimersByTime(10_001); // SIGTERM
+    expect(run.kill).toHaveBeenCalledWith('SIGTERM');
+
+    vi.advanceTimersByTime(30_001); // grace period → SIGKILL
+    expect(run.kill).toHaveBeenCalledWith('SIGKILL');
+
+    run.emit('close', 0);
+    await promise;
+  });
+});
+
+// ─── runK6Test — runningTests / cancellation tracking ─────────────────────────
+
+describe('runK6Test — runningTests map', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setupFs();
+  });
+
+  it('adds the process to runningTests while running, removes it on close', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const runningTests = new Map<string, ChildProcess>();
+    const ctx = makeCtx(runningTests);
+
+    const promise = runK6Test('test-map', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+
+    // While running, the process is tracked
+    expect(runningTests.has('test-map')).toBe(true);
+
+    run.emit('close', 0);
+    await promise;
+
+    // After completion, it's removed
+    expect(runningTests.has('test-map')).toBe(false);
+  });
+
+  it('calls notifyRunning once after validation passes', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc({ stdout: K6_OUTPUT });
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    const ctx = makeCtx();
+    const promise = runK6Test('test-notify', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    run.emit('close', 0);
+    await promise;
+
+    expect(ctx.notifyRunning).toHaveBeenCalledOnce();
+    expect(ctx.notifyRunning).toHaveBeenCalledWith('test-notify');
+  });
+});
+
+// ─── handleRetry ─────────────────────────────────────────────────────────────
+
+describe('handleRetry', () => {
+  beforeEach(() => { vi.resetModules(); });
+
+  it('retries with incremented x-retry-count when below MAX_RETRIES', async () => {
+    const { handleRetry } = await import('../runner');
+    const ch = { publish: vi.fn(), sendToQueue: vi.fn(), ack: vi.fn() };
+    const msg = { content: Buffer.from('{}'), properties: { headers: { 'x-retry-count': 1 } } };
+
+    handleRetry(ch as any, msg as any, 'backend-tests', 'backend-tests.dlq', 'tid-1');
+
+    expect(ch.publish).toHaveBeenCalledWith(
+      '',
+      'backend-tests',
+      msg.content,
+      expect.objectContaining({ headers: expect.objectContaining({ 'x-retry-count': 2 }) }),
+    );
+    expect(ch.sendToQueue).not.toHaveBeenCalled();
+    expect(ch.ack).toHaveBeenCalledWith(msg);
+  });
+
+  it('routes to DLQ after MAX_RETRIES exhausted', async () => {
+    const { handleRetry, MAX_RETRIES } = await import('../runner');
+    const ch = { publish: vi.fn(), sendToQueue: vi.fn(), ack: vi.fn() };
+    const msg = { content: Buffer.from('{}'), properties: { headers: { 'x-retry-count': MAX_RETRIES } } };
+
+    handleRetry(ch as any, msg as any, 'backend-tests', 'backend-tests.dlq', 'tid-2');
+
+    expect(ch.sendToQueue).toHaveBeenCalledWith('backend-tests.dlq', msg.content, { persistent: true });
+    expect(ch.publish).not.toHaveBeenCalled();
+    expect(ch.ack).toHaveBeenCalledWith(msg);
+  });
+
+  it('treats missing x-retry-count header as 0 (first attempt)', async () => {
+    const { handleRetry } = await import('../runner');
+    const ch = { publish: vi.fn(), sendToQueue: vi.fn(), ack: vi.fn() };
+    const msg = { content: Buffer.from('{}'), properties: { headers: {} } };
+
+    handleRetry(ch as any, msg as any, 'backend-tests', 'backend-tests.dlq', 'tid-3');
+
+    expect(ch.publish).toHaveBeenCalledWith(
+      '',
+      'backend-tests',
+      msg.content,
+      expect.objectContaining({ headers: expect.objectContaining({ 'x-retry-count': 1 }) }),
+    );
+  });
+
+  it('respects a custom maxRetries argument', async () => {
+    const { handleRetry } = await import('../runner');
+    const ch = { publish: vi.fn(), sendToQueue: vi.fn(), ack: vi.fn() };
+    const msg = { content: Buffer.from('{}'), properties: { headers: { 'x-retry-count': 1 } } };
+
+    // maxRetries = 1 means retry count 1 is already at the limit → DLQ
+    handleRetry(ch as any, msg as any, 'q', 'q.dlq', 'tid-4', 1);
+
+    expect(ch.sendToQueue).toHaveBeenCalledWith('q.dlq', msg.content, { persistent: true });
+  });
+});
+
+// ─── makeLineBuffer ───────────────────────────────────────────────────────────
+
+describe('makeLineBuffer', () => {
+  it('emits complete lines as they arrive', async () => {
+    const { makeLineBuffer } = await import('../runner');
+    const lines: string[] = [];
+    const buf = makeLineBuffer(l => lines.push(l));
+
+    buf(Buffer.from('hello\nworld\n'));
+    expect(lines).toEqual(['hello', 'world']);
+  });
+
+  it('buffers incomplete lines across chunks', async () => {
+    const { makeLineBuffer } = await import('../runner');
+    const lines: string[] = [];
+    const buf = makeLineBuffer(l => lines.push(l));
+
+    buf(Buffer.from('hel'));
+    expect(lines).toHaveLength(0);
+    buf(Buffer.from('lo\n'));
+    expect(lines).toEqual(['hello']);
+  });
+
+  it('ignores empty lines', async () => {
+    const { makeLineBuffer } = await import('../runner');
+    const lines: string[] = [];
+    const buf = makeLineBuffer(l => lines.push(l));
+
+    buf(Buffer.from('a\n\n\nb\n'));
+    expect(lines).toEqual(['a', 'b']);
+  });
+});
+
+// ─── k6Level ─────────────────────────────────────────────────────────────────
+
+describe('k6Level', () => {
+  it.each([
+    ['ERRO some error', 'ERROR'],
+    ['WARN some warning', 'WARN'],
+    ['DEBU debug output', 'DEBUG'],
+    ['INFO info line', 'INFO'],
+    ['     default line', 'INFO'],
+  ])('maps %s to level %s', async (line, expected) => {
+    const { k6Level } = await import('../runner');
+    expect(k6Level(line)).toBe(expected);
+  });
+});

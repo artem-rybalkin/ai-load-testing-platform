@@ -679,3 +679,169 @@ describe('handleResult — fetchExternalMetricsForTest', () => {
     expect(body.externalMetrics[0].sourceName).toBe('Unscoped');
   });
 });
+
+// ─── M3: callAnalyserService — geminiRateLimited branch ─────────────────────
+
+describe('handleResult — geminiRateLimited branch (M3)', () => {
+  it('posts a quota-exceeded status_message when geminiRateLimited=true comes back from analyser', async () => {
+    const testId = crypto.randomUUID();
+    // Pre-insert a pending row so /results/:testId/message has somewhere to update
+    await pool.query(
+      `INSERT INTO test_results (test_id, type, target_url, status) VALUES ($1, 'backend', 'http://example.com', 'pending')`,
+      [testId],
+    );
+
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            perfStatus: 'passed',
+            diffs: [],
+            thresholdViolations: [],
+            summary: 'deterministic',
+            geminiRateLimited: true,
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult({ testId });
+    await handleResult(pool, result);
+
+    // Should have fired a POST /results/:testId/message with the quota warning
+    const messageCall = mockFetch.mock.calls.find(
+      ([url]: [string]) => String(url).includes(`/results/${testId}/message`),
+    );
+    expect(messageCall).toBeDefined();
+    const body = JSON.parse(messageCall![1].body);
+    expect(body.message).toMatch(/Gemini quota exceeded/i);
+  });
+
+  it('still saves the analysis when geminiRateLimited=true (aiInsights absent)', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            perfStatus: 'passed',
+            diffs: [],
+            thresholdViolations: [],
+            summary: 'deterministic — no AI',
+            geminiRateLimited: true,
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult();
+    await handleResult(pool, result);
+
+    const { rows } = await pool.query(
+      'SELECT analysis FROM test_results WHERE test_id = $1',
+      [result.testId],
+    );
+    expect(rows[0].analysis.summary).toBe('deterministic — no AI');
+    // geminiRateLimited is stripped from the saved payload
+    expect(rows[0].analysis.geminiRateLimited).toBeUndefined();
+    // aiInsights not present in this response
+    expect(rows[0].analysis.aiInsights).toBeUndefined();
+  });
+
+  it('does NOT post a message when geminiRateLimited is false', async () => {
+    const testId = crypto.randomUUID();
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('/analyse')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            perfStatus: 'passed',
+            diffs: [],
+            thresholdViolations: [],
+            summary: 'ai summary',
+            geminiRateLimited: false,
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const result = makeResult({ testId });
+    await handleResult(pool, result);
+
+    const messageCall = mockFetch.mock.calls.find(
+      ([url]: [string]) => String(url).includes(`/results/${testId}/message`),
+    );
+    expect(messageCall).toBeUndefined();
+  });
+});
+
+// ─── M5: handleResult — transaction rollback on INSERT failure ─────────────────
+
+describe('handleResult — transaction rollback (M5)', () => {
+  it('rolls back the transaction and re-throws when the INSERT fails', async () => {
+    // Import a fresh pool wrapper that has a broken connect() for the write client
+    const originalConnect = pool.connect.bind(pool);
+    let callCount = 0;
+    vi.spyOn(pool, 'connect').mockImplementation(async () => {
+      const client = await originalConnect();
+      // Override query to throw on BEGIN … INSERT sequence
+      const origQuery = client.query.bind(client);
+      let queryCount = 0;
+      (client as any).query = async (...args: unknown[]) => {
+        queryCount++;
+        if (queryCount === 2) {
+          // Second call inside the transaction (INSERT) — throw
+          throw new Error('DB constraint violation: test error');
+        }
+        return origQuery(...args as Parameters<typeof origQuery>);
+      };
+      callCount++;
+      return client;
+    });
+
+    const result = makeResult();
+    await expect(handleResult(pool, result)).rejects.toThrow('DB constraint violation');
+
+    // Verify nothing was committed
+    const { rows } = await pool.query(
+      'SELECT status FROM test_results WHERE test_id = $1',
+      [result.testId],
+    );
+    expect(rows).toHaveLength(0);
+
+    vi.restoreAllMocks();
+  });
+
+  it('does not fire webhooks when the transaction is rolled back', async () => {
+    await pool.query(
+      `INSERT INTO webhooks (url, events) VALUES ('https://hook.example.com/fail', '{failed,degraded}')`,
+    );
+
+    vi.spyOn(pool, 'connect').mockImplementationOnce(async () => {
+      const client = await (pool as any)._connect();
+      const origQuery = client.query.bind(client);
+      let queryCount = 0;
+      (client as any).query = async (...args: unknown[]) => {
+        queryCount++;
+        if (queryCount === 2) throw new Error('forced failure');
+        return origQuery(...args as Parameters<typeof origQuery>);
+      };
+      return client;
+    });
+
+    const result = makeResult({ metrics: failedMetrics });
+    await expect(handleResult(pool, result)).rejects.toThrow('forced failure');
+
+    await new Promise(r => setTimeout(r, 50));
+    const webhookCall = mockFetch.mock.calls.find(
+      ([url]: [string]) => String(url).includes('hook.example.com'),
+    );
+    expect(webhookCall).toBeUndefined();
+
+    vi.restoreAllMocks();
+  });
+});
+

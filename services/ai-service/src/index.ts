@@ -2,15 +2,14 @@ import './tracing';
 import amqplib from 'amqplib';
 import Fastify from 'fastify';
 
-import { EnrichedTestRequest, connectWithBackoff, internalHeaders } from '@alt/shared';
-import { generateScript, compareDescriptions } from './generator';
+import { EnrichedTestRequest, connectWithBackoff } from '@alt/shared';
 import { log } from './logger';
+import { processAiRequest } from './processor';
 
 const CONSUME_QUEUE      = 'ai-requests';
 const BACKEND_QUEUE      = 'backend-tests';
 const CLIENT_QUEUE       = 'client-tests';
 const DLQ                = `${CONSUME_QUEUE}.dlq`;
-const MAX_RETRIES        = 3;
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '3');
 
 let queueConnected = false;
@@ -73,6 +72,8 @@ const startConsumer = async (): Promise<void> => {
   queueConnected = true;
   log.info({ queue: CONSUME_QUEUE, concurrency: WORKER_CONCURRENCY }, 'AI-service listening');
 
+  const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
+
   channel.consume(CONSUME_QUEUE, async (msg) => {
     if (!msg) return;
 
@@ -87,68 +88,7 @@ const startConsumer = async (): Promise<void> => {
     }
     log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Processing script request');
 
-    const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
-    const postMessage = (message: string): Promise<Response | void> =>
-      fetch(`${resultsUrl}/results/${test.id}/message`, {
-        method: 'POST',
-        headers: internalHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ message }),
-      }).catch((err: Error) => log.debug({ testId: test.id, err: err.message }, 'postMessage delivery failed'));
-
-    try {
-      const targetQueue = (test.type === 'backend' || test.type === 'flow') ? BACKEND_QUEUE : CLIENT_QUEUE;
-
-      // Description comparison path: cached script exists and has a stored description
-      if (test.cachedScript && test.description) {
-        if (test.cachedScriptDescription == null) {
-          log.info({ testId: test.id }, 'Cached script has no stored description — regenerating');
-          // falls through to generateScript below; clear scriptId so worker overwrites the row
-          test = { ...test, scriptId: undefined };
-        } else {
-          // Skip Gemini comparison if descriptions are identical (saves quota)
-          const same = test.description.trim().toLowerCase() === test.cachedScriptDescription.trim().toLowerCase();
-          const verdict = same ? 'REUSE' : await compareDescriptions(test.description, test.cachedScriptDescription, test.projectId);
-          log.info({ testId: test.id, verdict }, 'Description comparison result');
-          if (verdict === 'REUSE') {
-            const reused: EnrichedTestRequest = { ...test, generatedScript: test.cachedScript, reusedScript: true };
-            channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(reused)), { persistent: true });
-            log.info({ testId: test.id, targetQueue }, 'Script reused after semantic comparison');
-            channel.ack(msg);
-            return;
-          }
-          // REGENERATE: clear scriptId so worker overwrites the row with the new script
-          test = { ...test, scriptId: undefined };
-          log.info({ testId: test.id }, 'Description mismatch — generating new script');
-        }
-      }
-
-      await postMessage('Generating test script with AI…');
-      const script = await generateScript(test);
-      await postMessage('Script ready — starting test…');
-      const enrichedTest: EnrichedTestRequest = { ...test, generatedScript: script };
-
-      channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(enrichedTest)), { persistent: true });
-      log.info({ testId: test.id, targetQueue }, 'Script generated and routed');
-      channel.ack(msg);
-    } catch (err) {
-      log.error({ testId: test.id, err: (err as Error).message }, 'Script generation failed');
-      const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
-      if (retryCount < MAX_RETRIES) {
-        const attemptsLeft = MAX_RETRIES - retryCount;
-        await postMessage(`Gemini unavailable — retrying… (${attemptsLeft} attempt${attemptsLeft !== 1 ? 's' : ''} left)`);
-        log.warn({ testId: test.id, retryCount: retryCount + 1 }, 'Retrying AI generation');
-        channel.publish('', CONSUME_QUEUE, msg.content, {
-          persistent: true,
-          headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 }
-        });
-      } else {
-        await postMessage('Script generation failed after 3 attempts — test could not start');
-        log.error({ testId: test.id }, 'Max retries exceeded, routing to DLQ');
-        channel.sendToQueue(DLQ, msg.content, { persistent: true });
-        fetch(`${resultsUrl}/results/${test.id}/fail`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
-      }
-      channel.ack(msg);
-    }
+    await processAiRequest(test, { channel, msg, resultsUrl });
   });
 };
 

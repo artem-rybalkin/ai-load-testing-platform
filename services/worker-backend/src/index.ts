@@ -1,16 +1,14 @@
 import './tracing';
 import amqplib from 'amqplib';
-import { spawn, ChildProcess } from 'child_process';
-import { writeFile, readFile, mkdir, rm, open } from 'fs/promises';
+import { ChildProcess } from 'child_process';
 import { Pool } from 'pg';
 import * as os from 'os';
-import * as path from 'path';
 import Fastify from 'fastify';
 
 import { trace } from '@opentelemetry/api';
-import { EnrichedTestRequest, TestResult, BackendMetrics, LiveMetricPoint, connectWithBackoff, stripAnsi, internalHeaders } from '@alt/shared';
-import { parseK6Output, aggregateWindow, parseK6JsonOutput, LIVE_WINDOW_SEC } from './parser';
+import { EnrichedTestRequest, TestResult, connectWithBackoff, internalHeaders } from '@alt/shared';
 import { log } from './logger';
+import { runK6Test, handleRetry, GRACE_PERIOD_MS, LIVE_INTERVAL_MS } from './runner';
 
 let queueConnected = false;
 let connection: amqplib.ChannelModel | null = null;
@@ -32,19 +30,15 @@ const QUEUE            = 'backend-tests';
 const CANCEL_EXCHANGE  = 'cancel-fanout';  // fanout — all replicas get every cancel
 const RESULTS_QUEUE    = 'test-results';
 const DLQ              = `${QUEUE}.dlq`;
-const MAX_RETRIES   = 3;
-const RESULTS_URL   = process.env.RESULTS_URL || 'http://results-service:3004';
-;
-const LIVE_INTERVAL_MS     = LIVE_WINDOW_SEC * 1000;
+const RESULTS_URL      = process.env.RESULTS_URL || 'http://results-service:3004';
 const MAX_TEST_DURATION_MS = parseInt(process.env.K6_MAX_DURATION_MS ?? '600000'); // 10 min
-const GRACE_PERIOD_MS      = 30000;
 const WORKER_CONCURRENCY   = parseInt(process.env.WORKER_CONCURRENCY ?? '1');
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // Track in-progress k6 processes for cancellation
-const runningTests  = new Map<string, ChildProcess>();
+const runningTests   = new Map<string, ChildProcess>();
 const cancelledTests = new Set<string>();
 
 const saveScript = async (
@@ -75,212 +69,9 @@ const saveScript = async (
   return rows[0].id;
 };
 
-// ── Execution log helpers ─────────────────────────────────────────────────────
-
-const k6Level = (line: string): string => {
-  if (line.startsWith('ERRO')) return 'ERROR';
-  if (line.startsWith('WARN')) return 'WARN';
-  if (line.startsWith('DEBU')) return 'DEBUG';
-  return 'INFO';
-};
-
-const makeLineBuffer = (onLine: (line: string) => void): ((chunk: Buffer) => void) => {
-  let buf = '';
-  return (chunk: Buffer) => {
-    buf += chunk.toString('utf-8');
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const l of lines) { if (l.trim()) onLine(l); }
-  };
-};
-
-const postLogLine = async (testId: string, level: string, line: string): Promise<void> => {
-  try {
-    await fetch(`${RESULTS_URL}/results/${testId}/log-line`, {
-      method: 'POST',
-      headers: internalHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ level, line }),
-    });
-  } catch { /* best-effort */ }
-};
-
-const MAX_LOG_LINES = 5000;
-const MAX_LOG_BYTES = 100 * 1024; // 100 KB
-
-const postLiveMetric = async (testId: string, point: LiveMetricPoint): Promise<void> => {
-  try {
-    await fetch(`${RESULTS_URL}/results/${testId}/live`, {
-      method: 'POST',
-      headers: internalHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(point)
-    });
-  } catch { /* best-effort */ }
-};
-
-const validateScript = (scriptPath: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const k6 = spawn('k6', ['inspect', scriptPath]);
-    const stderrChunks: Buffer[] = [];
-    k6.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    k6.on('close', code => {
-      if (code === 0) { resolve(); return; }
-      // k6 inspect loads + statically evaluates the script's init scope (no
-      // network calls), so a non-zero exit here means the AI-generated script
-      // itself is broken (syntax/runtime error) — capture stderr so the cause
-      // is diagnosable instead of just an opaque exit code.
-      const detail = Buffer.concat(stderrChunks).toString('utf8').trim().slice(0, 2000);
-      reject(new Error(`k6 script validation failed (exit ${code})${detail ? `: ${detail}` : ''}`));
-    });
-    k6.on('error', reject);
-  });
-
-const runK6Test = async (
-  testId: string,
-  script: string,
-  envVars?: Record<string, string>,
-  testData?: Array<Record<string, string>>,
-  csvData?: string,
-): Promise<{ metrics: BackendMetrics; executionLog: string }> => {
-  // Per-test directory avoids file collisions when WORKER_CONCURRENCY > 1
-  const runDir    = path.join(os.tmpdir(), `k6-run-${testId}`);
-  await mkdir(runDir, { recursive: true });
-  const scriptPath = path.join(runDir, 'script.js');
-  const jsonPath   = path.join(runDir, 'live.json');
-
-  // Write all data files in parallel — they are independent
-  await Promise.all([
-    writeFile(scriptPath, script),
-    testData && testData.length > 0
-      ? writeFile(path.join(runDir, 'data.json'), JSON.stringify(testData))
-      : Promise.resolve(),
-    csvData
-      ? writeFile(path.join(runDir, 'data.csv'), Buffer.from(csvData, 'base64'))
-      : Promise.resolve(),
-  ]);
-
-  await validateScript(scriptPath).catch(async (err) => {
-    await rm(runDir, { recursive: true, force: true }).catch(() => {});
-    throw err;
-  });
-
-  return new Promise((resolve, reject) => {
-    const SAFE_KEY = /^[A-Z_][A-Z0-9_]*$/i;
-    const envArgs = Object.entries(envVars ?? {})
-      .filter(([k, v]) => SAFE_KEY.test(k) && !v.includes('\n') && !v.includes('\0') && k.length <= 64 && v.length <= 1024)
-      .flatMap(([k, v]) => ['--env', `${k}=${v}`]);
-    const k6 = spawn('k6', [
-      'run',
-      '--out', `json=${jsonPath}`,
-      '--summary-trend-stats', 'avg,min,med,max,p(90),p(95),p(99)',
-      ...envArgs,
-      scriptPath,
-    ]);
-    runningTests.set(testId, k6);
-    // Mark running + exact k6 start time (for countdown) in one call — fires
-    // only once validation has passed and the process has actually spawned,
-    // so a validation failure never produces a misleading "running" blip.
-    notifyRunning(testId).catch(() => {});
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let fileOffset = 0;
-
-    // Execution log accumulation (capped at MAX_LOG_LINES / MAX_LOG_BYTES)
-    const logLines: string[] = [];
-    let logBytes = 0;
-    const addLogLine = (level: string, raw: string): void => {
-      const text = stripAnsi(raw).trimEnd();
-      if (!text || logLines.length >= MAX_LOG_LINES || logBytes >= MAX_LOG_BYTES) return;
-      logLines.push(`[${level}] ${text}`);
-      logBytes += level.length + Buffer.byteLength(text, 'utf8') + 3;
-      postLogLine(testId, level, text).catch(() => {});
-    };
-
-    const stdoutLineBuf = makeLineBuffer(line => addLogLine(k6Level(line), line));
-    const stderrLineBuf = makeLineBuffer(line => addLogLine(k6Level(line), line));
-
-    k6.stdout.on('data', (d: Buffer) => { stdoutChunks.push(d); stdoutLineBuf(d); });
-    k6.stderr.on('data', (d: Buffer) => { stderrChunks.push(d); stderrLineBuf(d); });
-
-    const readAndPost = async (): Promise<void> => {
-      try {
-        const fh = await open(jsonPath, 'r');
-        try {
-          const { size } = await fh.stat();
-          if (size <= fileOffset) return;
-          const buf = Buffer.allocUnsafe(size - fileOffset);
-          await fh.read(buf, 0, buf.length, fileOffset);
-          fileOffset = size;
-          const newLines = buf.toString('utf-8').split('\n').filter(l => l.trim());
-          const agg = aggregateWindow(newLines);
-          if (agg) await postLiveMetric(testId, { timestamp: new Date().toISOString(), ...agg });
-        } finally {
-          await fh.close();
-        }
-      } catch { /* file may not exist yet */ }
-    };
-
-    const liveInterval = setInterval(readAndPost, LIVE_INTERVAL_MS);
-
-    // r4: hard execution timeout
-    const killTimer = setTimeout(() => {
-      log.warn({ testId, maxMs: MAX_TEST_DURATION_MS }, 'k6 test exceeded max duration, sending SIGTERM');
-      k6.kill('SIGTERM');
-      setTimeout(() => { if (runningTests.has(testId)) k6.kill('SIGKILL'); }, GRACE_PERIOD_MS);
-    }, MAX_TEST_DURATION_MS);
-
-    k6.on('close', async (code) => {
-      clearInterval(liveInterval);
-      clearTimeout(killTimer);
-      runningTests.delete(testId);
-      await readAndPost();
-
-      const jsonContent = await readFile(jsonPath, 'utf-8').catch(() => '');
-      await rm(runDir, { recursive: true, force: true }).catch(() => {});
-
-      // k6 exit codes:
-      //   0  — all good
-      //   99 — threshold violations (test ran to completion; our analyzer handles SLO checks)
-      // else — script error, configuration failure, or crash
-      if (code !== 0 && code !== 99) {
-        log.warn({ testId, code }, 'k6 exited with non-zero code — parsing partial output');
-      }
-
-      const output = Buffer.concat(stdoutChunks).toString() + Buffer.concat(stderrChunks).toString();
-      log.debug({ testId, exitCode: code }, 'k6 full output received');
-      const metrics = parseK6Output(output);
-      const { statusCodes, errorBreakdown, stepMetrics } = parseK6JsonOutput(jsonContent);
-      metrics.statusCodes = statusCodes;
-      metrics.errorBreakdown = errorBreakdown;
-      if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
-
-      // Only reject if we got nothing useful AND it was a hard failure (not a threshold violation)
-      if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
-        const e = Object.assign(new Error(`k6 exited with code ${code}: ${Buffer.concat(stderrChunks).toString().slice(-500)}`), { partialLog: logLines.join('\n') });
-        reject(e);
-        return;
-      }
-
-      resolve({ metrics, executionLog: logLines.join('\n') });
-    });
-
-    k6.on('error', async (err) => {
-      clearInterval(liveInterval);
-      clearTimeout(killTimer);
-      runningTests.delete(testId);
-      await rm(runDir, { recursive: true, force: true }).catch(() => {});
-      (err as Error & { partialLog?: string }).partialLog = logLines.join('\n');
-      reject(err);
-    });
-  });
-};
-
-// Status transitions go through results-service's REST endpoints (matching
-// worker-client) rather than writing test_results directly: those endpoints
-// both clear the stale status_message AND broadcast the test:status WebSocket
-// event. A direct pool.query here would silently desync any open result page —
-// it'd never receive the push notification and would be stuck showing the
-// last status it fetched (e.g. "pending") until manually reloaded.
+// Status transitions go through results-service's REST endpoints rather than
+// writing test_results directly: those endpoints both clear the stale
+// status_message AND broadcast the test:status WebSocket event.
 const notifyRunning = async (testId: string): Promise<void> => {
   try { await fetch(`${RESULTS_URL}/results/${testId}/running`, { method: 'POST', headers: internalHeaders() }); }
   catch { /* best-effort */ }
@@ -302,26 +93,24 @@ const notifyCancelled = async (testId: string): Promise<void> => {
   catch { /* best-effort */ }
 };
 
-// r1: retry helper — republish with incremented counter or route to DLQ
-const handleRetry = (
-  channel: amqplib.Channel,
-  msg: amqplib.Message,
-  queue: string,
-  dlq: string,
-  testId: string
-): void => {
-  const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
-  if (retryCount < MAX_RETRIES) {
-    log.warn({ testId, retryCount: retryCount + 1, maxRetries: MAX_RETRIES }, 'Retrying message');
-    channel.publish('', queue, msg.content, {
-      persistent: true,
-      headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 }
+const postLogLine = async (testId: string, level: string, line: string): Promise<void> => {
+  try {
+    await fetch(`${RESULTS_URL}/results/${testId}/log-line`, {
+      method: 'POST',
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ level, line }),
     });
-  } else {
-    log.error({ testId, retryCount }, 'Max retries exceeded, routing to DLQ');
-    channel.sendToQueue(dlq, msg.content, { persistent: true });
-  }
-  channel.ack(msg);
+  } catch { /* best-effort */ }
+};
+
+const postLiveMetric = async (testId: string, point: import('@alt/shared').LiveMetricPoint): Promise<void> => {
+  try {
+    await fetch(`${RESULTS_URL}/results/${testId}/live`, {
+      method: 'POST',
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(point)
+    });
+  } catch { /* best-effort */ }
 };
 
 let reconnecting = false;
@@ -412,9 +201,22 @@ const start = async (): Promise<void> => {
     }
 
     try {
-      // Status flips to 'running' (+ started_at) inside runK6Test, once
-      // validation passes and the k6 process actually spawns — see notifyRunning.
-      const { metrics, executionLog } = await runK6Test(test.id, test.generatedScript!, test.envVars, test.testData, test.csvData);
+      const { metrics, executionLog } = await runK6Test(
+        test.id,
+        test.generatedScript!,
+        test.envVars,
+        test.testData,
+        test.csvData,
+        {
+          runningTests,
+          notifyRunning,
+          postLogLine,
+          postLiveMetric,
+          maxDurationMs:  MAX_TEST_DURATION_MS,
+          gracePeriodMs:  GRACE_PERIOD_MS,
+          liveIntervalMs: LIVE_INTERVAL_MS,
+        },
+      );
 
       // r2: check if the test was cancelled while running
       if (cancelledTests.has(test.id)) {
