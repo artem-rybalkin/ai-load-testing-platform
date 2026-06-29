@@ -712,7 +712,7 @@ describe('handleResult — geminiRateLimited branch (M3)', () => {
 
     // Should have fired a POST /results/:testId/message with the quota warning
     const messageCall = mockFetch.mock.calls.find(
-      ([url]: [string]) => String(url).includes(`/results/${testId}/message`),
+      (c: unknown[]) => String(c[0]).includes(`/results/${testId}/message`),
     );
     expect(messageCall).toBeDefined();
     const body = JSON.parse(messageCall![1].body);
@@ -772,7 +772,7 @@ describe('handleResult — geminiRateLimited branch (M3)', () => {
     await handleResult(pool, result);
 
     const messageCall = mockFetch.mock.calls.find(
-      ([url]: [string]) => String(url).includes(`/results/${testId}/message`),
+      (c: unknown[]) => String(c[0]).includes(`/results/${testId}/message`),
     );
     expect(messageCall).toBeUndefined();
   });
@@ -837,7 +837,7 @@ describe('handleResult — transaction rollback (M5)', () => {
 
     await new Promise(r => setTimeout(r, 50));
     const webhookCall = mockFetch.mock.calls.find(
-      ([url]: [string]) => String(url).includes('hook.example.com'),
+      (c: unknown[]) => String(c[0]).includes('hook.example.com'),
     );
     expect(webhookCall).toBeUndefined();
 

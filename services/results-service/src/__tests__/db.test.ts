@@ -20,8 +20,8 @@ afterAll(async () => {
   await dropDb();
 });
 
-/** Retry a query a few times to absorb transient connection resets on a fresh Pool. */
-const queryWithRetry = async (p: Pool, sql: string, retries = 5, delayMs = 500): Promise<QueryResult> => {
+/** Retry a raw pool.query a few times to absorb transient connection resets on a fresh Pool. */
+const robustQuery = async (p: Pool, sql: string, retries = 5, delayMs = 500): Promise<QueryResult> => {
   for (let attempt = 1; ; attempt++) {
     try {
       return await p.query(sql);
@@ -57,7 +57,7 @@ describe('db — readPool fallback', () => {
     expect(readPool).toBe(pool);
 
     // Queries against readPool work using the primary container
-    const { rows } = await queryWithRetry(readPool, 'SELECT 1 AS one');
+    const { rows } = await robustQuery(readPool, 'SELECT 1 AS one');
     expect(rows[0].one).toBe(1);
 
     await pool.end();
@@ -73,7 +73,7 @@ describe('db — readPool fallback', () => {
     expect(readPool).not.toBe(pool);
 
     // The distinct readPool can independently query the (same) Testcontainer
-    const readResult = await queryWithRetry(readPool, 'SELECT 2 AS two');
+    const readResult = await robustQuery(readPool, 'SELECT 2 AS two');
     expect(readResult.rows[0].two).toBe(2);
 
     await pool.end();
