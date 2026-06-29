@@ -782,28 +782,10 @@ describe('handleResult — geminiRateLimited branch (M3)', () => {
 
 describe('handleResult — transaction rollback (M5)', () => {
   it('rolls back the transaction and re-throws when the INSERT fails', async () => {
-    // Import a fresh pool wrapper that has a broken connect() for the write client
-    const originalConnect = pool.connect.bind(pool);
-    let callCount = 0;
-    vi.spyOn(pool, 'connect').mockImplementation(async () => {
-      const client = await originalConnect();
-      // Override query to throw on BEGIN … INSERT sequence
-      const origQuery = client.query.bind(client);
-      let queryCount = 0;
-      (client as any).query = async (...args: unknown[]) => {
-        queryCount++;
-        if (queryCount === 2) {
-          // Second call inside the transaction (INSERT) — throw
-          throw new Error('DB constraint violation: test error');
-        }
-        return origQuery(...args as Parameters<typeof origQuery>);
-      };
-      callCount++;
-      return client;
-    });
-
-    const result = makeResult();
-    await expect(handleResult(pool, result)).rejects.toThrow('DB constraint violation');
+    // Pass a scriptId that references a non-existent test_scripts row (table is empty
+    // after TRUNCATE in beforeEach) → FK violation on INSERT → ROLLBACK → re-throw.
+    const result = makeResult({ scriptId: crypto.randomUUID() });
+    await expect(handleResult(pool, result)).rejects.toThrow();
 
     // Verify nothing was committed
     const { rows } = await pool.query(
@@ -811,8 +793,6 @@ describe('handleResult — transaction rollback (M5)', () => {
       [result.testId],
     );
     expect(rows).toHaveLength(0);
-
-    vi.restoreAllMocks();
   });
 
   it('does not fire webhooks when the transaction is rolled back', async () => {
@@ -820,28 +800,15 @@ describe('handleResult — transaction rollback (M5)', () => {
       `INSERT INTO webhooks (url, events) VALUES ('https://hook.example.com/fail', '{failed,degraded}')`,
     );
 
-    vi.spyOn(pool, 'connect').mockImplementationOnce(async () => {
-      const client = await (pool as any)._connect();
-      const origQuery = client.query.bind(client);
-      let queryCount = 0;
-      (client as any).query = async (...args: unknown[]) => {
-        queryCount++;
-        if (queryCount === 2) throw new Error('forced failure');
-        return origQuery(...args as Parameters<typeof origQuery>);
-      };
-      return client;
-    });
-
-    const result = makeResult({ metrics: failedMetrics });
-    await expect(handleResult(pool, result)).rejects.toThrow('forced failure');
+    // FK violation on INSERT → handleResult throws → fireWebhooks is never reached.
+    const result = makeResult({ metrics: failedMetrics, scriptId: crypto.randomUUID() });
+    await expect(handleResult(pool, result)).rejects.toThrow();
 
     await new Promise(r => setTimeout(r, 50));
     const webhookCall = mockFetch.mock.calls.find(
       (c: unknown[]) => String(c[0]).includes('hook.example.com'),
     );
     expect(webhookCall).toBeUndefined();
-
-    vi.restoreAllMocks();
   });
 });
 
