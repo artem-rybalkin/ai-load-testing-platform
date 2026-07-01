@@ -23,8 +23,8 @@ test.describe('Cancel flow', () => {
     // Wait to land on the result detail page
     await expect(page).toHaveURL(/\/results\/[0-9a-f-]{36}/, { timeout: 10_000 });
 
-    // Wait for the Cancel button to appear (only visible for pending/running tests)
-    const cancelBtn = page.getByRole('button', { name: /cancel/i });
+    // Wait for the Stop button to appear (only visible for pending/running tests)
+    const cancelBtn = page.getByRole('button', { name: /^stop$/i });
     await expect(cancelBtn).toBeVisible({ timeout: 30_000 });
 
     await cancelBtn.click();
