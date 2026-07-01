@@ -70,7 +70,8 @@ const summarizeSpecClientSide = (spec: Record<string, unknown>, sourceUrl: strin
   if (!paths) return '[No paths found in spec]';
   const title = (spec.info as Record<string, unknown> | undefined)?.title ?? 'API';
 
-  // Resolve base URL so the AI can build absolute step URLs
+  // Resolve base URL so the AI can build absolute step URLs.
+  // Replace 'localhost' with 'host.docker.internal' so generated step URLs work inside Docker.
   let baseUrl = '';
   const servers = spec.servers as Array<{ url: string }> | undefined;
   if (servers?.[0]?.url) {
@@ -82,6 +83,7 @@ const summarizeSpecClientSide = (spec: Record<string, unknown>, sourceUrl: strin
     if (host) baseUrl = `${schemes?.[0] ?? 'http'}://${host}${basePath}`;
     else { try { baseUrl = new URL(sourceUrl).origin; } catch { /* ignore */ } }
   }
+  baseUrl = baseUrl.replace(/\blocalhost\b/g, 'host.docker.internal');
 
   const lines: string[] = [`API: ${title}`, `Base URL: ${baseUrl}`];
   for (const [path, methods] of Object.entries(paths)) {
@@ -314,23 +316,29 @@ export default function ChatPage() {
     setPendingAttachments([]);
     setShowSwaggerInput(false);
 
-    // Auto-detect Swagger/OpenAPI URLs typed directly in the message text.
-    // Fetch the spec client-side (the browser can reach localhost; the server in Docker cannot),
-    // summarize it, and persist as sessionContext so AI retains it across all subsequent turns.
+    // Fetch swagger_url attachments client-side so the parsed spec is:
+    //   (a) included on this turn and (b) persisted as sessionContext for all subsequent turns.
+    // The browser can reach localhost URLs; the server in Docker cannot.
+    // This covers both the explicit URL-input path and auto-detected URLs typed in the message.
+    const swaggerUrlsToFetch: string[] = attachmentsToSend
+      .filter(a => a.type === 'swagger_url')
+      .map(a => a.content);
     if (content) {
       SWAGGER_URL_RE.lastIndex = 0;
-      const swaggerUrlMatches: string[] = [];
       let match: RegExpExecArray | null;
-      while ((match = SWAGGER_URL_RE.exec(content)) !== null) swaggerUrlMatches.push(match[0]);
-
-      for (const detectedUrl of swaggerUrlMatches) {
-        if (attachmentsToSend.some(a => a.filename === detectedUrl)) continue;
-        const summary = await fetchSwaggerClientSide(detectedUrl);
-        if (summary) {
-          const att: ChatAttachment = { type: 'documentation', content: summary, filename: detectedUrl };
-          attachmentsToSend.push(att);
-          setSessionContext(att);
-        }
+      while ((match = SWAGGER_URL_RE.exec(content)) !== null) {
+        if (!swaggerUrlsToFetch.includes(match[0])) swaggerUrlsToFetch.push(match[0]);
+      }
+    }
+    for (const detectedUrl of swaggerUrlsToFetch) {
+      // Remove the raw swagger_url stub — replace with the fetched documentation attachment
+      const stubIdx = attachmentsToSend.findIndex(a => a.type === 'swagger_url' && a.content === detectedUrl);
+      if (stubIdx !== -1) attachmentsToSend.splice(stubIdx, 1);
+      const summary = await fetchSwaggerClientSide(detectedUrl);
+      if (summary) {
+        const att: ChatAttachment = { type: 'documentation', content: summary, filename: detectedUrl };
+        attachmentsToSend.push(att);
+        setSessionContext(att);
       }
     }
 
