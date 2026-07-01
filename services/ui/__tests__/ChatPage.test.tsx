@@ -269,12 +269,12 @@ describe('ChatPage', () => {
     sessionStorage.clear();
     const flow = {
       steps: [
-        { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST' },
-        { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' },
+        { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST' as const },
+        { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' as const },
       ],
       targetUrl: 'http://localhost:8080',
       description: 'Register then login',
-      options: { vus: 3, duration: '2m', profile: 'load' },
+      options: { vus: 3, duration: '2m', profile: 'load' as const },
       thresholds: { p95: 500 },
     };
     mockParseChatPrompt.mockResolvedValue({ status: 'flowReady', flow });
@@ -298,8 +298,8 @@ describe('ChatPage', () => {
   it('calls createTest with type:flow and steps when Run flow test is clicked', async () => {
     const flow = {
       steps: [
-        { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST' },
-        { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' },
+        { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST' as const },
+        { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' as const },
       ],
       targetUrl: 'http://localhost:8080',
       description: 'Register then login',

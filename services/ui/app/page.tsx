@@ -312,8 +312,24 @@ function HomeContent() {
               duration: flow.options?.duration ?? f.duration,
               rampUp:   flow.options?.rampUp   ?? f.rampUp,
               profile:  flow.options?.profile  ?? f.profile,
-              thresholds: flow.thresholds ?? f.thresholds,
             }));
+            if (flow.thresholds) {
+              const t = flow.thresholds;
+              setThresholds(prev => ({
+                ...prev,
+                ...(t.p95             != null ? { p95:             String(t.p95)             } : {}),
+                ...(t.avg             != null ? { avg:             String(t.avg)             } : {}),
+                ...(t.errorRate       != null ? { errorRate:       String(t.errorRate)       } : {}),
+                ...(t.serverErrorRate != null ? { serverErrorRate: String(t.serverErrorRate) } : {}),
+                ...(t.timeoutRate     != null ? { timeoutRate:     String(t.timeoutRate)     } : {}),
+                ...(t.lcp             != null ? { lcp:             String(t.lcp)             } : {}),
+                ...(t.fcp             != null ? { fcp:             String(t.fcp)             } : {}),
+                ...(t.ttfb            != null ? { ttfb:            String(t.ttfb)            } : {}),
+                ...(t.cls             != null ? { cls:             String(t.cls)             } : {}),
+                ...(t.inp             != null ? { inp:             String(t.inp)             } : {}),
+                ...(t.tbt             != null ? { tbt:             String(t.tbt)             } : {}),
+              }));
+            }
             if (flow.options?.vus || flow.options?.duration) setShowAdvanced(true);
             return;
           }
