@@ -311,10 +311,17 @@ export default function ChatPage() {
   const [history, setHistory] = useState<SavedSession[]>(() => loadHistory());
   const [showHistory, setShowHistory] = useState(false);
 
-  // Auto-save after every assistant reply (entries grows when AI responds)
+  // Auto-save after every assistant reply.
+  // Strip raw attachment payloads (HAR/docs content) before persisting — they can contain
+  // auth headers, tokens, and PII. The user would re-upload to continue the session.
   useEffect(() => {
     if (entries.length === 0) return;
-    const session: SavedSession = { id: currentSessionId, title: sessionTitle(entries), mode, entries, sessionContext, savedAt: Date.now() };
+    const safeEntries = entries.map(e =>
+      e.kind === 'text' && e.attachments
+        ? { ...e, attachments: e.attachments.map(a => ({ ...a, content: '' })) }
+        : e
+    ) as ChatEntry[];
+    const session: SavedSession = { id: currentSessionId, title: sessionTitle(entries), mode, entries: safeEntries, sessionContext: null, savedAt: Date.now() };
     saveToHistory(session);
     setHistory(loadHistory());
   }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
