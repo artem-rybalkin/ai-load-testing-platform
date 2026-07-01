@@ -18,6 +18,8 @@ import {
   buildChatParsePrompt,
   isValidChatParseResponse,
   processAttachments,
+  CHAT_HISTORY_LIMIT,
+  MULTI_STEP_INTENT_RE,
   isValidCronResponse,
   isValidTrendNarrativeResponse,
   isValidSuggestSettingsResponse,
@@ -478,10 +480,35 @@ Return ONLY valid JSON array. Include only categories with count > 0:
 
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
-        const parsed = JSON.parse(match[0]);
-        if (!isValidChatParseResponse(parsed)) {
+        let parsed: Record<string, unknown>;
+        try { parsed = JSON.parse(match[0]); } catch {
           return reply.code(500).send({ error: 'AI returned unexpected response' });
         }
+
+        if (!isValidChatParseResponse(parsed)) {
+          // If the AI attempted a flowReady/redirect (detects flow intent but produced
+          // malformed steps or missing fields), gracefully redirect rather than 500.
+          if (parsed.status === 'flowReady' || parsed.status === 'redirectToFlowBuilder') {
+            return {
+              status: 'redirectToFlowBuilder',
+              reason: 'I identified a multi-step flow scenario. Please use the Flow Builder to define each step, or paste your Swagger URL / upload the OpenAPI JSON so I can extract the endpoints automatically.',
+            };
+          }
+          return reply.code(500).send({ error: 'AI returned unexpected response' });
+        }
+
+        // Deterministic guard: if the AI collapsed a multi-step flow into a single-URL
+        // "ready" response (LLMs reliably fail this), override it.
+        if (parsed.status === 'ready' && !attachmentContext) {
+          const allText = messages.slice(-CHAT_HISTORY_LIMIT).map((m: { content: string }) => m.content).join('\n');
+          if (MULTI_STEP_INTENT_RE.test(allText)) {
+            return {
+              status: 'redirectToFlowBuilder',
+              reason: 'I detected a multi-step flow scenario. Please use the Flow Builder to define each step, or paste your Swagger URL / upload the OpenAPI JSON so I can extract the endpoints automatically.',
+            };
+          }
+        }
+
         return parsed;
       } catch (err) {
         return sendInternalError(request, reply, err, 'POST /chat/parse');

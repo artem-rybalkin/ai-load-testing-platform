@@ -63,12 +63,26 @@ const HAR_ENTRY_CAP = 50;
 const CONTEXT_CHAR_CAP = 4000;
 
 /** Summarise a parsed OpenAPI/Swagger spec object into a compact endpoint list. */
-const summarizeOpenApiSpec = (spec: Record<string, unknown>): string => {
+const summarizeOpenApiSpec = (spec: Record<string, unknown>, sourceUrl?: string): string => {
   const paths = spec.paths as Record<string, unknown> | undefined;
   if (!paths || typeof paths !== 'object') return '[No paths found in spec]';
 
   const title = (spec.info as Record<string, unknown> | undefined)?.title ?? 'API';
-  const lines: string[] = [`API: ${title}`];
+
+  // Resolve the base URL so the AI can construct absolute step URLs
+  let baseUrl = '';
+  const servers = spec.servers as Array<{ url: string }> | undefined;
+  if (servers?.[0]?.url) {
+    baseUrl = servers[0].url.replace(/\/$/, '');
+  } else {
+    const host = spec.host as string | undefined;
+    const basePath = ((spec.basePath as string | undefined) ?? '').replace(/\/$/, '');
+    const schemes = spec.schemes as string[] | undefined;
+    if (host) baseUrl = `${schemes?.[0] ?? 'http'}://${host}${basePath}`;
+    else if (sourceUrl) { try { baseUrl = new URL(sourceUrl).origin; } catch { /* ignore */ } }
+  }
+
+  const lines: string[] = [`API: ${title}`, `Base URL: ${baseUrl}`];
 
   for (const [path, methods] of Object.entries(paths)) {
     if (!methods || typeof methods !== 'object') continue;
@@ -78,7 +92,7 @@ const summarizeOpenApiSpec = (spec: Record<string, unknown>): string => {
       const summary = (operation.summary ?? operation.description ?? '') as string;
       const reqBody = operation.requestBody as Record<string, unknown> | undefined;
       const bodyNote = reqBody ? ' (has request body)' : '';
-      lines.push(`${method.toUpperCase()} ${path}${summary ? ` — ${summary}` : ''}${bodyNote}`);
+      lines.push(`${method.toUpperCase()} ${baseUrl}${path}${summary ? ` — ${summary}` : ''}${bodyNote}`);
       if (lines.length >= 80) { lines.push('... (truncated)'); break; }
     }
     if (lines.length >= 80) break;
@@ -87,10 +101,37 @@ const summarizeOpenApiSpec = (spec: Record<string, unknown>): string => {
   return lines.join('\n').slice(0, CONTEXT_CHAR_CAP);
 };
 
+const SWAGGER_UI_PATH_RE = /\/swagger-ui(?:\/|\.html|\.htm|$)/i;
+const SPEC_DISCOVERY_PATHS = ['/v3/api-docs', '/swagger.json', '/api-docs', '/openapi.json', '/swagger/v1/swagger.json'];
+
 /** Fetch and summarise a Swagger/OpenAPI URL into an endpoint list for the prompt. */
 export const fetchAndSummarizeSwagger = async (url: string): Promise<string> => {
   const ssrfError = validateSsrfSafeUrl(url);
   if (ssrfError) return `[Swagger fetch blocked: ${ssrfError}]`;
+
+  // When the URL looks like a Swagger UI viewer page (not the raw spec), try known
+  // spec discovery paths before falling back to fetching the HTML page itself.
+  try {
+    const parsed = new URL(url);
+    if (SWAGGER_UI_PATH_RE.test(parsed.pathname)) {
+      const base = `${parsed.protocol}//${parsed.host}`;
+      for (const specPath of SPEC_DISCOVERY_PATHS) {
+        const specUrl = base + specPath;
+        const specSsrfError = validateSsrfSafeUrl(specUrl);
+        if (specSsrfError) continue;
+        try {
+          const specRes = await fetch(specUrl, { signal: AbortSignal.timeout(5_000) });
+          if (!specRes.ok) continue;
+          const specText = await specRes.text();
+          try {
+            const spec = JSON.parse(specText) as Record<string, unknown>;
+            if (spec.paths) return summarizeOpenApiSpec(spec, specUrl);
+          } catch { /* not JSON */ }
+        } catch { /* network error — try next path */ }
+      }
+      // None of the spec discovery paths worked — fall through to fetch the original URL
+    }
+  } catch { /* URL parse failed — proceed normally */ }
 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -100,7 +141,7 @@ export const fetchAndSummarizeSwagger = async (url: string): Promise<string> => 
 
     try {
       const spec = JSON.parse(text) as Record<string, unknown>;
-      return summarizeOpenApiSpec(spec);
+      return summarizeOpenApiSpec(spec, url);
     } catch {
       // Not valid JSON — pass raw text (may be YAML or HTML error page), capped
       return text.slice(0, CONTEXT_CHAR_CAP);
@@ -172,6 +213,15 @@ export const processAttachments = async (attachments: ChatAttachment[]): Promise
 export const CHAT_HISTORY_LIMIT = 20;
 
 /**
+ * Detects clear multi-step flow intent in conversation text.
+ * Used as a deterministic guard — overrides an AI "ready" response when the user
+ * is clearly describing a sequence of HTTP operations, not a single-URL test.
+ * Matches: arrow notation (->), "register...login", "login...logout",
+ * "scenario/flow for ...", "then login/logout/register/checkout/..." sequences.
+ */
+export const MULTI_STEP_INTENT_RE = /(?:\s->\s|\bthen\s+(?:login|logout|register|sign\s*(?:up|in)|checkout|create\s+account|delete|add\s+to\s+cart)\b|(?:register|sign[\s-]?up|create\s+account).{0,60}(?:login|sign[\s-]?in)|(?:login|sign[\s-]?in).{0,60}logout|\bscenario\s+for\b|\bflow\s+for\b)/i;
+
+/**
  * Builds the Gemini prompt for POST /chat/parse. Exported standalone for unit
  * testability. Truncates to the last CHAT_HISTORY_LIMIT messages.
  *
@@ -196,7 +246,7 @@ export const buildChatParsePrompt = (messages: ChatMessage[], attachmentContext?
     ...
   ],
   "targetUrl": "<base URL of the first step>",
-  "description": "<one-sentence human-readable summary of the flow>",
+  "description": "<description of the flow including any assertion/check requirements the user mentioned>",
   "options": {"vus": <number>, "duration": "<e.g. 2m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"},
   "thresholds": {"p95": <number>, "errorRate": <number>}
 }}
@@ -228,10 +278,12 @@ ${readyOutcomeNumber}. Return "ready" ONLY if ALL FOUR of these were explicitly 
    (c) a concrete number of users/VUs/sessions to simulate
    (d) how long the test should run
    If even one of (a)-(d) is missing, you MUST use the "needsClarification" outcome instead.
-{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<one-sentence summary>", "options": { ... }, "thresholds": { ... } }}
+   CRITICAL: NEVER return "ready" if the user's intent (in ANY turn of the conversation) involves multiple sequential HTTP operations — e.g. "register then login then logout", "login flow", "create a flow with register user then login and logout", "add to cart then checkout". Such requests are multi-step flows. Return outcome ${redirectOutcomeNumber} instead, even if VUs/duration/type were provided later.
+{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<full description — see rules below>", "options": { ... }, "thresholds": { ... } }}
 - For "backend": options = {"vus": <number>, "duration": "<e.g. 1m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"}.
 - For "client-side": options = {"sessions": <number>, "duration": "<e.g. 1m>", "collectWebVitals": true}.
 - Threshold values MUST be plain JSON numbers ({"p95": 1000}, never {"p95": "1000ms"}).
+- CRITICAL — "description" is passed verbatim to the k6 script generator. It MUST include: (1) the load shape in plain English (e.g. "10 VUs for 2 minutes"), AND (2) ALL assertion/check requirements the user mentioned (e.g. "assert status 200", "check body contains userId", "verify header X-Request-ID is present"). Do NOT summarise or drop assertion details — preserve them exactly so the script generator can implement them.
 
 ${clarificationOutcomeNumber}. If any required information is missing or ambiguous, return:
 {"status": "needsClarification", "question": "<one short follow-up question>"}
@@ -240,9 +292,9 @@ ${clarificationOutcomeNumber}. If any required information is missing or ambiguo
 - Always ask if the user has not stated a concrete number of users/VUs/sessions to simulate anywhere in the conversation — words like "spike test" or "soak test" name a load shape, not an amount. Always ask if the user has not stated how long the test should run anywhere in the conversation. Never invent or silently default these values.
 - For flows: ask if the user has not said which specific flow/endpoints to test, or if VUs/duration are missing.
 
-${redirectOutcomeNumber}. Only if multi-step intent is detected AND no context was provided AND you cannot determine steps from the conversation:
+${redirectOutcomeNumber}. If multi-step intent is detected AND no context was provided AND you cannot determine specific endpoint URLs/methods from the conversation:
 {"status": "redirectToFlowBuilder", "reason": "<one sentence>"}
-${attachmentContext ? 'IMPORTANT: When context is provided above, prefer "flowReady" or "needsClarification" over "redirectToFlowBuilder".' : 'Trigger this for: named user journeys ("login flow", "checkout flow", "registration flow"), explicit step sequences ("log in then add to cart then checkout"), "flow", "multi-step", "end-to-end", "e2e".'}
+${attachmentContext ? 'IMPORTANT: When context is provided above, prefer "flowReady" or "needsClarification" over "redirectToFlowBuilder".' : 'Trigger this for: named user journeys ("login flow", "checkout flow", "registration flow"), explicit step sequences ("log in then add to cart then checkout"), "flow", "multi-step", "end-to-end", "e2e". IMPORTANT: Multi-step intent detected in ANY turn (including earlier turns) still triggers this — it is NOT overridden by the user later providing VUs, duration, or test type.'}
 
 Example (most common mistake):
 USER: Spike test homepage

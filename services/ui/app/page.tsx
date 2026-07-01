@@ -294,17 +294,27 @@ function HomeContent() {
       return;
     }
 
-    // Pre-fill flow steps from chat page (sessionStorage set by handleOpenInFlowBuilder)
+    // Pre-fill flow config from chat page (sessionStorage set by handleOpenInFlowBuilder)
     const fromChat = searchParams.get('fromChat');
     if (fromChat === '1') {
       try {
-        const stored = sessionStorage.getItem('chatFlowSteps');
+        const stored = sessionStorage.getItem('chatFlowConfig');
         if (stored) {
-          const steps = JSON.parse(stored);
-          if (Array.isArray(steps) && steps.length > 0) {
-            setFlowSteps(steps);
-            setForm(f => ({ ...f, type: 'flow' }));
-            sessionStorage.removeItem('chatFlowSteps');
+          const flow = JSON.parse(stored);
+          sessionStorage.removeItem('chatFlowConfig');
+          if (flow && Array.isArray(flow.steps) && flow.steps.length > 0) {
+            setFlowSteps(flow.steps);
+            setForm(f => ({
+              ...f,
+              type: 'flow',
+              description: flow.description ?? f.description,
+              vus:      flow.options?.vus      ?? f.vus,
+              duration: flow.options?.duration ?? f.duration,
+              rampUp:   flow.options?.rampUp   ?? f.rampUp,
+              profile:  flow.options?.profile  ?? f.profile,
+              thresholds: flow.thresholds ?? f.thresholds,
+            }));
+            if (flow.options?.vus || flow.options?.duration) setShowAdvanced(true);
             return;
           }
         }

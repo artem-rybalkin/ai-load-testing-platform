@@ -424,7 +424,7 @@ export default function ResultPage() {
           <div className="flex items-center gap-2.5 flex-wrap">
             {(isPending || isRunning) && (
               <button onClick={handleCancel} disabled={cancelling} className="px-3.5 py-2 rounded-control text-[12.5px] font-semibold border border-red-fg/30 text-red-fg hover:bg-red-bg disabled:opacity-50 transition-colors">
-                {cancelling ? 'Cancelling…' : 'Cancel'}
+                {cancelling ? 'Stopping…' : 'Stop'}
               </button>
             )}
             {result.status === 'completed' && (

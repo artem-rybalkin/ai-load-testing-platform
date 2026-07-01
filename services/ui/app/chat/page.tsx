@@ -58,6 +58,75 @@ type ChatEntry = TextMsg | PreviewMsg | FlowPreviewMsg | RedirectMsg | StatusMsg
 const STATIC_ASSET_RE = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|mp4|mp3|pdf|map|xml|avif)(\?.*)?$/i;
 const STATIC_MIME_RE = /^(image|font|video|audio)\//;
 
+// Patterns that indicate a Swagger UI viewer page or raw OpenAPI spec URL in typed text
+const SWAGGER_URL_RE = /https?:\/\/[^\s]+(?:\/swagger-ui[^\s]*|\/openapi\.json[^\s]*|\/swagger\.json[^\s]*|\/v3\/api-docs[^\s]*|\/api-docs[^\s]*)/gi;
+
+const SWAGGER_UI_PATH_RE = /\/swagger-ui(?:\/|\.html|\.htm|$)/i;
+const CLIENT_SPEC_DISCOVERY_PATHS = ['/v3/api-docs', '/swagger.json', '/api-docs', '/openapi.json', '/swagger/v1/swagger.json'];
+
+const summarizeSpecClientSide = (spec: Record<string, unknown>, sourceUrl: string): string => {
+  const paths = spec.paths as Record<string, unknown> | undefined;
+  if (!paths) return '[No paths found in spec]';
+  const title = (spec.info as Record<string, unknown> | undefined)?.title ?? 'API';
+
+  // Resolve base URL so the AI can build absolute step URLs
+  let baseUrl = '';
+  const servers = spec.servers as Array<{ url: string }> | undefined;
+  if (servers?.[0]?.url) {
+    baseUrl = servers[0].url;
+  } else {
+    const host = spec.host as string | undefined;
+    const basePath = (spec.basePath as string | undefined) ?? '';
+    const schemes = spec.schemes as string[] | undefined;
+    if (host) baseUrl = `${schemes?.[0] ?? 'http'}://${host}${basePath}`;
+    else { try { baseUrl = new URL(sourceUrl).origin; } catch { /* ignore */ } }
+  }
+
+  const lines: string[] = [`API: ${title}`, `Base URL: ${baseUrl}`];
+  for (const [path, methods] of Object.entries(paths)) {
+    if (!methods || typeof methods !== 'object') continue;
+    for (const [method, op] of Object.entries(methods as Record<string, unknown>)) {
+      if (method === 'parameters' || method === 'summary' || method === 'description') continue;
+      const operation = op as Record<string, unknown>;
+      const summary = (operation.summary ?? operation.description ?? '') as string;
+      const hasBody = !!(operation.requestBody as Record<string, unknown> | undefined);
+      lines.push(`${method.toUpperCase()} ${baseUrl}${path}${summary ? ` — ${summary}` : ''}${hasBody ? ' (has request body)' : ''}`);
+      if (lines.length >= 80) { lines.push('... (truncated)'); break; }
+    }
+    if (lines.length >= 80) break;
+  }
+  return lines.join('\n');
+};
+
+/** Fetch and summarise a Swagger/OpenAPI URL in the browser (works for localhost too). */
+const fetchSwaggerClientSide = async (url: string): Promise<string | null> => {
+  try {
+    const parsed = new URL(url);
+    if (SWAGGER_UI_PATH_RE.test(parsed.pathname)) {
+      const base = `${parsed.protocol}//${parsed.host}`;
+      for (const specPath of CLIENT_SPEC_DISCOVERY_PATHS) {
+        try {
+          const res = await fetch(base + specPath, { signal: AbortSignal.timeout(5_000) });
+          if (!res.ok) continue;
+          const spec = JSON.parse(await res.text()) as Record<string, unknown>;
+          if (spec.paths) return summarizeSpecClientSide(spec, base + specPath);
+        } catch { /* try next path */ }
+      }
+    }
+  } catch { /* URL parse error */ }
+
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const text = await res.text();
+    try {
+      const spec = JSON.parse(text) as Record<string, unknown>;
+      if (spec.paths) return summarizeSpecClientSide(spec, url);
+    } catch { /* not JSON */ }
+    return text.slice(0, 4000);
+  } catch { return null; }
+};
+
 /** Parse a HAR file and extract non-static HTTP entries as ChatAttachment content. */
 const parseHarFile = (jsonText: string): string => jsonText;
 
@@ -155,6 +224,8 @@ export default function ChatPage() {
 
   // Pending attachments waiting to be sent with the next message
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  // Swagger spec fetched this session — re-sent with every subsequent turn so the AI retains context
+  const [sessionContext, setSessionContext] = useState<ChatAttachment | null>(null);
   // Swagger URL input mode
   const [swaggerUrl, setSwaggerUrl] = useState('');
   const [showSwaggerInput, setShowSwaggerInput] = useState(false);
@@ -208,6 +279,32 @@ export default function ChatPage() {
     setPendingAttachments([]);
     setShowSwaggerInput(false);
 
+    // Auto-detect Swagger/OpenAPI URLs typed directly in the message text.
+    // Fetch the spec client-side (the browser can reach localhost; the server in Docker cannot),
+    // summarize it, and persist as sessionContext so AI retains it across all subsequent turns.
+    if (content) {
+      SWAGGER_URL_RE.lastIndex = 0;
+      const swaggerUrlMatches: string[] = [];
+      let match: RegExpExecArray | null;
+      while ((match = SWAGGER_URL_RE.exec(content)) !== null) swaggerUrlMatches.push(match[0]);
+
+      for (const detectedUrl of swaggerUrlMatches) {
+        if (attachmentsToSend.some(a => a.filename === detectedUrl)) continue;
+        const summary = await fetchSwaggerClientSide(detectedUrl);
+        if (summary) {
+          const att: ChatAttachment = { type: 'documentation', content: summary, filename: detectedUrl };
+          attachmentsToSend.push(att);
+          setSessionContext(att);
+        }
+      }
+    }
+
+    // Always re-include the persisted spec context (from a previous turn) so the
+    // AI can build flowReady steps even when the user is only providing VUs/duration.
+    const allAttachments: ChatAttachment[] = sessionContext && !attachmentsToSend.some(a => a.filename === sessionContext.filename)
+      ? [sessionContext, ...attachmentsToSend]
+      : attachmentsToSend;
+
     const userEntry: TextMsg = {
       role: 'user',
       kind: 'text',
@@ -219,8 +316,8 @@ export default function ChatPage() {
     setThinking(true);
 
     try {
-      const response: ChatParseResponse = attachmentsToSend.length > 0
-        ? await parseChatPrompt(toThreadMessages(nextEntries), attachmentsToSend)
+      const response: ChatParseResponse = allAttachments.length > 0
+        ? await parseChatPrompt(toThreadMessages(nextEntries), allAttachments)
         : await parseChatPrompt(toThreadMessages(nextEntries));
       if (response.status === 'needsClarification') {
         appendEntry({ role: 'assistant', kind: 'text', content: response.question });
@@ -290,9 +387,9 @@ export default function ChatPage() {
   };
 
   const handleOpenInFlowBuilder = (flow: FlowTestConfig) => {
-    // Encode steps into sessionStorage so FlowBuilder can pick them up via ?type=flow&fromChat=1
+    // Store the full flow config so page.tsx can restore steps + options + description
     try {
-      sessionStorage.setItem('chatFlowSteps', JSON.stringify(flow.steps));
+      sessionStorage.setItem('chatFlowConfig', JSON.stringify(flow));
     } catch {
       // sessionStorage unavailable — fall back to navigation without pre-fill
     }
@@ -648,7 +745,8 @@ export default function ChatPage() {
           </div>
 
           <p className="text-[11.5px] text-tx-5 text-center -mt-1">
-            Drop a <strong>.json</strong> HAR file, a Swagger JSON spec, or any text doc to build a flow automatically
+            Drop a <strong>.json</strong> HAR file, a Swagger JSON spec, or any text doc to build a flow automatically.
+            Paste a Swagger URL (including <code className="font-mono">localhost</code>) and it will be fetched automatically.
           </p>
         </div>
       </div>

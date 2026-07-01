@@ -286,9 +286,9 @@ Extraction rules (for steps with "Extract variables"):
 - regex: const m = response.body.match(/pattern/); use m[1] as the captured value
 
 Error handling — MANDATORY for ALL extractions:
-- After every extraction: if (!value) { exec.vu.abort('<varName> not found in step N response'); }
-- This stops only the failing VU, not the entire test — other VUs continue running for the full duration
-- Import: import exec from 'k6/execution';
+- Use a defensive fallback so the VU NEVER aborts mid-flow: const value = (res.status === 200 && res.json().field) || '';
+- Assign the (possibly empty) value to vars and continue — ALL remaining group()s MUST still execute and record metrics even when an earlier extraction returned empty.
+- DO NOT use exec.vu.abort() — aborting the VU hides steps 2..N from the metrics report entirely.
 ` : '';
 
   const placeholderInstructions = hasPlaceholders ? `
@@ -322,20 +322,18 @@ Requirements:
 Structure:
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
-import exec from 'k6/execution';
 
 export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] } };
 
 export default function() {
   const vars = {};
 
-  // Example: step that extracts a token and passes it to the next step
+  // Example: step that extracts a token and passes it to the next step.
+  // CRITICAL: never use exec.vu.abort() — all groups must always run so every step appears in metrics.
   group('Step 1: Login', function() {
     const res = http.post('https://example.com/auth', JSON.stringify({ u: 'user' }), { headers: { 'Content-Type': 'application/json' } });
     check(res, { 'login 200': (r) => r.status === 200 });
-    const token = (res.status === 200 && res.json('access_token')) || '';   // defensive — never throws
-    if (!token) { exec.vu.abort('access_token not found in step 1 response'); }
-    vars.token = token;
+    vars.token = (res.status === 200 && res.json('access_token')) || '';   // defensive — falls back to '' so step 2 still runs
   });
 
   group('Step 2: Fetch data', function() {

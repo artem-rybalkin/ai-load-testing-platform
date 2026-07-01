@@ -65,18 +65,21 @@ describe('FLOW_PROMPT — extraction rules', () => {
     expect(await getLastPrompt()).toContain('csrf ← regex: value="([^"]+)"');
   });
 
-  it('includes exec.vu.abort instructions when any step has extractions', async () => {
+  it('includes defensive-fallback extraction instructions (not exec.vu.abort) when any step has extractions', async () => {
     const test = baseFlow();
     test.steps![0].extract = { token: { source: 'jsonpath', expression: '$.token' } };
     await generateScript(test);
     const prompt = await getLastPrompt();
-    expect(prompt).toContain('exec.vu.abort');
-    expect(prompt).toContain("import exec from 'k6/execution'");
+    // Must instruct AI to use a fallback value and keep running — not abort the VU
+    expect(prompt).toContain('DO NOT use exec.vu.abort');
+    expect(prompt).toContain('ALL remaining group()s MUST still execute');
+    // Must NOT teach the old abort-on-failure pattern that hides later steps from metrics
+    expect(prompt).not.toContain("import exec from 'k6/execution'");
   });
 
   it('does NOT include exec import when no extractions are defined', async () => {
     await generateScript(baseFlow());
-    expect(await getLastPrompt()).not.toContain('exec.test.abort');
+    expect(await getLastPrompt()).not.toContain("import exec from 'k6/execution'");
   });
 });
 
@@ -154,9 +157,9 @@ describe('FLOW_PROMPT — combined extract + placeholder + parameterization', ()
     expect(prompt).toContain('access_token ← jsonpath: $.access_token');
     expect(prompt).toContain('csrf ← regex: value="([^"]+)"');
 
-    // Extraction + exec.vu.abort instructions present
-    expect(prompt).toContain('exec.vu.abort');
-    expect(prompt).toContain("import exec from 'k6/execution'");
+    // Extraction instructions: defensive fallback pattern, no exec.vu.abort (which hides later steps)
+    expect(prompt).toContain('DO NOT use exec.vu.abort');
+    expect(prompt).toContain('ALL remaining group()s MUST still execute');
 
     // Placeholder instructions present
     expect(prompt).toContain('Variable placeholders');

@@ -433,3 +433,54 @@ describe('Home page — threshold preview', () => {
     expect(await screen.findByText(/no completed run found/i)).toBeInTheDocument();
   });
 });
+
+describe('Home page — fromChat pre-fill (?fromChat=1 + chatFlowConfig)', () => {
+  const FLOW_CONFIG = {
+    steps: [
+      { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST' },
+      { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' },
+    ],
+    targetUrl: 'http://localhost:8080',
+    description: 'Register then login flow',
+    options: { vus: 5, duration: '3m', profile: 'load' },
+  };
+
+  beforeEach(() => {
+    stableSearchParams.set('fromChat', '1');
+    sessionStorage.setItem('chatFlowConfig', JSON.stringify(FLOW_CONFIG));
+  });
+
+  afterEach(() => {
+    stableSearchParams.delete('fromChat');
+    sessionStorage.clear();
+  });
+
+  it('pre-fills the description field from chatFlowConfig', async () => {
+    render(<Home />);
+    await waitFor(() => {
+      const descInput = screen.getByPlaceholderText(/e\.g\. load test/i) as HTMLInputElement;
+      expect(descInput.value).toBe('Register then login flow');
+    });
+  });
+
+  it('auto-opens Advanced settings when options include vus or duration', async () => {
+    render(<Home />);
+    // VU input should be visible without manually opening Advanced settings
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('5')).toBeInTheDocument();
+    });
+  });
+
+  it('removes chatFlowConfig from sessionStorage after reading', () => {
+    render(<Home />);
+    expect(sessionStorage.getItem('chatFlowConfig')).toBeNull();
+  });
+
+  it('falls back to normal form behavior when chatFlowConfig is absent', async () => {
+    sessionStorage.clear(); // remove key the beforeEach set
+    render(<Home />);
+    // form should still be empty / default state — no pre-filled description
+    const descInput = screen.getByPlaceholderText(/e\.g\. load test/i) as HTMLInputElement;
+    expect(descInput.value).toBe('');
+  });
+});

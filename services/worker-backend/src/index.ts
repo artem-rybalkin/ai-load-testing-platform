@@ -201,9 +201,13 @@ const start = async (): Promise<void> => {
     }
 
     try {
+      // Docker containers cannot reach the host via 'localhost' — rewrite to host.docker.internal
+      // so k6 can actually connect when the user tests a local service.
+      const script = test.generatedScript!.replace(/\blocalhost\b/g, 'host.docker.internal');
+
       const { metrics, executionLog } = await runK6Test(
         test.id,
-        test.generatedScript!,
+        script,
         test.envVars,
         test.testData,
         test.csvData,
@@ -218,16 +222,20 @@ const start = async (): Promise<void> => {
         },
       );
 
-      // r2: check if the test was cancelled while running
-      if (cancelledTests.has(test.id)) {
-        cancelledTests.delete(test.id);
+      const wasStopped = cancelledTests.has(test.id);
+      if (wasStopped) cancelledTests.delete(test.id);
+
+      const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
+
+      // When stopped with partial data, save the collected metrics as a completed
+      // result so the user can inspect what ran before they clicked Stop.
+      if (wasStopped && metrics.requestsTotal === 0) {
         await notifyCancelled(test.id);
-        testLog.info('Test cancelled during execution');
+        testLog.info('Test stopped with no metrics — marked cancelled');
         ch.ack(msg);
         return;
       }
 
-      const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
       const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description, test.projectId, test.workspaceId);
 
       const result: TestResult = {
@@ -245,10 +253,23 @@ const start = async (): Promise<void> => {
         { persistent: true }
       );
 
-      testLog.info({ requestsTotal: metrics.requestsTotal, rps: metrics.rps, p95: metrics.p95ResponseTime, errorRate: (metrics.requestsFailed / (metrics.requestsTotal || 1) * 100).toFixed(2) }, 'k6 test completed');
+      if (wasStopped) {
+        testLog.info({ requestsTotal: metrics.requestsTotal }, 'Test stopped — partial metrics saved');
+      } else {
+        testLog.info({ requestsTotal: metrics.requestsTotal, rps: metrics.rps, p95: metrics.p95ResponseTime, errorRate: (metrics.requestsFailed / (metrics.requestsTotal || 1) * 100).toFixed(2) }, 'k6 test completed');
+      }
       testLog.debug({ metrics }, 'k6 test full metrics');
       ch.ack(msg);
     } catch (err) {
+      // If the test was stopped (cancelled) and k6 exited before collecting any
+      // requests, treat it as a clean cancel — don't retry and don't fail the test.
+      if (cancelledTests.has(test.id)) {
+        cancelledTests.delete(test.id);
+        await notifyCancelled(test.id);
+        testLog.info('Test stopped before metrics were collected — marked cancelled');
+        ch.ack(msg);
+        return;
+      }
       testLog.error({ err: (err as Error).message }, 'Test failed');
       const partialLog = (err as { partialLog?: string }).partialLog;
       await notifyFailed(test.id, partialLog);

@@ -852,7 +852,7 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                     placeholder="value (supports {{varName}})"
                     value={value}
                     onChange={e => setHeaderValue(i, key, e.target.value)}
-                    className="flex-1 border border-border rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
+                    className="flex-1 min-w-0 border border-border rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
                   />
                   <button type="button" onClick={() => removeHeader(i, key)} className="text-tx-4 hover:text-red-fg text-xs">✕</button>
                 </div>

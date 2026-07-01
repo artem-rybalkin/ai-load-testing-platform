@@ -411,3 +411,137 @@ describe('notify* REST helpers — status transitions reported via results-servi
     await expect(notifyCancelledFn('tid-6')).resolves.toBeUndefined();
   });
 });
+
+// ── Stop-with-metrics (cancel-during-run) ────────────────────────────────────
+//
+// Inline re-implementation of the cancel branch in the queue consumer body.
+// When a test is stopped via the Stop button:
+//   • requestsTotal > 0  → publish to test-results queue as 'completed' (save partial metrics)
+//   • requestsTotal === 0 → notifyCancelled (no data to save)
+//   • Error thrown from runK6Test while cancelled → notifyCancelled, no retry
+
+type StopResult = 'completed' | 'cancelled';
+
+const stopBranchFn = async (
+  cancelledTests: Set<string>,
+  ch: ReturnType<typeof makeChannel>,
+  testId: string,
+  metrics: { requestsTotal: number },
+  notifyCancelled: (id: string) => Promise<void>,
+): Promise<StopResult> => {
+  const wasStopped = cancelledTests.has(testId);
+  if (wasStopped) cancelledTests.delete(testId);
+
+  if (wasStopped && metrics.requestsTotal === 0) {
+    await notifyCancelled(testId);
+    ch.ack({} as never);
+    return 'cancelled';
+  }
+
+  ch.sendToQueue('test-results', Buffer.from(JSON.stringify({ testId, status: 'completed', metrics })));
+  ch.ack({} as never);
+  return 'completed';
+};
+
+const stopErrorBranchFn = async (
+  cancelledTests: Set<string>,
+  ch: ReturnType<typeof makeChannel>,
+  testId: string,
+  notifyCancelled: (id: string) => Promise<void>,
+  handleRetry: () => void,
+): Promise<StopResult | 'failed'> => {
+  if (cancelledTests.has(testId)) {
+    cancelledTests.delete(testId);
+    await notifyCancelled(testId);
+    ch.ack({} as never);
+    return 'cancelled';
+  }
+  handleRetry();
+  return 'failed';
+};
+
+describe('Stop button — cancel branch with partial metrics (success path)', () => {
+  it('publishes to test-results as completed when requestsTotal > 0', async () => {
+    const cancelled = new Set(['test-1']);
+    const ch = makeChannel();
+    const notifyCancelled = vi.fn().mockResolvedValue(undefined);
+
+    const result = await stopBranchFn(cancelled, ch, 'test-1', { requestsTotal: 42 }, notifyCancelled);
+
+    expect(result).toBe('completed');
+    expect(ch.sendToQueue).toHaveBeenCalledOnce();
+    const payload = JSON.parse(ch.sendToQueue.mock.calls[0][1].toString());
+    expect(payload.status).toBe('completed');
+    expect(payload.metrics.requestsTotal).toBe(42);
+    expect(notifyCancelled).not.toHaveBeenCalled();
+    expect(ch.ack).toHaveBeenCalledOnce();
+  });
+
+  it('removes the testId from cancelledTests after handling', async () => {
+    const cancelled = new Set(['test-2']);
+    const ch = makeChannel();
+
+    await stopBranchFn(cancelled, ch, 'test-2', { requestsTotal: 10 }, vi.fn());
+
+    expect(cancelled.has('test-2')).toBe(false);
+  });
+
+  it('calls notifyCancelled and does NOT publish metrics when requestsTotal === 0', async () => {
+    const cancelled = new Set(['test-3']);
+    const ch = makeChannel();
+    const notifyCancelled = vi.fn().mockResolvedValue(undefined);
+
+    const result = await stopBranchFn(cancelled, ch, 'test-3', { requestsTotal: 0 }, notifyCancelled);
+
+    expect(result).toBe('cancelled');
+    expect(notifyCancelled).toHaveBeenCalledWith('test-3');
+    expect(ch.sendToQueue).not.toHaveBeenCalled();
+    expect(ch.ack).toHaveBeenCalledOnce();
+  });
+
+  it('does not treat a non-cancelled test differently — publishes as completed', async () => {
+    const cancelled = new Set<string>(); // test-4 is NOT cancelled
+    const ch = makeChannel();
+
+    const result = await stopBranchFn(cancelled, ch, 'test-4', { requestsTotal: 100 }, vi.fn());
+
+    expect(result).toBe('completed');
+    expect(ch.sendToQueue).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Stop button — cancel branch in error path (k6 failed with no metrics)', () => {
+  it('calls notifyCancelled and acks without retrying when test was stopped', async () => {
+    const cancelled = new Set(['test-5']);
+    const ch = makeChannel();
+    const notifyCancelled = vi.fn().mockResolvedValue(undefined);
+    const handleRetry = vi.fn();
+
+    const result = await stopErrorBranchFn(cancelled, ch, 'test-5', notifyCancelled, handleRetry);
+
+    expect(result).toBe('cancelled');
+    expect(notifyCancelled).toHaveBeenCalledWith('test-5');
+    expect(ch.ack).toHaveBeenCalledOnce();
+    expect(handleRetry).not.toHaveBeenCalled();
+  });
+
+  it('calls handleRetry normally when the test was NOT stopped', async () => {
+    const cancelled = new Set<string>(); // test-6 not in set
+    const ch = makeChannel();
+    const notifyCancelled = vi.fn();
+    const handleRetry = vi.fn();
+
+    const result = await stopErrorBranchFn(cancelled, ch, 'test-6', notifyCancelled, handleRetry);
+
+    expect(result).toBe('failed');
+    expect(handleRetry).toHaveBeenCalledOnce();
+    expect(notifyCancelled).not.toHaveBeenCalled();
+    expect(ch.ack).not.toHaveBeenCalled();
+  });
+
+  it('removes the testId from cancelledTests after handling in error path', async () => {
+    const cancelled = new Set(['test-7']);
+    await stopErrorBranchFn(cancelled, makeChannel(), 'test-7', vi.fn(), vi.fn());
+    expect(cancelled.has('test-7')).toBe(false);
+  });
+});

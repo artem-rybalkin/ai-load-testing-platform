@@ -247,31 +247,31 @@ describe('ResultDetailPage — completed backend test', () => {
 // ─── Running / pending state ──────────────────────────────────────────────────
 
 describe('ResultDetailPage — running / pending state', () => {
-  it('shows Cancel button for a running test', async () => {
+  it('shows Stop button for a running test', async () => {
     mockGetResult.mockResolvedValue({ result: makeResult({ status: 'running', metrics: null }) });
     render(<ResultPage />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^stop$/i })).toBeInTheDocument());
   });
 
-  it('shows Cancel button for a pending test', async () => {
+  it('shows Stop button for a pending test', async () => {
     mockGetResult.mockResolvedValue({ result: makeResult({ status: 'pending', metrics: null }) });
     render(<ResultPage />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^stop$/i })).toBeInTheDocument());
   });
 
   it('does not show Set baseline button for a running test', async () => {
     mockGetResult.mockResolvedValue({ result: makeResult({ status: 'running', metrics: null }) });
     render(<ResultPage />);
-    await waitFor(() => screen.getByRole('button', { name: /cancel/i }));
+    await waitFor(() => screen.getByRole('button', { name: /^stop$/i }));
     expect(screen.queryByRole('button', { name: /baseline/i })).not.toBeInTheDocument();
   });
 
-  it('calls cancelTest when Cancel is clicked', async () => {
+  it('calls cancelTest when Stop is clicked', async () => {
     mockGetResult.mockResolvedValue({ result: makeResult({ status: 'running', metrics: null }) });
     mockCancelTest.mockResolvedValue({});
     render(<ResultPage />);
-    await waitFor(() => screen.getByRole('button', { name: /cancel/i }));
-    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    await waitFor(() => screen.getByRole('button', { name: /^stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^stop$/i }));
     await waitFor(() => expect(mockCancelTest).toHaveBeenCalledWith(TEST_ID));
   });
 

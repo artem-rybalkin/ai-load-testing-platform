@@ -580,6 +580,30 @@ describe('buildChatParsePrompt', () => {
     expect(prompt).toMatch(/never invent or silently default/i);
   });
 
+  it('explicitly prohibits "ready" when multi-step flow intent is present (regression — found live: "register then login then logout" + VUs + duration silently resolved to single-URL ready)', () => {
+    const prompt = buildChatParsePrompt([
+      { role: 'user', content: 'http://localhost:8080/swagger-ui/index.html#/ create a flow with register user than login and than logout' },
+      { role: 'assistant', content: 'Could you specify backend or client-side, VUs, and duration?' },
+      { role: 'user', content: 'backend test, 2 users, 5 min' },
+    ]);
+    expect(prompt).toMatch(/NEVER return "ready" if the user's intent/i);
+    expect(prompt).toMatch(/register then login/i);
+    expect(prompt).toMatch(/multi-step flows/i);
+  });
+
+  it('instructs redirectToFlowBuilder to persist across turns when multi-step intent appeared in an earlier turn', () => {
+    const prompt = buildChatParsePrompt([{ role: 'user', content: 'test login flow' }]);
+    expect(prompt).toMatch(/Multi-step intent detected in ANY turn/i);
+    expect(prompt).toMatch(/NOT overridden by the user later providing VUs/i);
+  });
+
+  it('instructs the model to preserve assertion/check requirements verbatim in the description field (regression — found live: "assert status 200" dropped from description, so script generator never saw it)', () => {
+    const prompt = buildChatParsePrompt([{ role: 'user', content: 'test my API with 10 VUs for 2 minutes and assert status 200' }]);
+    expect(prompt).toMatch(/description.*passed verbatim to the k6 script generator/i);
+    expect(prompt).toMatch(/assertion.*check requirements/i);
+    expect(prompt).toMatch(/do not summar/i);
+  });
+
   // Keeps this prompt's signal words in sync with the home page's applyDescriptionParams
   // regex (services/ui/app/page.tsx) — they were found to disagree on "performance test".
   it('lists the same backend/client-side signal words as the home page auto-detect regex', () => {
@@ -682,6 +706,27 @@ describe('POST /chat/parse', () => {
     const body = res.json();
     expect(body.status).toBe('needsClarification');
     expect(body.question).toMatch(/URL/);
+  });
+
+  it('overrides AI "ready" to redirectToFlowBuilder when conversation contains multi-step flow intent (deterministic guard, regression — AI ignored prompt instruction)', async () => {
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({
+      status: 'ready',
+      config: { type: 'backend', targetUrl: 'http://localhost:8080', description: 'Backend load test', options: { vus: 2, duration: '5m', profile: 'load' } },
+    }));
+    const res = await app.inject({
+      method: 'POST', url: '/chat/parse',
+      payload: {
+        messages: [
+          { role: 'user', content: 'http://localhost:8080/swagger-ui/index.html# swagger url. create scenario for create account -> login -> logout' },
+          { role: 'assistant', content: 'Could you specify backend or client-side, users, and duration?' },
+          { role: 'user', content: 'backend test 2 users 5 min' },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe('redirectToFlowBuilder');
+    expect(body.reason).toBeTruthy();
   });
 
   it('returns redirectToFlowBuilder for multi-step intent and still meters Gemini usage', async () => {

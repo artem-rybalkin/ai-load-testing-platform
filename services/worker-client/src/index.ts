@@ -120,7 +120,12 @@ const start = async (): Promise<void> => {
   ch.consume(QUEUE, async (msg) => {
     if (!msg) return;
 
-    const test: TestRequest = JSON.parse(msg.content.toString());
+    const rawTest: TestRequest = JSON.parse(msg.content.toString());
+    // Docker containers cannot reach the host via 'localhost' — rewrite to host.docker.internal.
+    const test: TestRequest = {
+      ...rawTest,
+      targetUrl: rawTest.targetUrl.replace(/\blocalhost\b/g, 'host.docker.internal'),
+    };
     log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Received client test');
 
     try {

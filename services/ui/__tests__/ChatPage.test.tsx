@@ -241,6 +241,85 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.getByText(/running/i)).toBeInTheDocument());
   });
 
+  it('renders a flowReady card with step list and action buttons', async () => {
+    mockParseChatPrompt.mockResolvedValue({
+      status: 'flowReady',
+      flow: {
+        steps: [
+          { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST', body: '{"username":"test"}' },
+          { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' },
+          { name: 'Logout',   url: 'http://localhost:8080/api/auth/logout',   method: 'POST' },
+        ],
+        targetUrl: 'http://localhost:8080',
+        description: 'Register then login then logout',
+        options: { vus: 2, duration: '5m', profile: 'load' },
+      },
+    });
+    render(<ChatPage />);
+    await sendMessage('create a flow: register then login then logout, 2 VUs 5 min');
+
+    await waitFor(() => expect(screen.getByText('Register')).toBeInTheDocument());
+    expect(screen.getByText('Login')).toBeInTheDocument();
+    expect(screen.getByText('Logout')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /run flow test/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit in flow builder/i })).toBeInTheDocument();
+  });
+
+  it('stores full flow config in sessionStorage and navigates when Edit in Flow Builder is clicked', async () => {
+    sessionStorage.clear();
+    const flow = {
+      steps: [
+        { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST' },
+        { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' },
+      ],
+      targetUrl: 'http://localhost:8080',
+      description: 'Register then login',
+      options: { vus: 3, duration: '2m', profile: 'load' },
+      thresholds: { p95: 500 },
+    };
+    mockParseChatPrompt.mockResolvedValue({ status: 'flowReady', flow });
+    render(<ChatPage />);
+    await sendMessage('register then login, 3 users 2 min');
+
+    await waitFor(() => screen.getByRole('button', { name: /edit in flow builder/i }));
+    fireEvent.click(screen.getByRole('button', { name: /edit in flow builder/i }));
+
+    const stored = sessionStorage.getItem('chatFlowConfig');
+    expect(stored).not.toBeNull();
+    const parsed = JSON.parse(stored!);
+    expect(parsed.steps).toHaveLength(2);
+    expect(parsed.options.vus).toBe(3);
+    expect(parsed.options.duration).toBe('2m');
+    expect(parsed.description).toBe('Register then login');
+    expect(parsed.thresholds).toEqual({ p95: 500 });
+    expect(mockNavigate).toHaveBeenCalledWith('/?type=flow&fromChat=1');
+  });
+
+  it('calls createTest with type:flow and steps when Run flow test is clicked', async () => {
+    const flow = {
+      steps: [
+        { name: 'Register', url: 'http://localhost:8080/api/auth/register', method: 'POST' },
+        { name: 'Login',    url: 'http://localhost:8080/api/auth/login',    method: 'POST' },
+      ],
+      targetUrl: 'http://localhost:8080',
+      description: 'Register then login',
+      options: { vus: 2, duration: '5m' },
+    };
+    mockParseChatPrompt.mockResolvedValue({ status: 'flowReady', flow });
+    mockCreateTest.mockResolvedValue({ success: true, test: { id: 'flow-test-1' } });
+    render(<ChatPage />);
+    await sendMessage('register then login, 2 users 5 min');
+
+    await waitFor(() => screen.getByRole('button', { name: /run flow test/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run flow test/i }));
+
+    await waitFor(() => expect(mockCreateTest).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'flow',
+      steps: flow.steps,
+      targetUrl: flow.targetUrl,
+    })));
+  });
+
   it('triggers a one-shot getResult re-fetch on a reconnected WS event, not polling', async () => {
     mockParseChatPrompt.mockResolvedValue({
       status: 'ready',

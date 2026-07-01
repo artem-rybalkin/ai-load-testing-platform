@@ -27,7 +27,7 @@ declare module 'fastify' {
 }
 
 export { fetchExternalMetrics } from './externalMetrics';
-export { buildChatParsePrompt } from './routes/helpers';
+export { buildChatParsePrompt, MULTI_STEP_INTENT_RE } from './routes/helpers';
 
 export const buildApp = async (
   pool: Pool,
