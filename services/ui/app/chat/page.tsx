@@ -206,6 +206,56 @@ const MODE_META: Record<ChatMode, { label: string; hint: string; placeholder: st
   },
 };
 
+// ── Chat history (localStorage) ───────────────────────────────────────────────
+// Future: migrate to DB-backed sessions (chat_sessions table, GET/POST/DELETE /chat/sessions)
+// for cross-device persistence and team-scoped history.
+
+const HISTORY_KEY = 'chat_history';
+const MAX_SESSIONS = 20;
+
+interface SavedSession {
+  id: string;
+  title: string;
+  mode: ChatMode;
+  entries: ChatEntry[];
+  sessionContext: ChatAttachment | null;
+  savedAt: number;
+}
+
+function loadHistory(): SavedSession[] {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]'); }
+  catch { return []; }
+}
+
+function saveToHistory(session: SavedSession) {
+  try {
+    const all = loadHistory().filter(s => s.id !== session.id);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...all].slice(0, MAX_SESSIONS)));
+  } catch { /* storage full — silently skip */ }
+}
+
+function deleteFromHistory(id: string) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(loadHistory().filter(s => s.id !== id)));
+  } catch { /* ignore */ }
+}
+
+function sessionTitle(entries: ChatEntry[]): string {
+  const first = entries.find(e => e.kind === 'text' && e.role === 'user') as TextMsg | undefined;
+  const text = first?.content ?? 'New chat';
+  return text.length > 60 ? text.slice(0, 57) + '…' : text;
+}
+
+function timeAgo(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+const MODE_BADGE: Record<ChatMode, string> = { english: 'EN', swagger: 'SW', context: 'CTX' };
+
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 const BotIcon = () => (
@@ -255,6 +305,49 @@ export default function ChatPage() {
   // Swagger URL input mode
   const [swaggerUrl, setSwaggerUrl] = useState('');
   const [showSwaggerInput, setShowSwaggerInput] = useState(false);
+
+  // ── Chat history ──────────────────────────────────────────────────────────
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => crypto.randomUUID());
+  const [history, setHistory] = useState<SavedSession[]>(() => loadHistory());
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Auto-save after every assistant reply (entries grows when AI responds)
+  useEffect(() => {
+    if (entries.length === 0) return;
+    const session: SavedSession = { id: currentSessionId, title: sessionTitle(entries), mode, entries, sessionContext, savedAt: Date.now() };
+    saveToHistory(session);
+    setHistory(loadHistory());
+  }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startNewChat = () => {
+    setCurrentSessionId(crypto.randomUUID());
+    setEntries([]);
+    setInput('');
+    setError(null);
+    setPendingAttachments([]);
+    setSessionContext(null);
+    setShowSwaggerInput(false);
+    setShowHistory(false);
+  };
+
+  const loadSession = (s: SavedSession) => {
+    setCurrentSessionId(s.id);
+    setMode(s.mode);
+    setEntries(s.entries);
+    setSessionContext(s.sessionContext);
+    setInput('');
+    setError(null);
+    setPendingAttachments([]);
+    setShowSwaggerInput(false);
+    setShowHistory(false);
+  };
+
+  const removeSession = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    deleteFromHistory(id);
+    setHistory(loadHistory());
+    if (id === currentSessionId) startNewChat();
+  };
 
   // When mode changes, reset the conversation so the new prompt starts clean
   const handleModeChange = (next: ChatMode) => {
@@ -471,13 +564,63 @@ export default function ChatPage() {
 
   return (
     <div onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
-      <div className="px-4 md:px-9 pt-7.5">
-        <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Assistant</div>
-        <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Chat</h1>
+      <div className="px-4 md:px-9 pt-7.5 flex items-end justify-between gap-4">
+        <div>
+          <div className="font-mono text-[11px] tracking-[0.16em] text-accent uppercase mb-1.5">— Assistant</div>
+          <h1 className="font-display text-[clamp(26px,6.5vw,38px)] font-bold tracking-[-0.025em] leading-none">Chat</h1>
+        </div>
+        <div className="flex items-center gap-2 pb-1">
+          <button
+            type="button"
+            onClick={() => setShowHistory(h => !h)}
+            title="Chat history"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-control text-[12.5px] font-medium border transition-colors cursor-pointer ${showHistory ? 'bg-accent text-white border-accent' : 'bg-surface border-border text-tx-3 hover:text-tx-1'}`}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5l2 1.5"/></svg>
+            History{history.length > 0 && <span className="text-[10px] opacity-70">({history.length})</span>}
+          </button>
+          <button
+            type="button"
+            onClick={startNewChat}
+            title="New chat"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control text-[12.5px] font-medium bg-success text-white border border-success hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 1v10M1 6h10"/></svg>
+            New chat
+          </button>
+        </div>
       </div>
 
       <div className="px-4 md:px-9 py-6 flex flex-col gap-4.5">
         <div className="max-w-[760px] w-full mx-auto flex flex-col gap-4">
+
+          {/* History panel */}
+          {showHistory && (
+            <div className="bg-surface border border-border rounded-xl p-3 flex flex-col gap-1.5 max-h-[320px] overflow-y-auto">
+              {history.length === 0 ? (
+                <p className="text-[13px] text-tx-4 text-center py-4">No saved chats yet.</p>
+              ) : history.map(s => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => loadSession(s)}
+                  className={`w-full text-left flex items-start gap-2.5 px-3 py-2.5 rounded-[8px] hover:bg-bg transition-colors cursor-pointer group ${s.id === currentSessionId ? 'bg-bg' : ''}`}
+                >
+                  <span className="flex-shrink-0 mt-0.5 font-mono text-[9.5px] bg-border text-tx-4 rounded px-1.5 py-0.5">{MODE_BADGE[s.mode]}</span>
+                  <span className="flex-1 min-w-0 text-[13px] text-tx-2 truncate leading-snug">{s.title}</span>
+                  <span className="flex-shrink-0 text-[11px] text-tx-5 whitespace-nowrap mt-0.5">{timeAgo(s.savedAt)}</span>
+                  <button
+                    type="button"
+                    onClick={e => removeSession(s.id, e)}
+                    className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-tx-4 hover:text-danger cursor-pointer"
+                    title="Delete"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 2l8 8M10 2l-8 8"/></svg>
+                  </button>
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Mode selector */}
           <div className="flex gap-1.5 p-1 bg-bg border border-border rounded-[10px] w-fit">
