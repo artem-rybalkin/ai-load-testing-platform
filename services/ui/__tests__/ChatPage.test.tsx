@@ -54,9 +54,11 @@ describe('ChatPage', () => {
     render(<ChatPage />);
     await sendMessage('I want to load test something');
 
-    await waitFor(() => expect(mockParseChatPrompt).toHaveBeenCalledWith([
-      { role: 'user', content: 'I want to load test something' },
-    ]));
+    await waitFor(() => expect(mockParseChatPrompt).toHaveBeenCalledWith(
+      [{ role: 'user', content: 'I want to load test something' }],
+      undefined,
+      'english',
+    ));
     await waitFor(() => expect(screen.getByText('What URL do you want to test?')).toBeInTheDocument());
   });
 

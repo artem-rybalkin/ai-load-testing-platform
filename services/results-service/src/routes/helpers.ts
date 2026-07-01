@@ -12,6 +12,7 @@ import type {
   OrgRole,
   ChatMessage,
   ChatAttachment,
+  ChatMode,
   FlowStep,
 } from '@alt/shared';
 import {
@@ -214,96 +215,167 @@ export const CHAT_HISTORY_LIMIT = 20;
 
 /**
  * Detects clear multi-step flow intent in conversation text.
- * Used as a deterministic guard — overrides an AI "ready" response when the user
- * is clearly describing a sequence of HTTP operations, not a single-URL test.
- * Matches: arrow notation (->), "register...login", "login...logout",
- * "scenario/flow for ...", "then login/logout/register/checkout/..." sequences.
+ * Used as a deterministic guard in English mode — overrides an AI "ready"
+ * response when the user is clearly describing a sequence of HTTP operations.
  */
 export const MULTI_STEP_INTENT_RE = /(?:\s->\s|\bthen\s+(?:login|logout|register|sign\s*(?:up|in)|checkout|create\s+account|delete|add\s+to\s+cart)\b|(?:register|sign[\s-]?up|create\s+account).{0,60}(?:login|sign[\s-]?in)|(?:login|sign[\s-]?in).{0,60}logout|\bscenario\s+for\b|\bflow\s+for\b)/i;
 
-/**
- * Builds the Gemini prompt for POST /chat/parse. Exported standalone for unit
- * testability. Truncates to the last CHAT_HISTORY_LIMIT messages.
- *
- * When `attachmentContext` is provided (processed from user-uploaded files/URLs),
- * the prompt gains a 4th outcome — "flowReady" — that returns a full FlowStep[].
- */
-export const buildChatParsePrompt = (messages: ChatMessage[], attachmentContext?: string): string => {
-  const recent = messages.slice(-CHAT_HISTORY_LIMIT);
-  const transcript = recent
+const FLOW_READY_SHAPE = `{"status": "flowReady", "flow": {
+  "steps": [
+    {"name": "<step name>", "url": "<FULL absolute URL>", "method": "GET|POST|PUT|DELETE|PATCH", "body": "<optional JSON string>", "headers": {}, "extract": {}},
+    ...
+  ],
+  "targetUrl": "<base URL — hostname only, e.g. https://api.example.com>",
+  "description": "<what this flow tests, including any assertion/check requirements>",
+  "options": {"vus": <number>, "duration": "<e.g. 2m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"},
+  "thresholds": {"p95": <number>, "errorRate": <number>}
+}}`;
+
+const FLOW_READY_RULES = `Rules for "flowReady":
+- Every step MUST have name, url (full absolute URL), and method. Include body only when the spec/recording indicates a request body.
+- "targetUrl" is the base URL (hostname only) of the first step.
+- "options.vus" and "options.duration" MUST be explicitly stated by the user — if not, return "needsClarification" instead.
+- "thresholds" is optional — only include when the user mentioned performance targets.
+- Every threshold value MUST be a plain JSON number (no unit suffix).
+- "extract" populates only when one step's response feeds a variable into a later step (e.g. auth token). Leave as {} otherwise.`;
+
+const makeTranscript = (messages: ChatMessage[]): string =>
+  messages
+    .slice(-CHAT_HISTORY_LIMIT)
     .map(m => `${m.role.toUpperCase()}: ${fenceUserContent('user_message', m.content)}`)
     .join('\n');
 
-  const contextSection = attachmentContext
-    ? `\nContext provided by the user (API spec, documentation, recorded traffic, or codebase):\n${attachmentContext}\n`
-    : '';
+/**
+ * Mode: 'english' — pure conversational, single-URL backend/client-side test.
+ * Produces: ready | needsClarification | redirectToFlowBuilder.
+ * No attachment context; multi-step intent → redirect.
+ */
+export const buildEnglishPrompt = (messages: ChatMessage[]): string => {
+  const transcript = makeTranscript(messages);
+  return `You are an assistant that turns natural-language descriptions into load/performance test configurations. ${USER_DATA_INSTRUCTION}
 
-  const flowOutcome = attachmentContext ? `
-1. If the user's intent involves multiple sequential steps OR if context is provided above, try to build a complete flow. Return "flowReady" when you have enough information (steps, load settings):
-{"status": "flowReady", "flow": {
-  "steps": [
-    {"name": "<step name>", "url": "<full URL>", "method": "GET|POST|PUT|DELETE|PATCH", "body": "<optional JSON string>", "headers": {}, "extract": {}},
-    ...
-  ],
-  "targetUrl": "<base URL of the first step>",
-  "description": "<description of the flow including any assertion/check requirements the user mentioned>",
-  "options": {"vus": <number>, "duration": "<e.g. 2m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"},
-  "thresholds": {"p95": <number>, "errorRate": <number>}
-}}
-Rules for "flowReady":
-- Extract steps from the provided context (HAR recording, Swagger spec, or described sequence). Each step MUST have a name, url, and method. Include body only when the user/spec indicates a request body.
-- "targetUrl" is the base URL (hostname only, e.g. "https://api.example.com") taken from the first step's URL.
-- "options.vus" and "options.duration" MUST be stated by the user. If they have not stated them yet, use "needsClarification" instead.
-- "thresholds" is optional — include only when the user mentioned performance targets.
-- Every threshold value MUST be a plain JSON number with no unit suffix.
-- For HAR recordings: include only the non-static-asset requests (skip images, JS, CSS files). Preserve the recorded order.
-- For Swagger specs: pick the endpoints that form the flow described by the user. If the user has not said which flow to test, ask.
-- "extract" should be populated if one step's response feeds a variable into a later step (e.g. auth token extraction). Leave as empty {} if no extraction is needed.
-` : '';
-
-  const readyOutcomeNumber = attachmentContext ? '2' : '1';
-  const clarificationOutcomeNumber = attachmentContext ? '3' : '2';
-  const redirectOutcomeNumber = attachmentContext ? '4' : '3';
-
-  return `You are an assistant that turns conversations and API documentation into load/performance test configurations. ${USER_DATA_INSTRUCTION}
-${contextSection}
 Conversation so far:
 ${transcript}
 
-Decide which ONE of the following outcomes applies, and return ONLY valid JSON matching exactly one of these shapes:
-${flowOutcome}
-${readyOutcomeNumber}. Return "ready" ONLY if ALL FOUR of these were explicitly stated by the user somewhere in the conversation — never invent or silently default any of them:
-   (a) a single target URL
-   (b) which test type — backend or client-side (see the signal-word rule below)
-   (c) a concrete number of users/VUs/sessions to simulate
-   (d) how long the test should run
-   If even one of (a)-(d) is missing, you MUST use the "needsClarification" outcome instead.
-   CRITICAL: NEVER return "ready" if the user's intent (in ANY turn of the conversation) involves multiple sequential HTTP operations — e.g. "register then login then logout", "login flow", "create a flow with register user then login and logout", "add to cart then checkout". Such requests are multi-step flows. Return outcome ${redirectOutcomeNumber} instead, even if VUs/duration/type were provided later.
-{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<full description — see rules below>", "options": { ... }, "thresholds": { ... } }}
-- For "backend": options = {"vus": <number>, "duration": "<e.g. 1m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"}.
-- For "client-side": options = {"sessions": <number>, "duration": "<e.g. 1m>", "collectWebVitals": true}.
-- Threshold values MUST be plain JSON numbers ({"p95": 1000}, never {"p95": "1000ms"}).
-- CRITICAL — "description" is passed verbatim to the k6 script generator. It MUST include: (1) the load shape in plain English (e.g. "10 VUs for 2 minutes"), AND (2) ALL assertion/check requirements the user mentioned (e.g. "assert status 200", "check body contains userId", "verify header X-Request-ID is present"). Do NOT summarise or drop assertion details — preserve them exactly so the script generator can implement them.
+Decide which ONE of the following outcomes applies and return ONLY valid JSON:
 
-${clarificationOutcomeNumber}. If any required information is missing or ambiguous, return:
+1. Return "ready" ONLY if ALL FOUR were explicitly stated somewhere in the conversation — never invent or silently default any of them:
+   (a) a single target URL  (b) test type — backend or client-side  (c) a concrete number of users/VUs/sessions to simulate  (d) how long the test should run
+   CRITICAL: NEVER return "ready" if the user's intent (in ANY turn of the conversation) involves multiple sequential HTTP operations — e.g. "register then login then logout", "login flow", "add to cart then checkout". Such requests are multi-step flows. Use outcome 3 instead, even if VUs/duration/type were provided later.
+{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<full description — see rules below>", "options": { ... }, "thresholds": { ... } }}
+- backend options: {"vus": <n>, "duration": "<e.g. 1m>", "rampUp": "<optional>", "profile": "load"|"spike"|"capacity"|"soak"}
+- client-side options: {"sessions": <n>, "duration": "<e.g. 1m>", "collectWebVitals": true}
+- Signal words — backend: "API", "backend", "load test", "http test", "k6", "performance test", "endpoint". Client-side: "browser", "real browser", "page", "web vitals", "Lighthouse", "Puppeteer", "client-side".
+- Threshold values MUST be plain JSON numbers ({"p95": 1000}, NOT {"p95": "1000ms"}).
+- CRITICAL — "description" is passed verbatim to the k6 script generator. It MUST include the load shape AND ALL assertion/check requirements the user mentioned. Do NOT summarise or drop assertion details.
+
+2. If any required information is missing or ambiguous, return:
 {"status": "needsClarification", "question": "<one short follow-up question>"}
 - Always ask if there is no target URL.
-- Always ask if the test type is not explicitly signaled. Words like "user(s)", "session(s)", a number, or "for N minutes" do NOT by themselves indicate which type — the test type is ambiguous without explicit signals. Only infer "backend" from: "API", "backend", "load test", "http test", "k6", "performance test", "endpoint". Only infer "client-side" from: "browser", "real browser", "page", "web vitals", "Lighthouse", "Puppeteer", "client-side". If neither signal is present, ask which type.
+- Always ask if the test type is not explicitly signaled. Words like "user(s)", "session(s)", or "for N minutes" do NOT by themselves indicate which type — the test type is ambiguous without explicit signals.
 - Always ask if the user has not stated a concrete number of users/VUs/sessions to simulate anywhere in the conversation — words like "spike test" or "soak test" name a load shape, not an amount. Always ask if the user has not stated how long the test should run anywhere in the conversation. Never invent or silently default these values.
-- For flows: ask if the user has not said which specific flow/endpoints to test, or if VUs/duration are missing.
+- Never bundle multiple questions in one turn.
 
-${redirectOutcomeNumber}. If multi-step intent is detected AND no context was provided AND you cannot determine specific endpoint URLs/methods from the conversation:
+3. If multi-step intent is detected (named user journeys, explicit step sequences, "flow", "multi-step", "end-to-end", "e2e"):
 {"status": "redirectToFlowBuilder", "reason": "<one sentence>"}
-${attachmentContext ? 'IMPORTANT: When context is provided above, prefer "flowReady" or "needsClarification" over "redirectToFlowBuilder".' : 'Trigger this for: named user journeys ("login flow", "checkout flow", "registration flow"), explicit step sequences ("log in then add to cart then checkout"), "flow", "multi-step", "end-to-end", "e2e". IMPORTANT: Multi-step intent detected in ANY turn (including earlier turns) still triggers this — it is NOT overridden by the user later providing VUs, duration, or test type.'}
+Multi-step intent detected in ANY turn (including earlier turns) still triggers this — it is NOT overridden by the user later providing VUs, duration, or test type.
 
 Example (most common mistake):
 USER: Spike test homepage
-ASSISTANT: Could you provide the target URL and whether this should be a backend or client-side test?
+ASSISTANT: {"status": "needsClarification", "question": "What is the target URL?"}
 USER: example.com backend
-→ {"status": "needsClarification", "question": "How many virtual users would you like to simulate, and for how long should the spike test run?"}
+ASSISTANT: {"status": "needsClarification", "question": "How many virtual users would you like to simulate, and for how long?"}
 Returning "ready" with invented numbers at this point is WRONG — VUs and duration were never stated.
 
 Return ONLY the JSON object, nothing else.`;
+};
+
+/**
+ * Mode: 'swagger' — extract a FlowStep[] from a Swagger/OpenAPI spec.
+ * Produces: flowReady | needsClarification.
+ * attachmentContext is the summarized spec (base URL + endpoint list).
+ */
+export const buildSwaggerPrompt = (messages: ChatMessage[], attachmentContext: string): string => {
+  const transcript = makeTranscript(messages);
+  return `You are an assistant that converts OpenAPI/Swagger specs into multi-step load test flows. ${USER_DATA_INSTRUCTION}
+
+API spec provided by the user:
+${attachmentContext}
+
+Conversation so far:
+${transcript}
+
+Your goal is to extract a realistic multi-step flow from the spec above based on what the user described.
+
+Return ONE of these two outcomes as valid JSON:
+
+1. When you have the flow steps AND the user has stated VUs and duration:
+${FLOW_READY_SHAPE}
+${FLOW_READY_RULES}
+- Construct FULL absolute URLs using the Base URL from the spec + the path (e.g. Base URL "https://api.example.com" + path "/auth/login" → "https://api.example.com/auth/login").
+- For HAR recordings: include only non-static requests (skip images, JS, CSS). Preserve recorded order.
+- For Swagger specs: pick the endpoints that match the flow the user described. If unclear which endpoints to include, ask.
+
+2. When information is missing (which flow/endpoints to test, VUs, or duration):
+{"status": "needsClarification", "question": "<one focused question>"}
+- Ask which flow to test if the user has not described one.
+- Ask for VUs if not stated. Ask for duration if not stated. One question per turn.
+
+Return ONLY the JSON object, nothing else.`;
+};
+
+/**
+ * Mode: 'context' — extract steps from a HAR recording, documentation, or codebase snippet.
+ * Produces: flowReady | ready | needsClarification.
+ * attachmentContext is the processed attachment text.
+ */
+export const buildContextPrompt = (messages: ChatMessage[], attachmentContext: string): string => {
+  const transcript = makeTranscript(messages);
+  return `You are an assistant that converts recorded HTTP traffic, documentation, or code into load test configurations. ${USER_DATA_INSTRUCTION}
+
+Context provided by the user (HAR recording, documentation, or codebase):
+${attachmentContext}
+
+Conversation so far:
+${transcript}
+
+Analyse the context above and the conversation to determine what to test.
+
+Return ONE of these outcomes as valid JSON:
+
+1. If the context contains multiple sequential HTTP calls or describes a multi-step flow:
+${FLOW_READY_SHAPE}
+${FLOW_READY_RULES}
+- For HAR recordings: use only non-static-asset requests (skip images, JS, CSS, fonts). Preserve the recorded sequence.
+- For documentation/code: extract the API calls described in the order they would be performed.
+
+2. If the context describes a single-URL test (one endpoint, no meaningful sequence):
+{"status": "ready", "config": {"type": "backend" | "client-side", "targetUrl": "<url>", "description": "<full description including any assertion requirements>", "options": { ... }, "thresholds": { ... } }}
+
+3. When required information is missing (VUs, duration, or which scenario to test):
+{"status": "needsClarification", "question": "<one focused question>"}
+
+Rules that apply to all outcomes:
+- "options.vus" and "options.duration" MUST be stated by the user. If not, ask for them.
+- Threshold values MUST be plain JSON numbers.
+- Prefer "flowReady" over "ready" when the context contains a sequence of more than one distinct API call.
+
+Return ONLY the JSON object, nothing else.`;
+};
+
+/**
+ * Legacy single-entry-point wrapper — routes to the appropriate focused prompt.
+ * Kept for backwards compatibility with existing unit tests.
+ */
+export const buildChatParsePrompt = (messages: ChatMessage[], attachmentContext?: string): string => {
+  if (attachmentContext) {
+    // Determine the likely attachment type from the context content
+    if (attachmentContext.includes('<swagger_spec') || attachmentContext.includes('Base URL:')) {
+      return buildSwaggerPrompt(messages, attachmentContext);
+    }
+    return buildContextPrompt(messages, attachmentContext);
+  }
+  return buildEnglishPrompt(messages);
 };
 
 // ── Output validators ─────────────────────────────────────────────────────────

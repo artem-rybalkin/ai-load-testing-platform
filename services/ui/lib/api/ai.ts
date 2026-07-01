@@ -33,10 +33,11 @@ export const diagnoseErrors = async (testId: string): Promise<{ diagnoses: Error
 export const parseChatPrompt = async (
   messages: ChatMessage[],
   attachments?: ChatAttachment[],
+  mode?: import('@alt/shared').ChatMode,
 ): Promise<ChatParseResponse> =>
   aiJson(await f(`${RESULTS_URL}/chat/parse`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, ...(attachments?.length ? { attachments } : {}) }),
+    body: JSON.stringify({ messages, ...(attachments?.length ? { attachments } : {}), ...(mode ? { mode } : {}) }),
   }));
 
 export const predictWebhookNoise = async (events: string[]): Promise<{ level: string; warning: string | null; message: string }> =>

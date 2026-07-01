@@ -5,7 +5,7 @@
  */
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
-import type { SLOThresholds, BackendMetrics, ClientMetrics, ChatMessage, ChatAttachment } from '@alt/shared';
+import type { SLOThresholds, BackendMetrics, ClientMetrics, ChatMessage, ChatAttachment, ChatMode } from '@alt/shared';
 import { isProviderConfigured, generateAIText, extractAndParseAIJson, fenceUserContent, USER_DATA_INSTRUCTION } from '@alt/shared';
 import { checkGeminiQuota, incrementGeminiUsage } from '../quotas';
 import { getEffectiveAiProviderSetting } from '../settings';
@@ -15,6 +15,9 @@ import {
   isAiConfigured,
   aiGenerateText,
   sendInternalError,
+  buildEnglishPrompt,
+  buildSwaggerPrompt,
+  buildContextPrompt,
   buildChatParsePrompt,
   isValidChatParseResponse,
   processAttachments,
@@ -453,11 +456,11 @@ Return ONLY valid JSON array. Include only categories with count > 0:
   // ── POST /chat/parse ──────────────────────────────────────────────────────
   // Uses getEffectiveAiProviderSetting (per-team aware), unlike the other AI
   // endpoints which use the global-only aiGenerateText() helper.
-  app.post<{ Body: { messages: ChatMessage[]; attachments?: ChatAttachment[] } }>(
+  app.post<{ Body: { messages: ChatMessage[]; attachments?: ChatAttachment[]; mode?: ChatMode } }>(
     '/chat/parse',
     { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
-      const { messages, attachments } = request.body ?? {};
+      const { messages, attachments, mode = 'english' } = request.body ?? {};
       if (!Array.isArray(messages) || messages.length === 0) {
         return reply.code(400).send({ error: 'messages is required' });
       }
@@ -474,7 +477,17 @@ Return ONLY valid JSON array. Include only categories with count > 0:
           ? await processAttachments(attachments)
           : undefined;
 
-        const prompt = buildChatParsePrompt(messages, attachmentContext);
+        // Route to the focused prompt for the chosen mode
+        let prompt: string;
+        if (mode === 'swagger') {
+          prompt = buildSwaggerPrompt(messages, attachmentContext ?? '[No spec provided — ask the user to paste or upload a Swagger/OpenAPI spec]');
+        } else if (mode === 'context') {
+          prompt = buildContextPrompt(messages, attachmentContext ?? '[No context provided — ask the user to upload a HAR file, documentation, or codebase snippet]');
+        } else {
+          // english mode (default) — also used as fallback for unknown mode values
+          prompt = buildEnglishPrompt(messages);
+        }
+
         const text = (await generateAIText(prompt, setting)).trim();
         await incrementGeminiUsage(pool, request.projectId);
 
@@ -486,25 +499,27 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         }
 
         if (!isValidChatParseResponse(parsed)) {
-          // If the AI attempted a flowReady/redirect (detects flow intent but produced
-          // malformed steps or missing fields), gracefully redirect rather than 500.
+          // Graceful fallback: if the AI attempted flowReady/redirect but with malformed output
           if (parsed.status === 'flowReady' || parsed.status === 'redirectToFlowBuilder') {
+            if (mode === 'swagger' || mode === 'context') {
+              return { status: 'needsClarification', question: 'I could not extract a complete flow from the provided context. Could you describe which endpoints or scenario you want to test?' };
+            }
             return {
               status: 'redirectToFlowBuilder',
-              reason: 'I identified a multi-step flow scenario. Please use the Flow Builder to define each step, or paste your Swagger URL / upload the OpenAPI JSON so I can extract the endpoints automatically.',
+              reason: 'I identified a multi-step flow scenario. Please use the Flow Builder to define each step, or switch to Swagger or HAR mode so I can extract the endpoints automatically.',
             };
           }
           return reply.code(500).send({ error: 'AI returned unexpected response' });
         }
 
-        // Deterministic guard: if the AI collapsed a multi-step flow into a single-URL
-        // "ready" response (LLMs reliably fail this), override it.
-        if (parsed.status === 'ready' && !attachmentContext) {
+        // English mode only: deterministic guard against the AI collapsing a multi-step
+        // flow into a single-URL "ready" response.
+        if (mode === 'english' && parsed.status === 'ready') {
           const allText = messages.slice(-CHAT_HISTORY_LIMIT).map((m: { content: string }) => m.content).join('\n');
           if (MULTI_STEP_INTENT_RE.test(allText)) {
             return {
               status: 'redirectToFlowBuilder',
-              reason: 'I detected a multi-step flow scenario. Please use the Flow Builder to define each step, or paste your Swagger URL / upload the OpenAPI JSON so I can extract the endpoints automatically.',
+              reason: 'I detected a multi-step flow scenario. Please use the Flow Builder to define each step, or switch to Swagger or HAR · Docs mode to extract steps from a spec or recording.',
             };
           }
         }

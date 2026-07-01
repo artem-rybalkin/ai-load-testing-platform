@@ -12,6 +12,7 @@ import {
   FlowTestConfig,
   FlowStep,
 } from '@/lib/api';
+import type { ChatMode } from '@alt/shared';
 
 // ── Entry types ───────────────────────────────────────────────────────────────
 
@@ -179,7 +180,29 @@ const ATTACHMENT_TYPE_LABELS: Record<string, string> = {
   codebase: 'Codebase',
 };
 
-const SUGGESTIONS = ['Spike test my API', 'Test the login flow', 'Load test with Swagger'];
+const SUGGESTIONS: Record<ChatMode, string[]> = {
+  english:  ['Spike test my API at example.com', 'Load test homepage, 10 VUs 2 min', 'Browser test with web vitals'],
+  swagger:  ['Test the auth flow', 'Test all CRUD endpoints', 'Test the checkout flow'],
+  context:  ['Extract steps from this recording', 'Build a flow from these docs', 'Test the scenario in this code'],
+};
+
+const MODE_META: Record<ChatMode, { label: string; hint: string; placeholder: string }> = {
+  english: {
+    label: 'Describe in English',
+    hint: 'Describe the test you want to run — I\'ll ask for any missing details.',
+    placeholder: 'Describe a test, e.g. "Spike test my API at example.com with 50 VUs for 2 min"…',
+  },
+  swagger: {
+    label: 'Swagger / OpenAPI',
+    hint: 'Paste your Swagger URL or upload the OpenAPI JSON — I\'ll extract the flow for you.',
+    placeholder: 'Describe which flow to test (e.g. "test the login flow with 10 VUs for 5 min")…',
+  },
+  context: {
+    label: 'HAR · Docs · Code',
+    hint: 'Upload a HAR recording, documentation file, or code snippet — I\'ll build the test steps.',
+    placeholder: 'Describe what to test or ask me to extract steps from the uploaded context…',
+  },
+};
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
@@ -217,6 +240,7 @@ function FlowStepList({ steps }: { steps: FlowStep[] }) {
 
 export default function ChatPage() {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<ChatMode>('english');
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
@@ -229,6 +253,17 @@ export default function ChatPage() {
   // Swagger URL input mode
   const [swaggerUrl, setSwaggerUrl] = useState('');
   const [showSwaggerInput, setShowSwaggerInput] = useState(false);
+
+  // When mode changes, reset the conversation so the new prompt starts clean
+  const handleModeChange = (next: ChatMode) => {
+    setMode(next);
+    setEntries([]);
+    setInput('');
+    setError(null);
+    setPendingAttachments([]);
+    setSessionContext(null);
+    setShowSwaggerInput(next === 'swagger');
+  };
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -317,8 +352,8 @@ export default function ChatPage() {
 
     try {
       const response: ChatParseResponse = allAttachments.length > 0
-        ? await parseChatPrompt(toThreadMessages(nextEntries), allAttachments)
-        : await parseChatPrompt(toThreadMessages(nextEntries));
+        ? await parseChatPrompt(toThreadMessages(nextEntries), allAttachments, mode)
+        : await parseChatPrompt(toThreadMessages(nextEntries), undefined, mode);
       if (response.status === 'needsClarification') {
         appendEntry({ role: 'assistant', kind: 'text', content: response.question });
       } else if (response.status === 'redirectToFlowBuilder') {
@@ -435,11 +470,30 @@ export default function ChatPage() {
 
       <div className="px-4 md:px-9 py-6 flex flex-col gap-4.5">
         <div className="max-w-[760px] w-full mx-auto flex flex-col gap-4">
-          {/* Welcome message */}
+
+          {/* Mode selector */}
+          <div className="flex gap-1.5 p-1 bg-bg border border-border rounded-[10px] w-fit">
+            {(['english', 'swagger', 'context'] as ChatMode[]).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => handleModeChange(m)}
+                className={`px-3.5 py-1.75 rounded-[7px] text-[12.5px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                  mode === m
+                    ? 'bg-surface border border-border text-tx-1 shadow-sm'
+                    : 'text-tx-4 hover:text-tx-2'
+                }`}
+              >
+                {MODE_META[m].label}
+              </button>
+            ))}
+          </div>
+
+          {/* Welcome message — changes with mode */}
           <div className="flex gap-3 items-start">
             <BotIcon />
             <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] leading-[1.55] text-tx-2">
-              Hi — describe a test, or attach a Swagger spec, HAR recording, or documentation and I&apos;ll build the flow for you.
+              {MODE_META[mode].hint}
             </div>
           </div>
 
@@ -648,7 +702,7 @@ export default function ChatPage() {
 
           {entries.length === 0 && (
             <div className="flex gap-2 flex-wrap pl-10.5">
-              {SUGGESTIONS.map(s => (
+              {SUGGESTIONS[mode].map(s => (
                 <button key={s} type="button" onClick={() => handleSend(s)}
                   className="text-[12.5px] text-tx-3 bg-surface border border-border rounded-full px-3.5 py-1.75 cursor-pointer hover:border-tx-5">
                   {s}
@@ -730,7 +784,7 @@ export default function ChatPage() {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              placeholder="Describe a test, paste a URL, or attach a file…"
+              placeholder={MODE_META[mode].placeholder}
               className="flex-1 text-[14px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
             />
             <button
@@ -744,10 +798,21 @@ export default function ChatPage() {
             </button>
           </div>
 
-          <p className="text-[11.5px] text-tx-5 text-center -mt-1">
-            Drop a <strong>.json</strong> HAR file, a Swagger JSON spec, or any text doc to build a flow automatically.
-            Paste a Swagger URL (including <code className="font-mono">localhost</code>) and it will be fetched automatically.
-          </p>
+          {mode === 'english' && (
+            <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+              Switch to <strong>Swagger</strong> or <strong>HAR · Docs · Code</strong> mode to build multi-step flows from a spec or recording.
+            </p>
+          )}
+          {mode === 'swagger' && (
+            <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+              Paste a Swagger URL above (including <code className="font-mono">localhost</code>) — it will be fetched automatically — or drop an <strong>openapi.json</strong> file.
+            </p>
+          )}
+          {mode === 'context' && (
+            <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+              Drop a <strong>.json</strong> HAR file, a documentation <strong>.md/.txt</strong>, or a code file — I&apos;ll extract the test steps.
+            </p>
+          )}
         </div>
       </div>
 

@@ -163,6 +163,9 @@ export interface ClientTestOptions {
 
 // ── Chat-based "one prompt" test creation ───────────────────────────────────
 
+/** Which input mode the user chose at the start of a chat session. */
+export type ChatMode = 'english' | 'swagger' | 'context';
+
 export type ChatAttachmentType = 'swagger_url' | 'documentation' | 'codebase' | 'har';
 
 export interface ChatAttachment {
