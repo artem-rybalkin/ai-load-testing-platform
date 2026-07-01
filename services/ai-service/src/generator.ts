@@ -315,7 +315,12 @@ Requirements:
 - Chain variables between steps: extract values from responses and use them in subsequent requests
 - Chained extraction MUST be defensive: never call res.json() or access response fields unconditionally — guard with a status check or try/catch and fall back to a default value (e.g. const origin = (res.status === 200 && res.json().origin) || 'default'; or wrap in try { ... } catch { vars.x = 'default'; }). A parse failure on one step must NEVER throw and abort the rest of the iteration — every later group() must still run and be measured even if an earlier extraction failed
 - Use __ENV.VAR_NAME for credentials (never hardcode passwords/tokens)
-- Add check() assertions for response status (2xx) in each group
+- Add check() assertions for BOTH response status (2xx) AND response body correctness in each group:
+  * List/collection responses: assert the array is non-empty (e.g. 'has results': (r) => r.json().length > 0)
+  * Single-item fetch-by-id: assert the returned id matches the requested id (e.g. 'correct id': (r) => r.json('id') === vars.productId)
+  * Search/filter responses: assert at least one result matches the search term (e.g. 'result matches name': (r) => { try { const d = r.json(); return Array.isArray(d) && d.some(x => x.name === vars.productName); } catch { return false; } })
+  * Create/POST: assert the returned object has the expected field(s) from the request body
+  * Wrap body assertions in try/catch inside the check callback so a parse failure is a check failure (false), not an exception
 - After all groups, add sleep(1)
 - Return ONLY the JavaScript code, no markdown fences, no explanation
 
@@ -332,13 +337,19 @@ export default function() {
   // CRITICAL: never use exec.vu.abort() — all groups must always run so every step appears in metrics.
   group('Step 1: Login', function() {
     const res = http.post('https://example.com/auth', JSON.stringify({ u: 'user' }), { headers: { 'Content-Type': 'application/json' } });
-    check(res, { 'login 200': (r) => r.status === 200 });
+    check(res, {
+      'login 200': (r) => r.status === 200,
+      'has token': (r) => { try { return !!r.json('access_token'); } catch { return false; } },
+    });
     vars.token = (res.status === 200 && res.json('access_token')) || '';   // defensive — falls back to '' so step 2 still runs
   });
 
   group('Step 2: Fetch data', function() {
     const res = http.get('https://example.com/data', { headers: { 'Authorization': \`Bearer \${vars.token}\` } });
-    check(res, { 'data 200': (r) => r.status === 200 });
+    check(res, {
+      'data 200': (r) => r.status === 200,
+      'non-empty list': (r) => { try { return r.json().length > 0; } catch { return false; } },
+    });
   });
 
   sleep(1);
