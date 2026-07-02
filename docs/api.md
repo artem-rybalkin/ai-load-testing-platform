@@ -796,7 +796,7 @@ Create a webhook.
 |-------|------|-------------|
 | `url` | string | ✅ HTTPS endpoint to call |
 | `events` | string[] | Default: `["failed", "degraded"]` |
-| `secret` | string | Optional — HMAC signing key. When set (and `format` is `generic`), deliveries are signed with `X-Webhook-Signature: sha256=<hmac-sha256(secret, body)>` |
+| `secret` | string | Optional — HMAC signing key. When set, deliveries are signed with `X-Webhook-Signature: sha256=<hmac-sha256(secret, body)>`, regardless of `format` |
 
 ```bash
 curl -X POST http://localhost:3004/webhooks \

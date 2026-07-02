@@ -121,7 +121,7 @@ const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string, pro
   const deliveries = rows.map(({ url, secret, format }: { url: string; secret: string | null; format: string | null }) => {
     const fmt = format ?? 'generic';
     const { body, contentType } = buildWebhookPayload(fmt, result, perfStatus);
-    const sig = (fmt === 'generic' && secret)
+    const sig = secret
       ? createHmac('sha256', secret).update(body).digest('hex')
       : null;
     return { url, promise: fetch(url, {

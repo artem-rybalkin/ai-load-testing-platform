@@ -481,7 +481,7 @@ describe('handleResult — webhook payload formats', () => {
     expect(body.priority).toBe('P3');
   });
 
-  it('does not apply HMAC signature to non-generic formats even when secret is set', async () => {
+  it('applies HMAC signature to non-generic formats when secret is set', async () => {
     await pool.query(
       `INSERT INTO webhooks (url, events, secret, format) VALUES ('https://hook.example.com/notify', '{failed}', 'my-secret', 'slack')`
     );
@@ -492,7 +492,9 @@ describe('handleResult — webhook payload formats', () => {
       { timeout: 1000 }
     );
     const call = mockFetch.mock.calls.find(([url]) => String(url) === 'https://hook.example.com/notify');
-    expect(call![1].headers['X-Webhook-Signature']).toBeUndefined();
+    const sig = call![1].headers['X-Webhook-Signature'] as string;
+    expect(sig).toBeDefined();
+    expect(sig).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
 
   it('falls back to generic payload format when format column is null', async () => {

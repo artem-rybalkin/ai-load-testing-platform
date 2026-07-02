@@ -6,6 +6,10 @@ For the (separate, narrower) unit-test-coverage gap list, see [docs/TEST-COVERAG
 
 ## Open
 
+- [ ] **Live metric graph shows errors not present in k6 logs** — investigate discrepancy between the error series plotted on the live metrics chart during a running test and the actual k6 log output, which shows no corresponding errors; likely a live-metrics aggregation/classification bug in worker-backend or the live-metrics ingestion path, not a real test failure
+- [ ] **Live metrics result page freezes on long-running tests** — performance issue on the result detail page's live view; investigate whether this is unbounded state growth (e.g. every live-metric tick appended to an ever-growing array/chart dataset), missing windowing/downsampling, or a rendering cost issue in the chart component during long test durations
+- [ ] **Add error status codes to the live metric graph** — surface HTTP error status codes (4xx/5xx breakdown, not just a generic error count) on the live metrics chart during test execution
+- [ ] **Configurable live metric graph granularity** — allow choosing the aggregation window for live metrics charts (10s / 30s / 1min) instead of the current fixed granularity; likely needs both a UI control and a backend aggregation change (live_metrics currently uses fixed 5-second windows per docs/ARCHITECTURE.md)
 - [ ] **Mobile application performance testing** — investigate approaches: Appium/WebDriverIO for native apps, cloud device farms (AWS Device Farm, BrowserStack), network throttling profiles, mobile-specific metrics (frame rate, battery, memory on device), Android/iOS instrumentation
 - [ ] **Enterprise version with local LLM model** — investigate self-hosted/on-prem LLM (e.g. Ollama, vLLM, local Llama/Mistral/Qwen) as a drop-in replacement for Gemini for enterprise customers who can't send code/data to external APIs; needs a pluggable model-provider abstraction (`GEMINI_MODEL` → generic `AI_PROVIDER`/`AI_MODEL`), evaluation of script-generation quality vs. Gemini, GPU/resource sizing guidance, and config docs for air-gapped deployments
 

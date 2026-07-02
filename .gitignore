@@ -31,3 +31,6 @@ CLAUDE.md
 .claude/rules/
 agents/*-flow-state.md
 agents/TEMP/
+
+# Rosetta workflow plans — internal planning artifacts, not project docs
+plans/
