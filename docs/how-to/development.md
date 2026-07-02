@@ -15,8 +15,10 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 After startup, editing any `.ts` file in a service restarts that service in ~1–2 seconds. Changes to `packages/shared/src/index.ts` are picked up by a `shared-watcher` container that rebuilds `@alt/shared`, triggering all dependent services to restart.
 
 **Platform notes:**
-- On Windows, Next.js HMR uses `WATCHPACK_POLLING=true` (already set in the dev compose)
-- The `.next` cache is stored in the named `ui_next_cache` Docker volume for fast warm starts
+- The UI (Vite + React Router) runs its own dev server rather than `tsx watch`. Vite's file watcher uses polling (`server.watch.usePolling: true`, 1s interval, configured in `services/ui/vite.config.ts`) because WSL2/Docker Desktop bind mounts don't reliably deliver native filesystem events — this is what makes HMR trigger reliably on Windows, at the cost of up to a 1s detection delay
+- The dev compose adds an 8s startup delay (`sleep 8 && npm run dev`) before launching Vite, to let the WSL2 bind mount warm up before the initial file scan; `restart: on-failure` recovers automatically if Vite still crashes on startup
+- Vite listens on port 3006 and proxies `/api`, `/data`, `/viewer`, and `/recordings` to api-service, results-service, and recorder-service respectively (by Docker service name), so the browser talks to a single origin and cookies stay same-origin
+- A custom `resilient-watcher` Vite plugin catches `EIO`/`ENOENT` errors that WSL2 bind mounts intermittently raise mid-scan (both synchronously on the `FSWatcher` and asynchronously via `uncaughtException`), preventing the dev server from crashing on transient scan errors
 - The `recorder-service` dev entrypoint (`docker-entrypoint-dev.sh`) starts Xvfb before `tsx watch` — do **not** add a `command:` override for it in your local dev file
 
 ---
@@ -34,7 +36,6 @@ ai-load-testing-platform/
 ├── docker-compose.prod.yml # production overlay (Caddy, no internal ports)
 ├── Caddyfile             # Caddy reverse proxy config
 ├── .env                  # local env vars (never commit)
-├── CLAUDE.md             # AI assistant context file
 ├── docs/                 # this documentation
 ├── e2e/                  # Playwright E2E specs
 ├── packages/
@@ -47,7 +48,7 @@ ai-load-testing-platform/
     ├── worker-client/    # @alt/worker-client
     ├── results-service/  # @alt/results-service
     ├── recorder-service/ # @alt/recorder-service
-    └── ui/               # @alt/ui (Next.js)
+    └── ui/               # @alt/ui (Vite + React Router)
 ```
 
 Each service has the same structure:

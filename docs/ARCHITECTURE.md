@@ -58,7 +58,7 @@ Scheduled path:
 | test-results | queue | workers | results-service |
 | cancel-fanout | fanout | api-service | all worker replicas |
 
-**DLQ policy:** x-retry-count header, 3 retries, then route to .dlq and mark test failed.
+**DLQ policy:** x-retry-count header, 3 retries, then route to .dlq and mark test failed (see `docs/PATTERNS/rabbitmq-consumer-dlq.md`).
 
 ## Database Schema (key tables)
 
@@ -81,9 +81,7 @@ Scheduled path:
 
 ## Three-Way Script Routing (api-service)
 
-1. **Cache miss** → send to `ai-requests` → ai-service generates via Gemini
-2. **Hit + no description** (or flow test) → inject new k6 options → bypass ai-service, send directly to worker queue; increment used_count
-3. **Hit + description** → send to `ai-requests` with cachedScript + cachedScriptDescription → ai-service calls `compareDescriptions()` → REUSE or REGENERATE
+`POST /tests` routes on cache state: cache miss generates via Gemini, cache hit with no description bypasses AI entirely, cache hit with a description asks `compareDescriptions()` to decide REUSE vs REGENERATE. Full decision tree: see `docs/PATTERNS/three-way-script-routing.md`.
 
 ## Real-time Strategy
 
@@ -106,12 +104,12 @@ Scheduled path:
 - **Project-scoped data**: `project_id UUID` column on all resource tables. All queries filter by `($N::uuid IS NULL OR project_id = $N::uuid)` — null means auth is disabled. Covers results listing/detail, scripts (incl. `saveScript` upsert via `COALESCE(test_scripts.project_id, EXCLUDED.project_id)` so worker-inserted rows don't lose ownership), presets, schedules, webhooks, log sources, baseline set/clear, PDF report download, and live metrics (via `LEFT JOIN test_results` since `live_metrics` itself has no `project_id` column). `worker-client` propagates `projectId` on its `test-results` queue message so client-side test results are correctly attributed.
 - **CORS**: ALLOWED_ORIGIN env var; defaults to * in dev
 - **Sensitive fields**: envVars/testData/csvData stripped from POST /tests response (safeTestResponse())
-- **Pino redact**: envVars, testData, csvData masked in all service logs; metrics/previousMetrics masked in analyser-service
+- **Pino redact**: envVars, testData, csvData masked in all service logs; metrics/previousMetrics masked in analyser-service (see `docs/PATTERNS/pino-redact-logger.md`)
 - **envVar injection**: k6 --env args validated against regex before spawn
 - **Input validation**: URL with new URL() + http/https-only scheme check; description ≤ 500 chars; steps ≤ 20 (`POST /tests` returns 400 above this). FlowBuilder allows recording/HAR-import of up to 50 steps for review and trimming, but warns and blocks "Run Test" client-side once steps.length > 20.
 - **SSRF protection**: recorder-service validateRecorderUrl() blocks RFC-1918 ranges and Docker-internal hostnames before page.goto()
 - **Webhook HMAC**: X-Webhook-Signature: sha256=<hmac-sha256(secret, body)> computed server-side
-- **Non-root containers**: all Dockerfiles use node user (UID 1000)
+- **Non-root containers**: all Dockerfiles use node user (UID 1000) (see `docs/PATTERNS/non-root-docker.md`)
 - **No hardcoded credentials**: services throw on missing env vars at startup
 - **api-service session bugfix (Phase 25)**: `api-service/src/session.ts` previously used a stale HMAC `verifySession()` that couldn't parse the Phase-24 opaque DB-backed session cookie, leaving `request.projectId` unset in production. Replaced with `getApiSession(pool, token)`, mirroring results-service's lookup (hash cookie token → `sessions` → `team_members` for role); `request.projectId`/`request.role` now populate correctly with `SESSION_SECRET` set.
 - **Team quotas (Phase 25a)**: `team_quotas` row per team (falls back to `DEFAULT_TEAM_QUOTA` if absent) limits concurrent tests, max VUs/test, max test duration, max scheduled tests, and max Gemini calls/day. `checkTestQuota()` (api-service) gates `POST /tests` (429 on violation); `checkScheduleQuota()`/`checkGeminiQuota()`/`incrementGeminiUsage()` (results-service) gate `POST /schedules` and the explicit `/ai/*`/`suggest-*` endpoints. `GET/PUT /teams/:id/quotas` exposes usage + limits (admin-only edit); all checks are skipped (`teamId == null`) in dev mode.
@@ -167,11 +165,11 @@ AI-12 and AI-13 are pure functions (no Gemini). All others degrade gracefully wh
 
 | Decision | Rationale |
 |----------|-----------|
-| ws (noServer) over @fastify/websocket | @fastify/websocket requires Fastify ^4.x; ws noServer attaches to same HTTP server, compatible with Fastify v5 |
+| ws (noServer) over @fastify/websocket | @fastify/websocket requires Fastify ^4.x, incompatible with our Fastify v5 (see `docs/PATTERNS/websocket-noserver.md`) |
 | Vite over Next.js | Docker Desktop Windows filesystem latency (~574ms/op) caused Next.js lazy chunk compilation to exceed browser timeout |
 | SHA-256 flow cache key | flow:<hex16> uniquely identifies step combination; avoids storing full step JSON in test_scripts.target_url |
 | canonicalStep() before hashing | Property-order-sensitive JSON.stringify produced different keys for identical steps built via HAR vs manual vs re-run; canonical sort makes the key deterministic |
-| Per-test run directories | Prevents file collisions at WORKER_CONCURRENCY > 1 |
+| Per-test run directories | Prevents file collisions at WORKER_CONCURRENCY > 1 (see `docs/PATTERNS/per-test-run-dir.md`) |
 | analyser-service as separate service | Isolates Gemini AI from results-service; 12s timeout with local fallback |
 | analyzeResult in @alt/shared | Single source of truth for deterministic thresholds; eliminates 220-line duplication and future drift between results-service fallback and analyser-service primary |
 | AMQP connection.on(close) reconnect | amqplib has no built-in reconnect; silent channel faults were leaving services unable to consume without any health signal; 5s reconnect restores service automatically |

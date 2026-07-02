@@ -140,37 +140,33 @@ This is the core isolation predicate. Used in every resource query in `app.ts`.
 
 **Endpoints that do NOT use the project filter:**
 
+**Correction note (updated alongside the `original-code-specs-auth-tenancy.md` staleness pass — see that doc's Section A.6):** the four rows below marked **RESOLVED** were re-verified against current `services/results-service/src/routes/results.ts` and now DO apply the project filter — the isolation gaps this table originally flagged for them have been fixed. They're kept in the table (rather than deleted) so the "why was this ever a gap" history isn't lost, but the `[UNKNOWN]`/`[INCONSISTENCY]` callouts below the table that treated them as open gaps no longer apply to those four.
+
 | Endpoint | Reason |
 |----------|--------|
-| `POST /results/pending` | Internal (exempt from auth); accepts `projectId` in body and stores it directly — `app.ts:287-293` |
+| `POST /results/pending` | Internal (exempt from auth); accepts `projectId` in body and stores it directly — `routes/results.ts:79-92` |
 | `POST /results/:testId/message` | Internal suffix exempt — no project filter |
 | `POST /results/:testId/fail` | Internal suffix exempt — no project filter |
 | `POST /results/:testId/running` | Internal suffix exempt — no project filter |
 | `POST /results/:testId/cancel` | Internal suffix exempt — no project filter |
-| `POST /results/:testId/baseline` | No project filter in query — `app.ts:439-449`; **UNKNOWN** — appears to be missing isolation |
-| `DELETE /results/:testId/baseline` | No project filter — `app.ts:457` |
-| `GET /results/:testId/live` | No project filter — `app.ts:391-404` |
-| `POST /results/:testId/live` | No project filter (internal suffix) |
-| `GET /results/:testId/report.pdf` | No project filter — `app.ts:1132` |
-| `GET /webhooks (secret)` | `secret` column excluded from SELECT — `app.ts:519` returns only `id, url, events, format, created_at` |
+| `POST /results/:testId/baseline` | **RESOLVED** — now filtered on `project_id`, `routes/results.ts:368-391` |
+| `DELETE /results/:testId/baseline` | **RESOLVED** — now filtered, `routes/results.ts:394-403` |
+| `GET /results/:testId/live` | **RESOLVED** — now filtered via a join to `test_results.project_id` (the `live_metrics` table itself still has no `project_id` column), `routes/results.ts:325-343` |
+| `POST /results/:testId/live` | No project filter (internal suffix) — correct, this is the worker's internal push, not a read |
+| `GET /results/:testId/report.pdf` | **RESOLVED** — now filtered, `routes/results.ts:407-420` |
+| `GET /webhooks (secret)` | `secret` column excluded from SELECT — returns only `id, url, events, format, created_at` |
 
-**UNKNOWN / INCONSISTENCY:** `POST /results/:testId/baseline` and `DELETE /results/:testId/baseline` do not include the `project_id` filter. A user from project A could set a test from project B as their baseline if they know the `testId`. This appears to be a missing isolation enforcement.
-
-**UNKNOWN / INCONSISTENCY:** `GET /results/:testId/report.pdf` (`app.ts:1132`) does not include the `project_id` filter. Any authenticated user can download the PDF for any test ID.
+**Still an open gap, not covered by the table above:** `GET /system/ai-status` (`routes/system.ts:42-59`) queries `test_results` across all teams with no `project_id` filter.
 
 ---
 
 ## 6. `project_id` Propagation Path (Cross-Service)
 
-How `project_id` flows from user login to DB storage:
+**Correction note:** `SessionPayload` no longer exists — see `original-code-specs-auth-tenancy.md` Sections A.4/A.9/G.3. Sessions are now DB-backed opaque tokens resolved server-side; the value that ends up in `request.projectId` (both services) is the caller's *current team ID*, resolved via `getSession`/`getApiSession` rather than decoded from the cookie.
 
-1. **Login** (`POST /auth/login`): `findOrCreateProject` returns UUID → stored in `SessionPayload.projectId`.
-2. **api-service `onRequest` hook** (`index.ts:78`): `request.projectId = session.projectId`.
-3. **`POST /tests` handler** (`index.ts:149`): `projectId: request.projectId` added to `EnrichedTestRequest`.
-4. **`POST /results/pending`** (fire-and-forget call): `projectId: test.projectId` in JSON body (`index.ts:164`).
-5. **results-service `POST /results/pending`** (`app.ts:287`): reads `projectId` from body, stores in `test_results.project_id`.
-6. **Workers** (`TestResult.projectId`): `shared/src/index.ts:124` — set by workers from `test.projectId`; passed in the `test-results` RabbitMQ message.
-7. **results-service consumer** (`consumer.ts`): saves `projectId` to `test_results.project_id`.
+Summary: `project_id` originates at login/register (the session's current team, resolved server-side via `getSession`/`getApiSession` — not a client-decodable `SessionPayload` anymore), is attached to the request by api-service's `onRequest` hook, injected into `EnrichedTestRequest`, carried through `POST /results/pending` and the RabbitMQ `test-results` message, and stored on `test_results.project_id` by the results-service consumer.
+
+**(see `docs/original-code-specs-service-tenancy-gaps.md` for the full pipeline trace, including the worker-client gap where `projectId` is dropped before publishing to `test-results`.)**
 
 **UNKNOWN:** `test_scripts.project_id` is never explicitly set by the current write paths visible in `db.ts` and `app.ts`. The `test_scripts` table gets `project_id = null` for all rows inserted by `worker-backend` (which calls `saveScript` without session context). This means the `GET /scripts` filter `($1::uuid IS NULL OR project_id = $1::uuid)` would return NO scripts when a project session is active (all scripts have `null` project_id). This is a likely isolation gap for the scripts table.
 
@@ -205,47 +201,13 @@ export const createSchema = async (p: Pool): Promise<void>
 
 ## 8. API Key Authentication
 
-### api-service (`services/api-service/src/index.ts:59-68`)
+**Correction note (updated alongside the `original-code-specs-auth-tenancy.md` staleness pass):** api-service no longer has a separate, conditionally-registered API key hook — it was merged into the same always-registered `onRequest` hook that also does per-team API key lookup and session auth. Line numbers below and the "Difference" callout are updated accordingly; see `docs/original-code-specs-auth-tenancy.md` Sections A.3 and B.3 for the full current behavior (both hooks now also support a per-team `team_api_keys` credential and, on results-service, org/role resolution — out of scope for this doc).
 
-```typescript
-const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-if (apiKeys.length > 0) {
-  app.addHook('onRequest', async (request, reply) => {
-    if (request.url === '/health') return;
-    const key = request.headers['x-api-key'];
-    if (!key || !apiKeys.includes(key as string)) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
-  });
-}
-```
+Both api-service and results-service support a global `API_KEYS` env var (comma-split, trimmed, filtered for empties at startup) checked against the `x-api-key` header. For the exact code, see `docs/original-code-specs-auth-tenancy.md`: Section B.3 for the api-service hook (`services/api-service/src/index.ts:89-149`), and Section A.3 for the results-service check (`services/results-service/src/app.ts:77-183`).
 
-- Hook is conditionally registered only when `API_KEYS` is non-empty.
-- Parses `API_KEYS` env var at app startup: comma-split, trim each, filter empty strings.
-- **Exempt routes:** only `/health`.
-- **Header:** `x-api-key` (lowercase in HTTP/2 convention; Fastify normalizes headers to lowercase).
-- **Check:** `apiKeys.includes(key as string)` — simple array membership; case-sensitive.
+**Difference (updated):** both services now run their API key check(s) inline inside a single always-registered `onRequest` hook, rather than api-service using a separate conditionally-registered hook as before. api-service's hook still only exempts `/health`; results-service's hook still exempts a much larger set (all `/auth/*` routes, `/health`, `/system/ai-status`, `/ws`, and the internal worker-callback paths/suffixes).
 
-### results-service (`services/results-service/src/app.ts:38, 53-57`)
-
-```typescript
-const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-// ...
-if (apiKeys.length > 0) {
-  const key = request.headers['x-api-key'];
-  if (!key || !apiKeys.includes(key as string)) {
-    return reply.code(401).send({ error: 'Unauthorized' });
-  }
-}
-```
-
-- Same parsing logic as api-service.
-- **NOT conditionally registered** — runs inside the always-registered `onRequest` hook.
-- **Exempt routes** (from the surrounding hook): all auth routes, all internal paths/suffixes defined in `internalPaths`/`internalSuffixes`. Lines 49-50.
-
-**UNKNOWN:** API key check in results-service runs inside the same `onRequest` hook as session check. They share the same exemption list. API key check comes first (lines 53-57), session check second (lines 61-68). If `API_KEYS` is empty, the API key block is skipped entirely (due to the `if (apiKeys.length > 0)` condition on line 53).
-
-**Difference:** api-service registers a **separate** hook conditionally when `apiKeys.length > 0` (so when empty, no hook is registered). results-service runs the API key check inline inside an always-registered hook guarded by `if (apiKeys.length > 0)`.
+**UNKNOWN (still accurate):** in both services, the API key check(s) run inside the same `onRequest` hook as the session check, API key first. If `API_KEYS` (and, on results-service, no per-team key matches) is empty/absent, the API key block is skipped entirely and the session check runs.
 
 ---
 
@@ -303,5 +265,5 @@ No additional auth-specific fields beyond those inherited from `TestRequest`.
 | U5 | Assumption | `findOrCreateProject` name normalization (`trim().toLowerCase()`) is applied by the caller (`app.ts:84-85`), not inside the function. Direct calls without normalization would store mixed-case names. |
 | U6 | Unknown | The `ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name` upsert performs a write even on conflict, generating unnecessary WAL. No performance testing covers this. |
 | U7 | Unknown | No explicit `CASCADE` or `SET NULL` on `project_id` FK columns. If a project row is deleted from `projects`, the FK constraint (`NO ACTION`) would prevent deletion if any resource rows reference it. No `DELETE /projects` endpoint exists, so this is currently moot but relevant for future cleanup. |
-| U8 | Unknown | `api-service/src/index.ts:115` — The `CLAUDE.md` states `steps ≤ 20` but the code at line 115 enforces `steps.length > 50`. The limit in code is 50, not 20. This is an inconsistency between documentation and implementation (not auth-related but noted). |
+| U8 | Resolved | `api-service/src/index.ts` — `POST /tests` enforces `steps.length > 20` (returns 400 above that limit), confirmed in the current code. This is not an inconsistency: `docs/ARCHITECTURE.md`'s Security Architecture section explains that the FlowBuilder recording/HAR-import UI separately allows up to 50 steps for review and trimming, and only warns/blocks the client-side "Run Test" action once `steps.length > 20`. The 20-step API limit and the 50-step UI review limit are two different, intentional caps for two different purposes, not a doc/code mismatch. |
 | U9 | Assumption | Both services parse `API_KEYS` using `split(',').map(k => k.trim()).filter(Boolean)`. Keys with internal spaces would pass the trim (only leading/trailing trimmed) and be treated as a single key. |

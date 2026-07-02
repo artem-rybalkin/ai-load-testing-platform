@@ -6,9 +6,9 @@ Synthesized from nine per-module analysis documents. Every claim is grounded in 
 
 ## 1. Executive Summary
 
-The AI Load Testing Platform is a well-structured, purpose-built developer tool that successfully delivers its core value: natural-language-driven load test generation, execution, and analysis. The incremental build produced a system that is functionally complete, thoroughly tested (~1600 tests across 64 files: unit, integration via Testcontainers, UI with RTL, and 11 Playwright E2E specs), and deployable to production via Docker Compose and Caddy. The service boundaries are largely correct, the message-queue topology is idiomatic, and the choice to isolate Gemini AI behind dedicated services (ai-service, analyser-service) with explicit fallbacks is architecturally sound.
+The AI Load Testing Platform is a well-structured, purpose-built developer tool that successfully delivers its core value: natural-language-driven load test generation, execution, and analysis. The incremental build produced a system that is functionally complete, thoroughly tested (~1359 tests across 64 files: unit, integration via Testcontainers, UI with RTL, and 11 Playwright E2E specs — see docs/ARCHITECTURE.md for the canonical, verified count), and deployable to production via Docker Compose and Caddy. The service boundaries are largely correct, the message-queue topology is idiomatic, and the choice to isolate Gemini AI behind dedicated services (ai-service, analyser-service) with explicit fallbacks is architecturally sound.
 
-Three cross-cutting themes dominate the risk landscape. First, AMQP reliability: every service that touches RabbitMQ uses a single channel with no reconnect logic; a broker-level channel error after startup silently corrupts the service without any health signal. Second, type contract drift: the UI re-declares all domain types locally rather than importing from @alt/shared, and analyzer.ts is duplicated verbatim between results-service and analyser-service, creating independent drift surfaces that TypeScript cannot detect across service boundaries. Third, security gaps that survived the Phase 7 hardening: the webhook HMAC is not implemented (raw secret sent instead of computed signature), the recorder-service has no authentication, and the URL validator accepts file:// and other non-HTTP schemes that reach AI generation and worker execution.
+Three cross-cutting themes dominate the risk landscape. First, AMQP reliability: every queue-connected service (api-service, ai-service, worker-backend, worker-client) already implements capped-exponential-backoff reconnection via a shared `connectWithBackoff()` helper, with connection-level `error`/`close` handlers that flip the health-check flag and re-establish the connection automatically. The residual gap is narrower than a first pass suggests: a channel-level error only flips the service to a degraded health state — it does not itself trigger a reconnect attempt, so a channel-only fault (without the underlying connection also closing) can leave a service degraded until the connection drops too or the process restarts (R1). Second, type contract drift: the UI re-declares all domain types locally rather than importing from @alt/shared, and analyzer.ts is duplicated verbatim between results-service and analyser-service, creating independent drift surfaces that TypeScript cannot detect across service boundaries. Third, security gaps that survived the Phase 7 hardening: the webhook HMAC is not implemented (raw secret sent instead of computed signature), the recorder-service has no authentication, and the URL validator accepts file:// and other non-HTTP schemes that reach AI generation and worker execution.
 
 The platform is production-ready for single-team, self-hosted use in its current state, but before any horizontal scaling or multi-user exposure these three themes need systematic resolution. No single issue is catastrophic in isolation; their combination under realistic operating conditions constitutes the primary engineering risk.
 
@@ -83,7 +83,7 @@ flowchart TD
 
 - **results-service** is coupled to every other service: it is the HTTP target for workers, the WebSocket broadcaster for the UI, the scheduler trigger for api-service, the health aggregator for all six services, and the fallback analyzer. Any instability here propagates everywhere.
 - **@alt/shared and UI type drift**: the UI is the only consumer that does not import @alt/shared, creating a hidden coupling that manifests as runtime bugs rather than compile errors.
-- **AMQP single channel**: api-service, ai-service, worker-backend, and worker-client all share one channel for both consuming and publishing. A channel fault in one direction silences both.
+- **AMQP single channel**: api-service, ai-service, worker-backend, and worker-client each use one channel for both consuming and publishing. A channel-level fault silences both directions and is not independently recovered — only a full connection close triggers the existing reconnect logic (R1).
 
 ---
 
@@ -93,12 +93,12 @@ flowchart TD
 |---|---|---|
 | Node.js 20 + TypeScript | Good | Appropriate for I/O-bound queue consumers and API servers; TypeScript provides contract safety across the monorepo |
 | Fastify v5 | Good | Correct for low-overhead HTTP; onRequest hook auth and schema validation are available but underused in some services |
-| RabbitMQ / amqplib | Acceptable | Correct choice for durable work queues and fanout cancel; amqplib lacks built-in reconnect, requiring manual handling that is currently absent |
+| RabbitMQ / amqplib | Acceptable | Correct choice for durable work queues and fanout cancel; amqplib lacks built-in reconnect, but all four queue-connected services already implement it manually via a shared connectWithBackoff() helper — the remaining gap is that channel-level errors don't independently trigger a reconnect attempt (R1) |
 | PostgreSQL / pg | Good | Relational model fits structured test results; parameterized queries used consistently; pool defaults too low for concurrent load |
-| Gemini AI (gemini-2.5-flash) | Acceptable | Free-tier rate limit (20 req/day) is a real constraint; prompt injection surface exists but is low-risk for single-tenant deployment |
+| Gemini AI (gemini-3.1-flash-lite, `GEMINI_MODEL` default) | Acceptable | Free-tier rate limit (20 req/day) is a real constraint; prompt injection surface exists but is low-risk for single-tenant deployment |
 | k6 | Good | Industry standard for scripted HTTP load testing; spawned as child process is the only viable approach |
-| Puppeteer 22 + Lighthouse | Acceptable | Correct for synthetic browser testing; FID metric is deprecated; TTFB measurement method is inaccurate |
-| Vite 6 + React Router v7 | Good | Correct migration from Next.js; resolves Docker Desktop Windows compilation timeout; optimizeDeps.include documented but absent from actual config |
+| Puppeteer 22 + Lighthouse | Acceptable | Correct for synthetic browser testing; FID metric is deprecated and always reports 0 in headless sessions (retained for backward compatibility only); TTFB is already measured correctly via the Navigation Timing API |
+| Vite 6 + React Router v7 | Good | Correct migration from Next.js; resolves Docker Desktop Windows compilation timeout; optimizeDeps.include is present and correctly pre-bundles Recharts alongside React/React Router |
 | ws (noServer: true) | Good | Only viable WebSocket option with Fastify v5; no heartbeat mechanism is a gap |
 | Tailwind CSS 4 | Good | CSS-first @theme inline is forward-compatible; consistent token usage with minor gaps in FlowBuilder |
 | Pino structured logging | Good | Redact config on envVars/testData/csvData present on 7 of 9 services; ai-service generator bypasses it via console.log |
@@ -114,14 +114,15 @@ flowchart TD
 
 **Critical**
 
-| ID | Affected Modules | Description | Recommendation |
-|---|---|---|---|
-| B1 | ai-service | Both compareDescriptions (generator.ts:249) and generateScript (generator.ts:271) use model name gemini-3.1-flash-lite, which does not exist in the Gemini API as of mid-2025; both calls fail silently, wasting retry budget and Gemini quota | Define a single MODEL_NAME constant in generator.ts set to gemini-2.5-flash; replace both occurrences |
-| B2 | worker-client | options.duration is destructured but never used; collectWebVitals flag is always ignored; FID is always 0 in headless sessions — three metric fields silently misrepresent test execution | Use duration for a time-bounded session loop; remove fid collection or replace with INP; document collectWebVitals as deprecated |
-| B3 | worker-client | TTFB measured as wall-clock around page.goto() — includes DNS, TCP, TLS, and networkidle2 settle time; true TTFB is responseStart minus requestStart from Navigation Timing API | Replace with performance.getEntriesByType navigation[0].responseStart inside page.evaluate() |
-| B4 | results-service | Webhook sends raw secret as X-Webhook-Secret header; CLAUDE.md specifies X-Webhook-Signature: sha256=hmac; consumers cannot verify payload authenticity | Compute sha256=hmac-sha256(secret, body) and send as X-Webhook-Signature |
-| B5 | results-service | Scheduled tests POST to api-service without an API key; when API_KEYS is non-empty in production, all scheduled runs return 401 silently | Add X-API-Key header in triggerSchedule() using a shared internal key from env |
-| B6 | results-service | parseInt(STALE_RUNNING_MINUTES) returns NaN for non-integer values; injected into SQL as the string NaN, causing PostgreSQL error on every cleanup cycle | Add Number.isFinite(n) guard with fallback default |
+| ID | Affected Modules | Description | Recommendation | Complexity |
+|---|---|---|---|---|
+| B1 | ai-service | Both compareDescriptions (generator.ts:249) and generateScript (generator.ts:271) use model name gemini-3.1-flash-lite, which does not exist in the Gemini API as of mid-2025; both calls fail silently, wasting retry budget and Gemini quota | Define a single MODEL_NAME constant in generator.ts set to gemini-2.5-flash; replace both occurrences | Quick win |
+| B2 | worker-client | options.duration is destructured but never used; collectWebVitals flag is always ignored; FID is always 0 in headless sessions — two metric fields silently misrepresent test execution (verified: TTFB itself is correctly implemented, see B3 note below) | Use duration for a time-bounded session loop; remove fid collection or replace with INP; document collectWebVitals as deprecated | Medium effort |
+| B4 | results-service | **Resolved** — previously reported as "webhook sends raw secret as X-Webhook-Secret header, no HMAC computed". Re-verified against `consumer.ts`: `fireWebhooks` computes `sha256=hmac-sha256(secret, body)` and sends `X-Webhook-Signature`, matching `docs/ARCHITECTURE.md`'s Security Architecture section. Only `format: 'generic'` webhooks are signed; `slack`/`pagerduty`/`opsgenie` deliveries are not | No action needed for the generic-format case; consider signing non-generic formats too if consumers need authenticity checks there | Resolved |
+| B5 | results-service | Scheduled tests POST to api-service without an API key; when API_KEYS is non-empty in production, all scheduled runs return 401 silently | Add X-API-Key header in triggerSchedule() using a shared internal key from env | Quick win |
+| B6 | results-service | parseInt(STALE_RUNNING_MINUTES) returns NaN for non-integer values; injected into SQL as the string NaN, causing PostgreSQL error on every cleanup cycle | Add Number.isFinite(n) guard with fallback default | Quick win |
+
+*B3 (TTFB measurement) was removed from this list after verification: `runner.ts` already computes TTFB via `performance.getEntriesByType('navigation')[0].responseStart - requestStart` inside `page.evaluate()` — the correct Navigation Timing API approach. See module-worker-client.md for details.*
 
 **High**
 
@@ -152,13 +153,14 @@ flowchart TD
 
 **High**
 
-| ID | Affected Modules | Description | Recommendation |
-|---|---|---|---|
-| R1 | api-service, ai-service, worker-backend, worker-client | AMQP channel created once at startup with no error/close handler; broker-side channel fault leaves the service silently unable to consume or publish; health endpoints report ok | Register channel.on(error) and channel.on(close) handlers that reset the channel reference; implement exponential-backoff reconnect |
-| R2 | results-service | No SIGTERM handler; Docker stop kills the process immediately, potentially dropping in-flight DB transactions | Add process.on(SIGTERM) handler that drains requests and closes DB pool before exit |
-| R3 | worker-client | DLQ exhaustion does not call POST /results/:testId/fail; browser tests stay pending for 30 minutes until stale cleanup | Mirror ai-service: call fail endpoint before nacking to DLQ |
-| R4 | ws.ts and UI ResultsSocketContext | No WebSocket heartbeat; silent TCP drops leave connections in OPEN state on both sides; server clients Set accumulates stale entries | Add setInterval ping on server; detect pong timeout and close socket to trigger client reconnect |
-| R5 | results-service | Scheduler runs in-process; multiple replicas each independently trigger all scheduled tests | Extract scheduler to a dedicated service, or add a Redis SET NX distributed lock before each trigger |
+| ID | Affected Modules | Description | Recommendation | Complexity |
+|---|---|---|---|---|
+| R1 | api-service, ai-service, worker-backend, worker-client | Verified against source: all four services already implement `connectWithBackoff()` (capped exponential, 1s→30s) with connection-level `.on('error'/'close')` handlers that flip `queueConnected`/health state and trigger reconnect. The actual gap is narrower — `channel.on('error')` only flips the health flag; it never calls `scheduleReconnect()`, so a channel-only fault (connection stays open) leaves the service degraded with no automatic recovery attempt | Have `channel.on('error')` (and a `channel.on('close')` handler, currently absent) invoke the same reconnect path already used for connection-level failures, so a channel-only fault also triggers recovery rather than just a health-flag flip | Medium effort |
+| R2 | results-service | No SIGTERM handler; Docker stop kills the process immediately, potentially dropping in-flight DB transactions | Add process.on(SIGTERM) handler that drains requests and closes DB pool before exit | Medium effort |
+| R4 | ws.ts and UI ResultsSocketContext | No WebSocket heartbeat; silent TCP drops leave connections in OPEN state on both sides; server clients Set accumulates stale entries | Add setInterval ping on server; detect pong timeout and close socket to trigger client reconnect | Medium effort |
+| R5 | results-service | Scheduler runs in-process; multiple replicas each independently trigger all scheduled tests | Extract scheduler to a dedicated service, or add a Redis SET NX distributed lock before each trigger | Architectural |
+
+*R3 (worker-client DLQ exhaustion not calling `/fail`) was removed from this list after verification: `index.ts` already calls `POST /results/:testId/fail` with the partial execution log before routing to the DLQ when `retryCount >= MAX_RETRIES` (mirrors ai-service behavior). See module-worker-client.md, Integration Patterns.*
 
 ---
 
@@ -166,12 +168,12 @@ flowchart TD
 
 **Medium**
 
-| ID | Affected Modules | Description | Recommendation |
-|---|---|---|---|
-| D1 | analyser-service, results-service | analyzer.ts duplicated verbatim; threshold constants and all analysis functions are byte-for-byte copies; a future threshold change must be applied in both files | Move analyzeResult and its types to packages/shared/src/; import in both services |
-| D2 | ui (lib/api.ts) | TestResult, FlowStep, ExtractRule, BackendMetrics, ClientMetrics, LiveMetricPoint redeclared locally using snake_case DB field names; incompatible with @alt/shared camelCase representation | Define canonical response shape in @alt/shared matching DB column names; import in UI |
-| D3 | ui (SystemHealth, WorkerHealth) | Both components independently call GET /system/health every 15 s — two identical fetches per cycle | Extract HealthContext provider in RootLayout that fetches once and distributes via context |
-| D4 | ai-service | console.log/console.error in generator.ts bypass the Pino logger; redact guarantees do not apply to AI generation logs | Replace all console.* calls with the Pino log instance |
+| ID | Affected Modules | Description | Recommendation | Complexity |
+|---|---|---|---|---|
+| D1 | analyser-service, results-service | analyzer.ts duplicated verbatim; threshold constants and all analysis functions are byte-for-byte copies; a future threshold change must be applied in both files | Move analyzeResult and its types to packages/shared/src/; import in both services | Medium effort |
+| D2 | ui (lib/api.ts) | TestResult, FlowStep, ExtractRule, BackendMetrics, ClientMetrics, LiveMetricPoint redeclared locally using snake_case DB field names; incompatible with @alt/shared camelCase representation | Define canonical response shape in @alt/shared matching DB column names; import in UI | Medium effort |
+| D3 | ui (SystemHealth, WorkerHealth) | Both components independently call GET /system/health every 15 s — two identical fetches per cycle | Extract HealthContext provider in RootLayout that fetches once and distributes via context | Quick win |
+| D4 | ai-service | console.log/console.error in generator.ts bypass the Pino logger; redact guarantees do not apply to AI generation logs | Replace all console.* calls with the Pino log instance | Quick win |
 
 ---
 
@@ -196,9 +198,10 @@ flowchart TD
 |---|---|---|---|
 | T1 | worker-backend | index.ts has no tests; consumer loop, cancel handling, retry logic, saveScript, and runK6Test orchestration are untested | Add Vitest unit tests mocking child_process.spawn to cover retry, cancel, timeout, and validation-failure paths |
 | T2 | ai-service | index.ts consumer branching (compare/reuse/regenerate/DLQ) has no unit tests; only covered by Playwright E2E | Extract routing logic to a testable function; add Vitest tests for each branch |
-| T3 | worker-client | runClientTest(), Web Vitals collection, and metric averaging function are untested | Test avg() and cancel-detection logic; mock Puppeteer for lifecycle tests |
 | T4 | ui | applyDescriptionParams NLP parsing, WorkerHealth component, and result detail page interactions are untested | Add Vitest RTL tests for parsing edge cases and component rendering |
 | T5 | results-service | ws.ts reconnect, heartbeat absence, broadcast-under-load, and NaN cleanup interval are untested | Add Vitest tests for cleanup guard and WebSocket send-failure pruning |
+
+*T3 (worker-client runClientTest/Web Vitals/averaging untested) was removed from this list after verification: `src/__tests__/runner.test.ts` already covers `runClientTest` via injected mock context (22 tests across session flow, multi-session averaging, Lighthouse extraction, lifecycle, and error handling), and `src/__tests__/metrics.test.ts` covers `avgNum`/`avgResourceBreakdown`. See module-worker-client.md, Quality section.*
 
 ---
 
@@ -226,11 +229,9 @@ flowchart TD
 | ai-service / generator.ts | Extract MODEL_NAME constant; fix compareDescriptions model name (B1) | Eliminates silent Gemini failures on every description comparison |
 | api-service / index.ts | Add AbortSignal.timeout(5000) to results-service fetch (B7) | Prevents indefinite request stall |
 | api-service / index.ts | Restrict URL validation to http: and https: schemes (S1) | Closes non-HTTP URL security vector |
-| results-service / consumer.ts | Compute HMAC for webhook signature header (B4) | Aligns implementation with documented spec |
 | results-service / scheduler.ts | Add X-API-Key header to api-service POST (B5) | Fixes silent 401 on all scheduled runs in production |
 | results-service / cleanup.ts | Add Number.isFinite guard on interval env vars (B6) | Prevents SQL error on misconfigured env |
 | results-service / app.ts | Validate cron expression before DB INSERT (B9) | Prevents startup crash from invalid schedule record |
-| worker-client / index.ts | Call POST /results/:testId/fail on DLQ exhaustion (R3) | Eliminates 30-minute pending ghost tests |
 | analyser-service / logger.ts | Add redact config (O3) | Brings into parity with all other service loggers |
 | ai-service / generator.ts | Replace all console.log/console.error with Pino log (D4) | Restores redact guarantees for AI generation logs |
 | ui / SystemHealth.tsx + WorkerHealth.tsx | Extract shared HealthContext provider (D3) | Halves the /system/health polling load |
@@ -239,14 +240,14 @@ flowchart TD
 
 | Scope | Description |
 |---|---|
-| AMQP reconnect across all services (R1) | Add channel error/close handlers with exponential-backoff reconnect in api-service, ai-service, worker-backend, and worker-client; update isQueueConnected() to reflect live channel state |
-| analyzeResult extraction to @alt/shared (D1) | Move the deterministic analyzer and its helper types to packages/shared/src/; import from both analyser-service and results-service; eliminates drift risk permanently |
-| UI type unification (D2) | Define canonical TestResult response shape in @alt/shared matching DB column names; import in ui/lib/api.ts; remove local redeclarations |
-| worker-client metrics accuracy (B2, B3) | Replace wall-clock TTFB with Navigation Timing API; remove FID collection; respect options.duration in session loop; add SIGTERM handler for graceful browser close |
-| WebSocket heartbeat (R4) | Add server-side ping on 30 s interval with pong timeout detection; add client-side reconnect trigger on ping timeout |
-| results-service SIGTERM handler (R2) | Drain in-flight requests and close DB pool before exit; prevents dropped transactions on container stop |
-| worker-backend and worker-client index.ts tests (T1, T2, T3) | Add Vitest unit tests mocking child_process.spawn and amqplib channel; cover retry, cancel, timeout, and DLQ paths |
-| recorder-service authentication and SSRF (S2, S3) | Add X-API-Key guard to all recorder endpoints; add URL validation with internal-host blocklist |
+| AMQP channel-error reconnect wiring (R1) | See Reliability Gaps → R1. Wire `channel.on('error'/'close')` to the existing `scheduleReconnect()` path in all four queue-connected services |
+| analyzeResult extraction to @alt/shared (D1) | See Duplication → D1. Move to packages/shared/src/; import from both services |
+| UI type unification (D2) | See Duplication → D2. Define canonical shape in @alt/shared; import in ui/lib/api.ts |
+| worker-client metrics accuracy (B2) | See Real Bugs → B2. Remove FID collection or replace with INP; respect options.duration in session loop; add SIGTERM handler for graceful browser close |
+| WebSocket heartbeat (R4) | See Reliability Gaps → R4. Add server-side ping on 30 s interval with pong timeout detection; add client-side reconnect trigger on ping timeout |
+| results-service SIGTERM handler (R2) | See Reliability Gaps → R2. Drain in-flight requests and close DB pool before exit |
+| worker-backend index.ts tests (T1, T2) | See Test Coverage Gaps → T1, T2. Add Vitest unit tests mocking child_process.spawn and amqplib channel; cover retry, cancel, timeout, and DLQ paths |
+| recorder-service authentication and SSRF (S2, S3) | See Security Gaps → S2, S3. Add X-API-Key guard to all recorder endpoints; add URL validation with internal-host blocklist |
 
 ### Architectural (multi-sprint)
 
@@ -281,13 +282,13 @@ The following design decisions are correct and should not be changed:
 
 ## 7. Open Questions and Assumptions
 
-1. **testData storage ambiguity** — @alt/shared TestRequest.testData comment (line 58) says "stored in test_results.test_data for re-run restoration", contradicting CLAUDE.md Phase 10 which says it is NOT stored in DB. The actual db.ts schema must be verified before any re-run feature work touches this field.
+1. **testData storage — resolved, not ambiguous.** @alt/shared `TestRequest.testData` comment (line 58) says "stored in test_results.test_data for re-run restoration". Verified against `services/results-service/src/db.ts` (`ALTER TABLE test_results ADD COLUMN IF NOT EXISTS test_data JSONB`) and `services/results-service/src/routes/results.ts` (writes `testData` into that column on insert): the comment is accurate and current.
 
-2. **optimizeDeps.include discrepancy** — module-ui.md notes that CLAUDE.md documents optimizeDeps.include as present in vite.config.ts but the actual file does not contain it. If absent, first-request Recharts bundling may reproduce the latency issue that motivated the Next.js migration. Verification needed.
+2. **optimizeDeps.include discrepancy — resolved.** `module-ui.md` previously noted a discrepancy where `optimizeDeps.include` was expected in `vite.config.ts` but reportedly absent. The current `vite.config.ts` does include it (`recharts` among the pre-bundled deps), so the on-demand-bundling latency risk does not apply.
 
 3. **ClientMetrics.fid deprecation timeline** — FID was deprecated by Google in March 2024. Whether the Lighthouse version pinned in the Docker image still populates fid is unknown; if it stops silently, the field returns 0 without any error, producing misleading metrics. Behavior must be verified against the pinned Lighthouse version.
 
-4. **Gemini free-tier quota interaction with compareDescriptions** — the 20 requests/day limit is acknowledged in CLAUDE.md, but description-comparison adds a second Gemini call per test that has a cached script and description. The actual cost impact on typical usage patterns should be measured before the comparison feature is promoted as the default behavior for all users.
+4. **Gemini free-tier quota interaction with compareDescriptions** — `docs/configuration.md`'s "Gemini API limits" section documents the free-tier ceiling as roughly 15 requests/minute and ~1,000 requests/day (model-dependent, subject to change by Google), separate from the platform's own per-team `maxGeminiCallsPerDay` quota (default 100, see `DEFAULT_TEAM_QUOTA` in `packages/shared/src/index.ts`). Description-comparison adds a second Gemini call per test that has a cached script and description. The actual cost impact on typical usage patterns should be measured before the comparison feature is promoted as the default behavior for all users.
 
 5. **stepsToKey() property-ordering collision risk** — JSON.stringify(steps) is order-sensitive on FlowStep objects. If the UI or different code paths produce identical step arrays with different property orderings (common when steps come from HAR import vs manual entry vs re-run restoration), cache keys diverge and force script regeneration. The magnitude depends on whether property ordering is stable across all step-creation paths.
 

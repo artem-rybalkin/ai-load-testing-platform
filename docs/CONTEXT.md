@@ -42,4 +42,4 @@ AI-powered distributed load testing platform. Users describe what they want to t
 
 ## Current Status
 
-Production-ready across 23+ completed phases. All core features implemented and tested (~1359 tests across 64 files). Deployable to cloud via docker-compose.prod.yml + Caddy HTTPS. Includes full org/team multi-tenancy with DB-backed sessions, per-team API keys, per-team AI provider overrides, and per-team quotas.
+Production-ready across 23+ completed phases. All core features implemented and extensively tested (see ARCHITECTURE.md § Testing Architecture). Deployable to cloud via docker-compose.prod.yml + Caddy HTTPS. Includes full org/team multi-tenancy with DB-backed sessions, per-team API keys, per-team AI provider overrides, and per-team quotas.

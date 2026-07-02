@@ -44,14 +44,30 @@
 | TEAM-04 | Add member — already a member | Admin role; target is already on the team | 1. Submit their email again | `409` | P2 |
 | TEAM-05 | Change a member's role (admin) | Admin role; ≥2 members incl. another admin | 1. Change a member's role via the dropdown | `PUT /teams/:id/members/:userId` persists; UI reflects new role | P1 |
 | TEAM-06 | Change role — invalid role string | Admin role | 1. Call the endpoint directly with `role: "superadmin"` | `400` | P3 |
-| TEAM-07 | Last-admin protection — role change | Exactly one admin on the team | 1. Try demoting the sole admin to member/viewer | `409`; role unchanged | P1 |
+| TEAM-07 | Last-admin protection | Exactly one admin on the team | 1. Try demoting the sole admin to member/viewer 2. Try removing the sole admin | `409` on both `PUT` and `DELETE .../members/:userId`; role/membership unchanged | P1 |
 | TEAM-08 | Remove a member (admin) | Admin role; ≥2 members | 1. Click remove on a non-admin member | `DELETE /teams/:id/members/:userId` succeeds; member disappears from list | P1 |
-| TEAM-09 | Last-admin protection — removal | Exactly one admin on the team | 1. Try removing the sole admin | `409`; member remains | P1 |
-| TEAM-10 | Non-admin cannot mutate membership | Logged in as `member` or `viewer` | 1. Attempt to add/change-role/remove via UI or direct API call | `403`; UI renders a read-only member list (no controls) for non-admins | P1 |
-| TEAM-11 | Viewer role is read-only platform-wide | Logged in as `viewer` | 1. Attempt to create a test, delete a script, save a preset, etc. | `403` on every mutating request across resource routes, not just team membership | P2 |
 | TEAM-12 | Create a new team | Logged in (any role) | 1. Use "+ New team" (Org page) or `POST /teams` directly with `{ name }` | New team created; caller becomes its `admin`; appears in `user.teams` | P1 |
 | TEAM-13 | Create team — duplicate name | A team with that name exists | 1. Submit the same name | `409` | P2 |
 | TEAM-14 | Team-switcher visibility | User belongs to exactly 1 team vs ≥2 | 1. Compare sidebar in both cases | `<select>` switcher is hidden for 1 team, shown for ≥2 | P3 |
+
+---
+
+### RBAC — Cross-Resource 403 Matrix
+
+The cases below all test the same underlying rule — a caller without the required role attempts a mutating (or otherwise privileged) action on some resource and must get `403` — with only the resource/endpoint/role varying. Consolidated here as a single parameterized table instead of one verbose test case per resource.
+
+| Test ID | Resource | Endpoint | Required Role | Expected Result | Notes |
+|---------|----------|----------|----------------|------------------|-------|
+| TEAM-10 | Team membership | `POST/PUT/DELETE /teams/:id/members...` | admin | `403` | UI renders a read-only member list (no controls) for non-admins |
+| TEAM-11 | All resources, platform-wide | Any mutating route (tests, scripts, presets, etc.) | member or above (not viewer) | `403` on every mutating request | Broader than the rest of this table — `viewer` is read-only across *all* resource routes, not just team membership |
+| ORG-08 | Org membership | `POST/PUT/DELETE /orgs/:id/members...` | owner/admin | `403` | — |
+| KEY-06 | Team API keys | `POST /teams/:id/api-keys`, `DELETE .../api-keys/:keyId` | admin | `403` | — |
+| QUOTA-03 | Team quotas | `PUT /teams/:id/quotas` | admin | `403` | — |
+| AIP-09 | AI provider settings | `PUT /teams/:id/ai-provider`, `PUT /system/ai-provider` | admin | `403` (per-team); global `PUT /system/ai-provider` also requires admin of the caller's current team | Global endpoint has an extra nuance: it isn't just "any admin," it must be admin of the caller's *current* team |
+| AUDIT-05 | Audit log | `GET /teams/:id/audit-log` | admin | `403`; section absent from the Team page UI | Read (`GET`), not a mutation — otherwise the same admin-only rule |
+| AUDIT-10 | Data erasure | `DELETE /teams/:id/data` | admin | `403` | — |
+
+All rows: P2 (except TEAM-10, which is P1 as the canonical/first-discovered case).
 
 ---
 
@@ -66,9 +82,10 @@
 | ORG-05 | Change an org member's role (owner/admin) | ≥2 org members incl. another owner | 1. Change role via UI/API | `PUT /orgs/:id/members/:userId` persists | P2 |
 | ORG-06 | Last-owner protection | Exactly one owner | 1. Try demoting or removing the sole owner | `409` on both `PUT` and `DELETE .../members/:userId` | P1 |
 | ORG-07 | Remove an org member (owner/admin) | ≥2 members | 1. Remove a non-owner member | `DELETE` succeeds; member disappears | P2 |
-| ORG-08 | Non-owner/admin cannot mutate org membership | Caller role = `member` in the org | 1. Attempt add/role-change/remove | `403` | P2 |
 | ORG-09 | Create a team inside an org | Caller is owner/admin | 1. Use "+ New team" on the Org page | `POST /orgs/:id/teams { name }` creates a team with `org_id` set; caller becomes its team `admin`; listed under the org's teams | P1 |
 | ORG-10 | Ungrouped teams unaffected | A team created before/without an org | 1. Verify it still functions normally | `org_id` is `NULL`; no "Org" nav item forced; team behaves identically to an org-grouped one | P3 |
+
+*(Non-owner/admin-cannot-mutate-membership is covered as ORG-08 in the [RBAC — Cross-Resource 403 Matrix](#rbac--cross-resource-403-matrix) in Section 2.)*
 
 ---
 
@@ -78,7 +95,6 @@
 |----|-------|-----|-------|----------|-----|
 | QUOTA-01 | View quota & usage | Any team member | 1. Go to `/team` → "Usage & Limits" | `GET /teams/:id/quotas` returns `{ quota, usage }`; `DEFAULT_TEAM_QUOTA` shown when no `team_quotas` row exists yet | P1 |
 | QUOTA-02 | Edit quota (admin) | Admin role | 1. Change a limit (e.g. `maxConcurrentTests`) 2. Save | `PUT /teams/:id/quotas` upserts the row with the partial update | P2 |
-| QUOTA-03 | Non-admin cannot edit quota | Member/viewer role | 1. Attempt to save a quota change | `403` | P2 |
 | QUOTA-04 | Exceeding `maxConcurrentTests` | Quota set low (e.g. 1); one test already running | 1. Submit another test | `POST /tests` → `429` | P1 |
 | QUOTA-05 | Exceeding `maxVusPerTest` | Quota set low | 1. Submit a test requesting more VUs than the cap | `429` | P2 |
 | QUOTA-06 | Exceeding `maxTestDurationSeconds` | Quota set low | 1. Submit a test with a longer duration than the cap | `429` | P2 |
@@ -86,6 +102,8 @@
 | QUOTA-08 | Exceeding `maxGeminiCallsPerDay` | Quota exhausted for the day | 1. Call an explicit `/ai/*` endpoint (e.g. "✨ Suggest settings") | `429` | P2 |
 | QUOTA-08a | Core pipeline Gemini calls are NOT metered | Same exhausted daily quota as QUOTA-08 | 1. Run a test that needs AI script generation | Succeeds normally — script generation, recording correlation, and PDF summaries bypass the per-team daily counter | P2 |
 | QUOTA-09 | `teamId == null` bypasses quota checks | Dev mode (`SESSION_SECRET` empty) | 1. Submit tests/schedules well past any quota numbers | All succeed — quota checks are skipped entirely when there's no team context | P3 |
+
+*(Non-admin-cannot-edit-quota is covered as QUOTA-03 in the [RBAC — Cross-Resource 403 Matrix](#rbac--cross-resource-403-matrix) in Section 2.)*
 
 ---
 
@@ -98,7 +116,8 @@
 | KEY-03 | Revoke a key | An active key exists | 1. Click revoke | `DELETE .../api-keys/:keyId` sets `revoked_at`; key disappears or shows revoked in the list | P1 |
 | KEY-04 | Use an API key to scope a request | A valid, unrevoked key | 1. `POST /tests` with `X-API-Key: <key>` and no session cookie | Succeeds; scoped to that team (`request.projectId = team_id`, `role = 'admin'`); `last_used_at` updates | P1 |
 | KEY-05 | Revoked/unknown key rejected | A revoked key, or a made-up string | 1. Use it as `X-API-Key` | `401`; does not fall through to the global-key/session checks | P2 |
-| KEY-06 | Non-admin cannot manage keys | Member/viewer role | 1. Attempt to generate or revoke a key | `403` | P2 |
+
+*(Non-admin-cannot-manage-keys is covered as KEY-06 in the [RBAC — Cross-Resource 403 Matrix](#rbac--cross-resource-403-matrix) in Section 2.)*
 
 ---
 
@@ -114,7 +133,8 @@
 | AIP-06 | UI badge reflects override state | Team page, AI Provider section | 1. Toggle between overridden and default | Badge reads "Custom for this team" vs "Using platform default" accordingly | P3 |
 | AIP-07 | Fallback chain works end-to-end | Primary provider unconfigured (no API key), one fallback configured | 1. Set that combination 2. Run a test needing AI generation | Generation succeeds via the fallback provider, not the unconfigured primary | P2 |
 | AIP-08 | "(not configured)" label | A provider with no API key set in env | 1. Open the provider dropdown/checkboxes | That provider is labeled "(not configured)" | P3 |
-| AIP-09 | Non-admin cannot change AI provider settings | Member/viewer role | 1. Attempt to change global or per-team provider settings | `403` (per-team); global `PUT /system/ai-provider` also requires admin of the caller's current team | P2 |
+
+*(Non-admin-cannot-change-AI-provider-settings is covered as AIP-09 in the [RBAC — Cross-Resource 403 Matrix](#rbac--cross-resource-403-matrix) in Section 2.)*
 
 ---
 
@@ -126,13 +146,13 @@
 | AUDIT-02 | CSV export recorded | Completed result | 1. Download the CSV report | `action='export_csv'` row inserted | P3 |
 | AUDIT-03 | Script delete recorded | Existing script | 1. Delete it | `action='delete'`, `resourceType='script'` row inserted | P3 |
 | AUDIT-04 | View audit log (admin only) | Admin role; ≥1 audited action occurred | 1. Go to `/team` → "Audit Log" | Most recent entries first, joined with the acting user's email | P2 |
-| AUDIT-05 | Non-admin cannot view audit log | Member/viewer role | 1. Attempt to view/call `GET /teams/:id/audit-log` | `403`; section absent from the Team page UI | P2 |
 | AUDIT-06 | Audit log `limit` param respected | ≥500 audited actions (or fewer, to test the default) | 1. Call with `?limit=500` and with no param | Default `100`; capped at max `500` even if a larger value is requested | P3 |
 | AUDIT-07 | Danger Zone two-click confirmation | Admin role | 1. Click "Erase all data" once | Button changes to "Click again to confirm"; no deletion yet on the first click | P1 |
 | AUDIT-08 | Data erasure (admin, confirmed) | Admin role; some team data exists | 1. Confirm the second click | `DELETE /teams/:id/data { confirm: true }` deletes test_results, live_metrics, test_scripts, schedules (cron unregistered), test_presets, webhooks, log_sources, audit_log; records a final `erase_team_data` audit entry; returns `{ success, deleted: {...} }` | P1 |
 | AUDIT-09 | Data erasure without confirm | Admin role | 1. Call the endpoint directly with no/false `confirm` | `400`; nothing deleted | P2 |
-| AUDIT-10 | Data erasure — non-admin | Member/viewer role | 1. Attempt the erasure | `403` | P2 |
 | AUDIT-11 | GDPR auto-purge | `TEST_RESULTS_RETENTION_DAYS > 0`; old `test_results` rows exist | 1. Wait for/trigger the 60s stale-cleanup tick | Rows (and their `live_metrics`) older than N days are deleted; recent rows untouched | P3 |
+
+*(Non-admin-cannot-view-audit-log and non-admin-cannot-erase-data are covered as AUDIT-05 and AUDIT-10 in the [RBAC — Cross-Resource 403 Matrix](#rbac--cross-resource-403-matrix) in Section 2.)*
 
 ---
 
@@ -161,7 +181,7 @@
 | BE-19 | Environment variables passed to k6 | — | 1. Provide `envVars` (if exposed in UI) with valid `KEY=VALUE` pairs | Variables passed to k6 as `--env`; not persisted to DB | P3 |
 | BE-20 | Inline test data table / CSV upload | — | 1. Add rows to the inline data table OR upload a CSV | Data passed to the worker as `testData`/`csvData`, used for parameterization, not stored in DB | P3 |
 | BE-21 | HTTP options — discard response bodies | — | 1. Open Advanced settings 2. Enable "Discard response bodies" 3. Run | `httpOptions: { discardResponseBodies: true }` included in the k6 options block of the generated/cached script (`buildK6Options`) | P3 |
-| BE-22 | Custom headers — backend test | — | 1. Open Advanced settings 2. Under "Custom Headers" click "+ add", set `X-Api-Key` / `secret123` 3. Run | `options.headers: { "X-Api-Key": "secret123" }` sent in `POST /tests`; generated k6 script merges the header into `params.headers` for every `http.*` call (verify in saved script) | P3 |
+| BE-22 | Custom headers — backend & browser tests | — | 1. Open Advanced settings 2. Under "Custom Headers" click "+ add", set `X-Api-Key` / `secret123` 3. Run — repeat once for **⚡ Backend** and once for **🌐 Browser** | `options.headers: { "X-Api-Key": "secret123" }` sent in `POST /tests` for both types. **Type: Backend** — generated k6 script merges the header into `params.headers` for every `http.*` call. **Type: Browser** — generated Puppeteer script calls `page.setExtraHTTPHeaders({...})` before navigation. Verify in the saved script for whichever type was run | P3 |
 
 ---
 
@@ -180,7 +200,8 @@
 | BR-09 | Page Health metrics | Completed browser test | 1. Open result detail | JS errors, long task count, DOM node count displayed | P3 |
 | BR-10 | Performance score below 50 fails the test | Site with poor Lighthouse performance score | 1. Run a browser test against a slow/heavy page | `perf_status = 'failed'`; threshold violation listed in Analysis panel | P2 |
 | BR-11 | Worker-not-running warning | `worker-client` scaled to 0 | 1. Submit a browser test | Status message: "No browser (Puppeteer) worker is running — test will start when a worker comes online" | P3 |
-| BR-12 | Custom headers — browser test | — | 1. Select "🌐 Browser" 2. Open Advanced settings 3. Under "Custom Headers" click "+ add", set `X-Api-Key` / `secret123` 3. Run | `options.headers: { "X-Api-Key": "secret123" }` sent in `POST /tests`; generated Puppeteer script calls `page.setExtraHTTPHeaders({...})` before navigation (verify in saved script) | P3 |
+
+*(Custom headers for browser tests are covered by the merged BE-22 in Section 8, which now parameterizes both Backend and Browser verification.)*
 
 ---
 
@@ -484,41 +505,6 @@ Use these ready-made values to avoid improvising data mid-run (and to make failu
 
 ---
 
-## Execution Log — Bugs Found & Fixed (2026-06-08 live run)
-
-Ran BE-01 / BR-01 / FL-01 against the live `docker compose up` stack. Two real issues surfaced (both fixed in this pass):
-
-1. **`FLOW_PROMPT` generated unguarded chained-extraction code, silently erasing later steps from `stepMetrics`** — `services/ai-service/src/generator.ts`
-   - Repro: created FL-01 with two plain steps (`Get homepage` → `Get headers`, **no** `extract` rules defined by the user). Gemini still wrote `vars.origin = res.json().origin;` inside Step 1's group (per the unconditional "Chain variables between steps" instruction in `FLOW_PROMPT`'s Requirements list — this fires regardless of whether `hasExtractions` is true). The MANDATORY defensive-extraction guardrail (`exec.vu.abort` + null-check) is only injected when the *user* explicitly defines `extract` rules, so this Gemini-initiated chaining had zero protection.
-   - When the target (`httpbin.org`) returned `503` with a non-JSON body, `res.json()` threw, the iteration aborted before reaching `group('Step 2: Get headers', ...)`, and the result's `stepMetrics` silently contained **only Step 1** (485/485 reqs) — Step 2 never appears anywhere, with no error surfaced to the user. `FlowStepChart`/`StepMetricsTable` would render an incomplete, misleading per-step breakdown with no indication that a step was skipped.
-   - **Fix**: added an unconditional Requirements line to `FLOW_PROMPT` instructing Gemini that chained extraction must be defensive — guard with a status check or `try/catch`, fall back to a default value, and never let a parse failure abort the rest of the iteration. See `services/ai-service/src/generator.ts` (Requirements section, after "Chain variables between steps…").
-   - Re-test FL-05/FL-06 after this fix by running a flow against a target that returns non-2xx/non-JSON mid-flow (e.g. point step 2 at a 404 URL) and confirm **all** steps still appear in `stepMetrics`/`FlowStepChart`.
-
-2. **Pre-existing typo in `generator.test.ts`: asserted `exec.test.abort` instead of `exec.vu.abort`** — `services/ai-service/src/__tests__/generator.test.ts:70-77`
-   - The test "includes exec.test.abort instructions when any step has extractions" asserted on `exec.test.abort`, but the actual (and correct — per the surrounding code comment "stops only the failing VU, not the entire test") generated instruction is `exec.vu.abort`. This test was failing on `main` before any of today's changes — confirmed via `git stash` + re-run. `exec.test.abort()` would abort the *entire* k6 test run, which is the opposite of the documented/intended per-VU-only abort behavior.
-   - **Fix**: corrected the test name and assertion to `exec.vu.abort`. All 30 generator tests pass now (`npx vitest run services/ai-service/src/__tests__/generator.test.ts`).
-
-3. **RES-16: stale `worker-backend` Docker image producing `status='failed'` rows with `completed_at IS NULL` and a stale `status_message`** — deployment issue, not a source-code bug
-   - Repro: created a backend test against an unresolvable domain whose AI-generated script failed `k6 inspect` validation (exit 255 — syntax/runtime error in the script's init scope, an AI-output-dependent failure mode). The resulting row showed `status='failed'`, `completed_at=NULL`, and `status_message="Script ready — starting test…"` (the last progress message ai-service posted before handing off) — i.e. exactly the "no metrics collected, but looks like it never properly finished" anomaly RES-16 describes. Found 4 such rows accumulated in the live DB across two days, all with this identical signature.
-   - Root cause (confirmed via live `log_statement='all'` SQL capture + `docker compose exec worker-backend grep ... dist/index.js`): the **running `worker-backend` container was executing a stale compiled build** — `dist/index.js` contained an old `updateStatus(testId, status)` helper that wrote `UPDATE test_results SET status = $1 WHERE test_id = $2` directly via raw SQL on the `catch` path (`await updateStatus(test.id, 'failed').catch(() => {})`), bypassing `completed_at`/`status_message` entirely and never broadcasting a `test:status` WebSocket event. The **current source** (`services/worker-backend/src/index.ts`) had *already* been refactored (as an uncommitted working-tree change) to call `notifyFailed`/`notifyRunning`/`notifyCancelled`, which go through results-service's REST endpoints (`POST /results/:id/fail|running|cancel`) — those endpoints correctly set `completed_at = NOW()`, clear `status_message = NULL`, and broadcast the WebSocket event. The Docker image had simply never been rebuilt after that refactor landed in source, so the container ran the old direct-SQL code path. Confirmed via `docker inspect` that the image (`LastTagTime: 2026-06-07T09:02:51Z`, created `2026-06-06T22:49:00Z`) predated the relevant source changes.
-   - **Fix**: `docker compose build worker-backend && docker compose up -d --no-deps worker-backend` — rebuilt and redeployed from current source. Verified via `grep` on the new container's compiled `dist/index.js` that it now calls `notifyRunning`/`notifyFailed`/`notifyCancelled` (no `updateStatus`/`setStartedAt` raw-SQL helpers remain). Re-ran the exact repro (junk domain → `k6 inspect` validation failure) post-redeploy: the new row correctly shows `status='failed'`, `completed_at` **populated**, `status_message` **NULL** — anomaly does not reproduce. The 4 pre-existing anomalous rows remain in the DB as historical evidence (all `created_at` predate the redeploy at 2026-06-08 ~13:54 UTC).
-   - **Lesson for future deploys**: after any `worker-backend`/`worker-client` source refactor, always `docker compose up --build <service>` (not just edit source) — a stale image silently runs old logic with no build-time signal that source has diverged. Consider adding a startup log line that prints a build hash/timestamp to make this divergence detectable from `docker compose logs` alone.
-   - **Companion fix — `/results/:testId/message` race guard** (`services/results-service/src/app.ts`): independently of the stale-image issue, the endpoint had no status guard — `UPDATE test_results SET status_message = $1 WHERE test_id = $2` would happily overwrite `status_message` on a test that had *already* reached a terminal state, e.g. if a delayed ai-service progress POST (`"Script ready — starting test…"`) arrived after `/fail`/`/running`/`/cancel` had already cleared it to `NULL`. This is a second, narrower path to the exact same "stale `status_message` on a finished test" symptom RES-16 describes (though it would never produce the `completed_at IS NULL` half of the signature). **Fix**: added `AND status NOT IN ('failed', 'completed', 'cancelled')` to the `UPDATE` (the endpoint still returns `{success:true}` to preserve ai-service's fire-and-forget contract — the write is just a silent no-op once the test is done). Added regression test `'does NOT overwrite status_message once the test has reached a terminal state (RES-16 race guard)'` to `services/results-service/src/__tests__/api.test.ts` (all 9 `/message` tests pass). **Deployed and verified live**: rebuilt + redeployed `results-service`, confirmed the guard string is present in the running container's compiled `dist/app.js:220`, and confirmed functionally — `POST /results/<failed-test-id>/message` returns `{"success":true}` but leaves the existing `status_message` ("Script ready — starting test…" on row `6582c0b3…`) untouched rather than overwriting it with the new payload.
-
-**Non-bug finding** — `https://httpbin.org/get`, the doc's previously-recommended demo target (line ~310), returns `503` on ~100% of requests under even light concurrency (verified independently: 8 parallel `curl`s outside the platform → all 8 got 503, sequential single requests got 200). BE-01/FL-01 both correctly reported `perf_status: failed` with accurate `errorBreakdown`/AI-insights ("100% error rate / total service outage") — the analyzer pipeline handled this correctly; the *target* is simply unsuitable for concurrent load testing. Test-data appendix above updated with a safer recommendation.
-
----
-
-## Execution Log — SEC checks (2026-06-08, continued live run)
-
-Ran SEC-03 / SEC-04 / SEC-19 against the live stack (post worker-backend redeploy). All pass / correctly scoped:
-
-- **SEC-03 (disallowed URL scheme) — PASS.** `POST /tests` with `targetUrl: "javascript:alert(1)"` and `targetUrl: "file:///etc/passwd"` both returned `{"error":"Invalid targetUrl — must use http or https"}` (no test row created, no queue message published); a control `https://example.com` request succeeded normally. `new URL()` validation in `api-service/src/index.ts` works as documented.
-- **SEC-04 (XSS payload in URL) — PASS.** Submitted `targetUrl: "https://example.com/<script>alert(1)</script>"` — accepted (valid `https://` URL with a literal `<script>` path segment, correctly NOT scheme-rejected), stored verbatim in `target_url`, and returned as-is via `GET /results/:testId`. Confirmed via `grep -rn "dangerouslySetInnerHTML|innerHTML|document.write"` across `services/ui/app`, `services/ui/lib`, `services/ui/src` — **zero matches**. Every place `targetUrl` is rendered (results list, detail page, compare view) goes through JSX `{}` interpolation, which React auto-escapes to text; no raw-HTML sink exists anywhere in the UI codebase, so stored XSS via `targetUrl` is not exploitable.
-- **SEC-19 (API key auth enforcement) — NOT APPLICABLE in this environment.** Confirmed `API_KEYS` is empty in both `api-service` and `results-service` containers (`docker compose exec <svc> printenv API_KEYS` → empty), which by design disables the `X-API-Key` check entirely (`CLAUDE.md`: "Empty `API_KEYS` disables auth entirely — safe for local dev"). Proved the check is fully bypassed: a request with a valid session cookie *and* a deliberately wrong header (`X-API-Key: clearly-bogus-wrong-key-xyz`) succeeded (`200`, test created) — the key is never even inspected. The 401-on-bad-key path this case describes can only be exercised by running with `docker-compose.prod.yml` (or otherwise setting `API_KEYS`); this dev compose stack intentionally never sets it. Re-run SEC-19 against a prod-like config (`API_KEYS=somekey docker compose -f docker-compose.yml -f docker-compose.prod.yml up`) to actually exercise the 401 path.
-
----
-
 ## Suggested Execution Order (smoke pass before full regression)
 
 1. AUTH-01, AUTH-04, AUTH-09 (can you register, log in, and log out?)
@@ -546,54 +532,8 @@ When asked to execute these scenarios via the Claude Chrome plugin against this 
 2. For cases requiring a *second* team/user (AUTH-17, TEAM-10/11, ORG-08, KEY-05, QUOTA-09, etc.), register a second throwaway account in the same session (e.g. `claude-chrome-2@ai-load-testing.local`) rather than reusing a real one.
 3. For cases requiring `admin`/`owner` API access directly (role-enforcement negatives, quota/rate-limit boundary cases), it's faster to drive them with `curl`/`Bash` alongside the browser than to fight the UI into an invalid state.
 4. Cases tagged P3 involving infrastructure changes (`docker compose --scale`, stopping a container, editing `.env`) are out of scope for pure browser-driven execution — note them as "requires infra change, not run" rather than skipping silently.
-5. Record actual results inline (pass/fail + a one-line note) rather than just running through silently — this file doubles as a living execution log (see the dated "Execution Log" sections below for the format).
+5. Record actual results inline (pass/fail + a one-line note) rather than just running through silently — execution findings get logged in `TEST_EXECUTION_LOG.md` (see that file for the format).
 
 ---
 
-## Execution Log — Full 25-Section Run (2026-06-21)
-
-Ran all 25 sections end-to-end against the live `docker compose` stack via `claude-chrome-agent`, mixing real browser interaction (claude-in-chrome) with direct API calls. ~230 of ~264 cases executed; the remainder need infra changes (worker scaling, `.env` edits, 10+ minute waits) or heavy recorder/HAR interaction and were explicitly logged as not-run rather than skipped silently. Nine real bugs found; two fixed live during the run (with permission) because they blocked further sections.
-
-**Fixed live:**
-1. **CORS blank-page bug** (pre-existing from an earlier session, re-confirmed here) — `ALLOWED_ORIGIN=*` + `credentials:true` breaks all credentialed browser requests once `SESSION_SECRET` is set. Fixed via `.env` (`ALLOWED_ORIGIN=http://localhost:3006`).
-2. **`services/worker-client/src/index.ts:250`** — every browser/client-side test failed 100% of the time with `ReferenceError: __name is not defined`. Root cause: a `const round = (n) => ...` helper nested inside a `page.evaluate()` callback gets wrapped by tsx/esbuild's name-preservation transform (`__name(fn, "round")`) purely because of nesting depth (confirmed empirically — type annotations are irrelevant; any named `const` function nested inside another function triggers it). Puppeteer serializes the outer callback via `.toString()` to run in the browser's isolated page context, where `__name` doesn't exist. Fixed by inlining the rounding (no nested named function) instead of extracting a helper.
-
-**Found, not fixed (reported for follow-up):**
-3. **[FIXED 2026-06-22] BR-06 / Lighthouse** — `lighthouse()` itself threw the same `__name is not defined` class of error (caught non-fatally; logged as `[WARN] Lighthouse audit failed`). Root cause fully isolated this time, in the third-party `lighthouse` package itself (confirmed present in both the installed 12.8.2 and the latest 13.4.0): `lighthouse/core/lib/page-functions.js`'s `isBundledEnvironment()` decides whether to inject an esbuild `__name` polyfill into the page before evaluating its own gatherer functions (`truncate`, `getNodeLabel`, etc.) — which are themselves esbuild-bundled with `keepNames` even in a normal npm install. Its heuristic (`require.resolve('lighthouse-logger')` succeeding ⇒ "not bundled" ⇒ skip the polyfill) is wrong for this setup, since lighthouse's own files need the polyfill regardless. The documented escape hatches (`global.isDevtools`/`global.isLightrider`) get past that check but hit a *second* internal bug (`Could not determine esbuild function wrapper name`). Worked around entirely in our own code instead: `runClientTest` now injects the `__name` polyfill into every page (current and future, via `browser.on('targetcreated', ...)` + `page.evaluateOnNewDocument`) before lighthouse ever runs — no node_modules patching required. Verified live: `lighthouseScore` now populates (`{performance:100, accessibility:100, bestPractices:96, seo:80}`), plus `TBT=73ms` in the execution log, with zero errors. This also fixes BR-09 (TBT/TTI/dom-size all derive from Lighthouse).
-4. **[FIXED 2026-06-22] BR-12 — custom headers for browser tests were completely non-functional.** `worker-client/src/index.ts` had zero references to `test.options.headers` anywhere — it always ran its own fixed Puppeteer automation regardless of what `CLIENT_PROMPT` generates (the AI-script-generation pathway for `client-side` tests remains otherwise unused — `generatedScript` is still never read; that's a larger architectural item left as-is). Fixed narrowly: added a `page.setExtraHTTPHeaders(options.headers)` call before navigation, directly applying the configured headers without depending on AI-generated code. Verified live with a real in-network listener — the actual Puppeteer request arrived with the configured `X-Test-Header` present.
-5. **[FIXED 2026-06-22] BE-21 — "Force HTTP/2" was a no-op.** `buildK6Options` (`services/api-service/src/options.ts:9`) and the AI prompt (`services/ai-service/src/generator.ts:82`) wrote `options.http2 = true` into the generated k6 script, but k6 has no such option. Confirmed via a live run's own log: `level=warning msg="There were unknown fields in the options exported in the script" error="json: unknown field \"http2\""`. k6 silently ignored it — the checkbox had no effect on whether HTTP/2 is used. Removed the dead option entirely (UI checkbox, `HttpOptions.http2` type, `buildK6Options`, the AI prompt line, and the corresponding tests/docs) rather than fake-implementing a control k6 doesn't support.
-6. **[FIXED 2026-06-22] AUDIT-03 / SCR-02 — `DELETE /scripts/:id` could never succeed for any real script.** `test_results.script_id REFERENCES test_scripts(id)` had no `ON DELETE` clause (defaulted to RESTRICT), and a script only exists once it's been referenced by at least one result. So every delete attempt 500'd with a raw, unhandled Postgres FK-violation error (`code 23503`) leaking internal schema details to the client instead of a clean error. Fixed via migration #13 (`script_id_on_delete_set_null`) — the FK now `ON DELETE SET NULL`, so deleting a script unlinks it from historical results instead of being blocked by them; the route also now catches any remaining `23503` defensively and returns a clean `409` instead of a raw `500`. Verified live: deleted a referenced script → `204`, the referencing result survived with `script_id: null`.
-7. **[FIXED 2026-06-22] Schedules silently no-op'd once Team/RBAC was enabled without a global `API_KEY`.** `POST /schedules/:id/run` (`services/results-service/src/app.ts`) and the cron auto-trigger (`scheduler.ts`) called api-service's `POST /tests` with no session cookie and no `X-API-Key`. api-service correctly rejected with "Not authenticated" — but `app.ts`'s handler updated `last_run_at = NOW()` unconditionally, never checking the fetch response status (`scheduler.ts` itself already gated on `res.ok` correctly — only the manual-trigger route had that half of the bug). Fixed with two changes: (1) api-service's `onRequest` hook now recognizes a trusted `X-Internal-Key` (when `INTERNAL_API_KEY` is configured) as an authenticated internal caller that can pass `projectId` in the body to scope the test, mirroring the existing global-`API_KEYS` override path; (2) both `scheduler.ts` and the manual-trigger route now send `X-Internal-Key` and only mark `last_run_at` on an actually-successful response. Verified live: set `INTERNAL_API_KEY` in `.env`, restarted both services, manually triggered a schedule — `200` (was `401`), `last_run_at` updated, and a real test was created at the matching timestamp.
-8. **[FIXED 2026-06-22] Webhooks fired cross-tenant.** `fireWebhooks`'s query (`services/results-service/src/consumer.ts:162-165`) was `SELECT url, secret, format FROM webhooks WHERE $1 = ANY(events)` — no `project_id` filter, despite the column existing (migration #5) and every other query in the codebase consistently scoping by it. Any team's webhook fired on every other team's test failures/degradations platform-wide. Fixed by threading `projectId` from `handleResult` into `fireWebhooks` and adding the standard `($2::uuid IS NULL OR project_id = $2::uuid)` scoping clause. Added two regression tests in `consumer.test.ts` (cross-tenant webhook does NOT fire; same-tenant webhook does).
-9. **[FIXED 2026-06-22] Webhook URLs accepted SSRF targets with zero validation.** `POST /webhooks` happily created a webhook pointing at `169.254.169.254` (cloud metadata endpoint). Combined with #8, any team member could plant a webhook targeting internal infrastructure and have it fire reliably whenever *any* team's test failed. Fixed by extracting recorder-service's existing SSRF blocklist (`validateRecorderUrl`) into `@alt/shared` as `validateSsrfSafeUrl` and applying it to `POST /webhooks` too — also closed a `0.0.0.0` gap the recorder's own test suite had explicitly documented as unblocked. Recorder-service now re-exports the shared function so its own tests/behavior are unchanged (verified: all 22 pass, including the now-fixed `0.0.0.0` case). Verified live: `POST /webhooks` with `http://169.254.169.254/` now returns `400`.
-
-**Section-by-section pass tally** (✅ pass / ❌ fail-confirmed-bug / ⚪ N/A in this env / ⏭ not run):
-| Section | Pass | Fail/Bug | N/A | Not run |
-|---|---|---|---|---|
-| 1 Auth | 15 | 0 | 1 | 1 |
-| 2 Team & RBAC | 14 | 0 | 0 | 0 |
-| 3 Organizations | 10 | 0 | 0 | 0 |
-| 4 Team Quotas | 9 | 0 | 1 | 0 |
-| 5 Team API Keys | 6 | 0 | 0 | 0 |
-| 6 AI Provider Config | 9 | 0 | 0 | 0 |
-| 7 Audit Log & Erasure | 10 | 1 (#6) | 1 | 0 |
-| 8 Backend Test Creation | 20 | 1 (#5) | 0 | 1 (BE-16 inconclusive, target throttled) |
-| 9 Browser Test Creation | 5 | 3 (#3,#4 + BR-09) | 0 | 3 |
-| 10 Multi-step Flow | 7 | 0 | 0 | 7 (recorder/HAR-dependent) |
-| 11 Execution & Monitoring | 9 | 0 | 0 | 6 |
-| 12 Results | ~14 | 0 | 0 | ~5 |
-| 13 Execution Log | 2 | 0 | 1 | 2 |
-| 14 Scripts Management | 2 | 1 (#6) | 0 | 0 |
-| 15 Script Library | 3 | 0 | 0 | 1 |
-| 16 Presets | 5 | 0 | 0 | 0 |
-| 17 Schedules | 5 | 1 (#7) | 0 | 1 |
-| 18 Webhooks | 5 | 1 (#8) | 0 | 1 |
-| 19 Log Sources | 2 | 0 | 0 | 1 |
-| 20 System Health | 5 | 0 | 0 | 1 |
-| 21 Navigation/Responsive | 6 | 0 | 0 | 0 |
-| 22 Rate Limiting | 5 | 0 | 0 | 1 |
-| 23 Cross-Cutting | 3 | 0 | 0 | 4 |
-| 24 Security Validation | 14 | 1 (#9) | 0 | 7 |
-| 25 AI-Assist | 11 | 0 | 0 | 13 (mostly recorder-dependent) |
-
-**Environment note:** this run hit serious local infra instability ~5 hours in — Docker Desktop port-forwarding flakiness and eventually the WSL2 VM itself stopped responding, requiring `wsl --shutdown` + relaunch. Per the user, restart/recover the stack from a WSL terminal going forward, not Windows-side PowerShell/Git Bash (see memory: Docker via WSL).
+**Note:** For narrative bug write-ups and root-cause findings from past execution runs, see [`TEST_EXECUTION_LOG.md`](./TEST_EXECUTION_LOG.md).

@@ -1,7 +1,11 @@
 # one-prompt-test-creation — Tech Specs
 
-Status: Draft — pending user review (Phase 4 HITL gate)
-Traces to: `docs/TODO.md` → MEGA Features → "Natural language 'one prompt' test creation"; `docs/ASSUMPTIONS.md` K5
+Status: Implemented — see docs/AI-FEATURES.md § 13 for the living reference
+Traces to: `TODO.md` (root) → MEGA Features → "Natural language 'one prompt' test creation"; `docs/ASSUMPTIONS.md` K5
+
+Note: v1 scope below (backend/client-side only, no flow inference) reflects this feature at initial
+ship. Flow/multi-step inference from context (Swagger/HAR/docs attachments, `flowReady` outcome)
+shipped as a follow-up 2026-06-28 — see `docs/AI-FEATURES.md` § 13 for the current behavior.
 
 ## WHAT
 
@@ -20,7 +24,7 @@ Confirming calls the existing `POST /tests` unchanged — no new test-execution 
   duration, load profile, SLO thresholds extraction. Multi-turn clarification. Preview-then-confirm.
   Live status tracking in the chat thread after the test starts (reuses existing WebSocket events).
 - **Out of scope (deferred)**: `flow` (multi-step) test inference — flagged by the user as a
-  "Phase 2" follow-up investigation; add a `docs/TODO.md` entry, do not attempt step extraction
+  "Phase 2" follow-up investigation; add a `TODO.md` (root) entry, do not attempt step extraction
   in v1. If the assistant detects multi-step intent ("login then checkout"), it must redirect the
   user to the existing Flow Builder rather than guess at endpoints.
 - **Out of scope (deferred)**: editable preview *form* (field-by-field editing UI). v1's "preview
@@ -135,4 +139,4 @@ one deliberate deviation: **use the per-team-aware provider resolution, not the 
 AI-9 (`suggest-settings`) currently uses the global-only `getAiProviderSetting`, not the per-team
 `getEffectiveAiProviderSetting` — a pre-existing inconsistency, not something this feature
 introduces, but this spec deliberately does *not* copy that gap. Worth a separate small fix to
-AI-9 itself at some point, tracked as a `docs/TODO.md` item, not in this feature's scope.
+AI-9 itself at some point, tracked as a `TODO.md` (root) item, not in this feature's scope.

@@ -1,7 +1,7 @@
 # Pattern: Fastify Service with Health Check
 
 ## Context
-Used in: api-service, results-service, analyser-service, worker-backend (health only), worker-client (health only)
+Used in: api-service, results-service, analyser-service, recorder-service, worker-backend (health only), worker-client (health only), ai-service (health only)
 
 ## Problem
 All services need a health endpoint for docker-compose health checks and system health aggregation.

@@ -1,6 +1,6 @@
 # REQUIREMENTS/INDEX.md — AI Load Testing Platform
 
-Functional and non-functional requirements. Extracted from CLAUDE.md + architecture.
+Functional and non-functional requirements. Extracted from CLAUDE.md + architecture (CLAUDE.md was since split into the current `docs/*.md` structure — see `docs/CONTEXT.md`, `docs/ARCHITECTURE.md`, `docs/TECHSTACK.md`, `docs/CODEMAP.md`, etc.).
 
 ## Functional Requirements
 

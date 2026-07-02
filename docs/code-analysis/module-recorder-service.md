@@ -145,7 +145,7 @@ graph LR
 
 ## Quality Observations
 
-**Technology fit:** puppeteer-core + CDP is the correct choice for non-headless browser recording. CDP's `Network.*` domain provides request IDs, response metadata, and body retrieval in a single connection—the alternatives (HAR export, proxy interception) are more complex and less reliable. noVNC over Xvfb is the pragmatic solution for Docker-hosted GUI applications; the 60 MB image overhead is the known cost (documented in CLAUDE.md known issues).
+**Technology fit:** puppeteer-core + CDP is the correct choice for non-headless browser recording. CDP's `Network.*` domain provides request IDs, response metadata, and body retrieval in a single connection—the alternatives (HAR export, proxy interception) are more complex and less reliable. noVNC over Xvfb is the pragmatic solution for Docker-hosted GUI applications; the 60 MB image overhead is the known cost of that stack.
 
 **Filter quality:** The static asset filter is robust for the common case. The extension and MIME-type blocklists cover all standard asset types. The gap is dynamic asset URLs (e.g. a `/api/image` endpoint that returns PNG) where the extension check would not fire; only the content-type check on `responseReceived` would catch it, and `shouldSkip` at request time passes it through to `pending` map before `responseReceived` can filter it. This means the response body fetch is skipped (correct) but the request still appears in `completed[]` as a step.
 

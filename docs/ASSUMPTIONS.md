@@ -7,8 +7,7 @@ Assumptions, unknowns, and open decisions.
 | # | Assumption | Impact if Wrong |
 |---|------------|----------------|
 | A1 | Single PostgreSQL instance is sufficient (no read replicas needed) | Results queries slow under high concurrent load |
-| A2 | Redis will be used for rate limiting and caching in a future phase | Redis container is running but unused today |
-| A3 | Gemini 2.5 Flash is the optimal model for cost/quality tradeoff | May need to upgrade to Pro for better script quality |
+| A3 | `gemini-3.1-flash-lite` is the optimal model for cost/quality tradeoff | May need to upgrade to a larger Gemini model for better script quality |
 | A4 | k6 and Puppeteer cover all needed test types (no JMeter/Gatling) | Feature gap if users have existing JMeter scripts |
 | A5 | Single RabbitMQ broker is sufficient (no cluster needed) | Message loss risk if broker goes down without persistence |
 
@@ -20,7 +19,7 @@ Assumptions, unknowns, and open decisions.
 | S2 | Internal service-to-service communication doesn't need auth | Internal network breach exposes all services |
 | S3 | HMAC webhook signing is optional (most users won't use secrets) | Webhook spoofing possible without signing |
 | S4 | SESSION_SECRET empty = auth disabled is a safe default for local dev | Accidental misconfiguration in production would expose all data |
-| S5 | HMAC-SHA256 with `crypto.timingSafeEqual` is sufficient for session integrity | Brute-force attacks on short secrets possible; mitigated by requiring 32+ chars |
+| S5 | DB-backed opaque session tokens (SHA-256 hash of a random 32-byte token, `sessions.revoked_at` for revocation) provide sufficient session integrity | Token brute-force is infeasible at 32 random bytes; a `sessions` table compromise would require DB access, not just cookie theft |
 | S6 | Project-scoped isolation (not user-scoped) is the right granularity | Teams wanting per-user data separation would need a different model |
 
 ## Operational Assumptions
@@ -46,6 +45,5 @@ Assumptions, unknowns, and open decisions.
 |---|---------|----------------|
 | K1 | Playwright→Puppeteer script import feasibility | Whether to build converter-service (noted as future work) |
 | K2 | Optimal analyser-service prompt payload schema | Need typed AnalysisPromptPayload to cap tokens and normalize units |
-| K3 | Rate limiting strategy when Redis is wired up | @fastify/rate-limit vs custom middleware |
 | K4 | Mobile application performance testing approach | Appium vs WebDriverIO vs cloud device farms (AWS Device Farm, BrowserStack) |
 | K5 | ~~Natural language one-prompt test creation~~ | **Resolved for backend/browser** — multi-turn chat (`POST /chat/parse`) handles type/URL/load profile/SLO extraction with clarifying follow-ups instead of a single-shot guess; see `docs/AI-FEATURES.md` § 13. Step/URL inference for multi-step flows from prose remains unsolved — chat redirects flow intent to the existing Flow Builder rather than guessing. |

@@ -14,8 +14,7 @@ ai-load-testing-platform/
 ├── docker-compose.dev.yml    # dev overrides (tsx watch, WATCHPACK_POLLING)
 ├── docker-compose.prod.yml   # prod overrides (Caddy HTTPS, no internal ports, limits)
 ├── Caddyfile                 # Caddy reverse proxy + auto-TLS config
-├── gain.json                 # Rosetta workspace config
-└── CLAUDE.md                 # AI coding agent context (comprehensive)
+└── gain.json                 # Rosetta workspace config
 ```
 
 ## packages/shared — @alt/shared
@@ -100,7 +99,7 @@ services/recorder-service/src/
 services/results-service/src/
 ├── index.ts      # startup: initDb → consumer → scheduler → cleanup → app
 ├── app.ts        # ALL REST endpoints (results, scripts, webhooks, schedules, presets, log-sources, auth)
-├── session.ts    # signSession()/verifySession(): HMAC-SHA256 cookie sessions; SessionPayload type
+├── session.ts    # createSession()/getSession()/revokeSession(): DB-backed opaque token sessions (SHA-256 hash in `sessions` table); switchSessionTeam(), hashApiKey()
 ├── consumer.ts   # RabbitMQ consumer, handleResult(), webhook firing, broadcast()
 ├── analyzer.ts   # analyzeResult(): thresholds + regression detection
 ├── db.ts         # PostgreSQL pool, createSchema() (all tables + migrations), findOrCreateProject()
@@ -112,7 +111,7 @@ services/results-service/src/
     ├── api.test.ts       # All REST endpoints, Testcontainers (64 tests)
     ├── analyzer.test.ts  # analyzeResult unit tests (44 tests — includes INP/TBT thresholds)
     ├── auth.test.ts      # POST /auth/login, /logout, GET /auth/me, session middleware (18 tests)
-    ├── session.test.ts   # signSession/verifySession unit tests (11 tests)
+    ├── session.test.ts   # createSession/getSession/revokeSession/switchSessionTeam unit tests (11 tests)
     ├── consumer.test.ts  # handleResult pipeline, webhooks (11 tests)
     ├── stale.test.ts     # runStaleCleanup (10 tests)
     └── scheduler.test.ts # startScheduler, triggerSchedule (12 tests)
@@ -188,7 +187,7 @@ e2e/
 docker-compose.yml
 ├── postgres         # PostgreSQL 16 (port 5432)
 ├── rabbitmq         # RabbitMQ 3 management (ports 5672, 15672)
-├── redis            # Redis 7 (port 6379, unused)
+├── redis            # Redis 7 (port 6379, shared store for @fastify/rate-limit)
 ├── api-service      # (port 3000)
 ├── ai-service       # (no external port)
 ├── worker-backend   # (port 3002 health)
@@ -211,7 +210,7 @@ docker-compose.yml
 | DB schema + migrations | results-service/src/db.ts createSchema() |
 | Sensitive field masking | api-service/src/index.ts safeTestResponse() |
 | Load profile options | api-service/src/options.ts buildK6Options() |
-| Cookie session signing | results-service/src/session.ts signSession()/verifySession() |
+| Opaque session tokens | results-service/src/session.ts createSession()/getSession()/revokeSession() |
 | Project creation/lookup | results-service/src/db.ts findOrCreateProject() |
 | Auth endpoints | results-service/src/app.ts POST /auth/login, POST /auth/logout, GET /auth/me |
 | UI auth state | services/ui/lib/AuthContext.tsx AuthProvider + useAuth |

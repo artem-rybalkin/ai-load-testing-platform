@@ -335,7 +335,7 @@ fi
 
 Same pattern for `worker-client` against `client-tests`. Add hysteresis (e.g. only scale down after N consecutive low-depth polls) to avoid flapping when a burst of tests completes and drains the queue between polls.
 
-Either approach scales `worker-backend` and `worker-client` independently — they consume different queues — and neither requires application code changes; both rely on the existing durable queues and the workers' graceful SIGTERM handling (Test Cancellation / Execution Timeouts in `CLAUDE.md`) to drain in-flight tests before a scale-down removes a replica.
+Either approach scales `worker-backend` and `worker-client` independently — they consume different queues — and neither requires application code changes; both rely on the existing durable queues and the workers' graceful SIGTERM handling (see `K6_MAX_DURATION_MS` / `PUPPETEER_MAX_DURATION_MS` — SIGTERM with a grace period before SIGKILL — in `docs/configuration.md`) to drain in-flight tests before a scale-down removes a replica.
 
 ---
 

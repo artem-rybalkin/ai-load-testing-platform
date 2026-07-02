@@ -796,7 +796,7 @@ Create a webhook.
 |-------|------|-------------|
 | `url` | string | ✅ HTTPS endpoint to call |
 | `events` | string[] | Default: `["failed", "degraded"]` |
-| `secret` | string | Optional — sent as `X-Webhook-Secret` header |
+| `secret` | string | Optional — HMAC signing key. When set (and `format` is `generic`), deliveries are signed with `X-Webhook-Signature: sha256=<hmac-sha256(secret, body)>` |
 
 ```bash
 curl -X POST http://localhost:3004/webhooks \
@@ -974,4 +974,4 @@ In addition to the team-quota `429`s above, both api-service and results-service
 with a `Retry-After` header (seconds). `/health` is exempt. Two route groups in results-service have stricter per-IP limits:
 
 - `POST /auth/login` and `POST /auth/register`: `AUTH_RATE_LIMIT_MAX` (default 10/min) — brute-force protection
-- `/ai/*`, `suggest-*`, and `/results/:testId/diagnose`: `AI_RATE_LIMIT_MAX` (default 20/min) — IP-based defense-in-depth on top of the per-team daily Gemini quota
+- `/ai/*`, `suggest-*`, and `/results/:testId/diagnose`: `AI_RATE_LIMIT_MAX` (default 20/min) — an IP-based limit, separate from and in addition to the per-team daily Gemini quota's own `429` (see [Team quotas](#team-quotas))

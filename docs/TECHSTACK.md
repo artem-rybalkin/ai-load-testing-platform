@@ -12,14 +12,7 @@ Tech stack across all services. Single source for technology decisions.
 
 ## API Framework
 
-| Service | Framework | Notes |
-|---------|-----------|-------|
-| api-service | Fastify + @fastify/cors + @fastify/cookie | REST API, CORS, cookie parsing |
-| results-service | Fastify + @fastify/cookie | REST + WebSocket (noServer) + auth endpoints |
-| analyser-service | Fastify | REST only |
-| worker-backend | Fastify | Health server only (port 3002) |
-| worker-client | Fastify | Health server only (port 3003) |
-| recorder-service | Fastify | REST only |
+Fastify (v5) across all HTTP-serving services, with @fastify/cors + @fastify/cookie added where CORS/cookies are needed (api-service, results-service). Chosen for low overhead and first-class TypeScript support. See ARCHITECTURE.md § Services for per-service ports and responsibilities.
 
 ## Message Queue
 
@@ -126,11 +119,11 @@ Tech stack across all services. Single source for technology decisions.
 
 | Component | Technology | Notes |
 |-----------|-----------|-------|
-| Session cookies | @fastify/cookie v11 + HMAC-SHA256 | HttpOnly `alt_session` cookie; `SESSION_SECRET` empty = disabled |
+| Session cookies | @fastify/cookie v11 + DB-backed opaque token | HttpOnly `alt_session` cookie holds a random 32-byte token; only its SHA-256 hash is stored in the `sessions` table (revocable via `revoked_at`); `SESSION_SECRET` empty = disabled |
 | Project isolation | PostgreSQL `project_id` FK | All resource tables carry `project_id`; null = auth disabled |
 
 ## Cache
 
 | Component | Technology | Status |
 |-----------|-----------|--------|
-| Redis | Redis | Running, not yet used (planned: rate limiting + pub/sub) |
+| Redis | Redis (ioredis client) | Live — shared store for `@fastify/rate-limit` in api-service + results-service (see ARCHITECTURE.md § Security Architecture, "Rate limiting") |

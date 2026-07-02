@@ -12,6 +12,31 @@ All configuration is done via environment variables. In local dev, set them in t
 
 ---
 
+## AI provider keys (multi-provider fallback)
+
+Gemini is the only required provider. OpenAI and Anthropic are optional — set either (or both) to enable them as an admin-configured primary or fallback provider. See [AI-FEATURES.md → Model configuration & multi-provider fallback](AI-FEATURES.md#model-configuration--multi-provider-fallback) for how the fallback chain and per-team overrides work.
+
+| Variable | Service | Default | Description |
+|----------|---------|---------|-------------|
+| `OPENAI_API_KEY` | ai-service, analyser-service, recorder-service, results-service | _(empty)_ | OpenAI API key. Empty = OpenAI unavailable as a provider option |
+| `OPENAI_MODEL` | ai-service, analyser-service, recorder-service, results-service | `gpt-4o-mini` | OpenAI model ID used when OpenAI is the active provider |
+| `ANTHROPIC_API_KEY` | ai-service, analyser-service, recorder-service, results-service | _(empty)_ | Anthropic API key. Empty = Anthropic unavailable as a provider option |
+| `ANTHROPIC_MODEL` | ai-service, analyser-service, recorder-service, results-service | `claude-3-5-haiku-latest` | Anthropic model ID used when Anthropic is the active provider |
+
+---
+
+## LLM tracing (Langfuse, optional)
+
+Traces every `generateAIText()` call (prompt, completion, provider used) to [Langfuse](https://langfuse.com) when configured. See [AI-FEATURES.md → LLM tracing](AI-FEATURES.md#llm-tracing-langfuse-optional) for details. Leaving the keys empty disables tracing entirely.
+
+| Variable | Service | Default | Description |
+|----------|---------|---------|-------------|
+| `LANGFUSE_PUBLIC_KEY` | ai-service, analyser-service, recorder-service, results-service | _(empty)_ | Langfuse public key. Empty = tracing disabled |
+| `LANGFUSE_SECRET_KEY` | ai-service, analyser-service, recorder-service, results-service | _(empty)_ | Langfuse secret key. Empty = tracing disabled |
+| `LANGFUSE_BASE_URL` | ai-service, analyser-service, recorder-service, results-service | `https://cloud.langfuse.com` | Langfuse ingestion endpoint. Override when self-hosting |
+
+---
+
 ## Service URLs (set automatically by Docker Compose)
 
 These are pre-configured for inter-container communication. Change only if running services outside Docker.
@@ -34,6 +59,7 @@ These are pre-configured for inter-container communication. Change only if runni
 | `API_KEY` | ui | Single API key passed to the UI as `VITE_API_KEY` |
 | `SESSION_SECRET` | results-service | Secret for HMAC-SHA256 cookie signing. Empty string = auth disabled (dev). Use a minimum 32-character random string in production |
 | `ALLOWED_ORIGIN` | api-service, results-service, ui | CORS allowed origin. Default: `*`. Set to `https://yourdomain.com` in production |
+| `INTERNAL_API_KEY` | all 7 backend services | Shared secret for internal service-to-service callbacks (e.g. worker → results-service). Empty string = disabled (dev only) |
 
 **Example `.env` for production:**
 ```bash
@@ -44,6 +70,18 @@ SESSION_SECRET=change-me-to-a-long-random-string
 ALLOWED_ORIGIN=https://yourdomain.com
 DOMAIN=yourdomain.com
 ```
+
+---
+
+## Rate limiting
+
+Global per-IP request limits, enforced via `@fastify/rate-limit`. See [API reference → Rate limiting](api.md#rate-limiting-429) for response shape and the stricter per-route limits.
+
+| Variable | Service | Default | Description |
+|----------|---------|---------|-------------|
+| `RATE_LIMIT_MAX` | api-service, results-service | `600`/min | Global per-IP request limit |
+| `AUTH_RATE_LIMIT_MAX` | results-service | `10`/min | Per-IP limit on `POST /auth/login` and `POST /auth/register` |
+| `AI_RATE_LIMIT_MAX` | results-service | `20`/min | Per-IP limit on `/ai/*`, `suggest-*`, and `/results/:testId/diagnose` |
 
 ---
 
@@ -142,7 +180,7 @@ Changes to any `.ts` file → service restarts automatically (usually < 2s).
 
 **Notes:**
 - On Windows, Vite HMR requires `WATCHPACK_POLLING=true` (already set)
-- The Vite dev server proxies `/api/*` → api-service and `/data/*` → results-service for same-origin cookie auth
+- See [UI (Vite public env vars)](#ui-vite-public-env-vars) for the dev-proxy paths (`/api/*`, `/data/*`)
 
 ### `docker-compose.prod.yml` — production overlay
 
@@ -178,9 +216,9 @@ With `WORKER_CONCURRENCY=2` and 3 replicas, you get 6 parallel test slots for ba
 
 The default model is `gemini-3.1-flash-lite` (set via `GEMINI_MODEL`). Its free tier is roughly **15 requests/minute and ~1,000 requests/day** (flash-lite class — Google adjusts preview-model quotas frequently, so check [AI Studio's rate limit page](https://aistudio.google.com/rate-limit) for current values). Each test that goes through AI (new URL, no cache, with description comparison) uses 1–2 Gemini calls.
 
-When the quota is exhausted, the platform automatically retries with backoff (60s / 120s / 180s). The UI shows a status message: `"Gemini unavailable — retrying… (N attempts left)"`.
+What happens when this limit (or the platform's own per-team daily quota) is hit — automatic retry with backoff vs. immediate fail-closed fallback, and the UI banner — is documented in [AI-FEATURES.md → Rate limit handling](AI-FEATURES.md#rate-limit-handling).
 
-To remove the daily limit, upgrade to a paid Google AI Studio plan and rotate your key in `.env`.
+To remove the daily limit, upgrade to a paid Google AI Studio plan and rotate your key in `.env`, or configure OpenAI/Anthropic as a fallback provider (see [AI provider keys](#ai-provider-keys-multi-provider-fallback) below).
 
 ---
 

@@ -76,11 +76,11 @@ The UI is the only consumer that does **not** import `@alt/shared`. It re-declar
 
 **Discriminated union via `type` field**: `BackendMetrics.type: 'backend'` (line 128) and `ClientMetrics.type: 'client'` (line 149) enable exhaustive narrowing at call sites such as `consumer.ts` line 83 and `analyzer.ts`. The asymmetric literal (`'backend'` vs `'client'`) does not match `TestType`'s `'client-side'` value, requiring callers to know both spellings.
 
-**Optional fields for caller-specific data**: `TestRequest.envVars`, `csvData`, `customScript` (lines 57–61) are optional and documented as "not stored in DB". The comment at line 58 for `testData` says "stored in test_results.test_data for re-run restoration" — but this contradicts `CLAUDE.md` which states testData is NOT stored in DB. This documentation inconsistency in the type file is a reliability risk.
+**Optional fields for caller-specific data**: `TestRequest.envVars`, `csvData`, `customScript` (lines 57–61) are optional and documented as "not stored in DB". The comment at line 58 for `testData` says "stored in test_results.test_data for re-run restoration" — verified against the current schema, this is accurate: `services/results-service/src/db.ts` has `ALTER TABLE test_results ADD COLUMN IF NOT EXISTS test_data JSONB`, and `services/results-service/src/routes/results.ts` inserts the incoming `testData` field into that column. An earlier pass of this analysis flagged this comment as contradicting a since-removed doc; that contradiction no longer applies and the type comment is the correct, current description.
 
 ### Anti-patterns
 
-**`description` required on `TestRequest`** (line 53): The field is typed as `string` (not `string | undefined`). When `customScript` is provided, the description is irrelevant, and the UI hides it (per `CLAUDE.md` Phase 16). A required field that has no meaningful value in a subset of valid states is a leaky abstraction — it forces callers to pass empty strings.
+**`description` required on `TestRequest`** (line 53): The field is typed as `string` (not `string | undefined`). When `customScript` is provided, the description is irrelevant, and the UI hides the "What to test?" field in this mode (`services/ui/app/page.tsx`, gated on `form.type === 'backend' && scriptMode === 'custom'`). A required field that has no meaningful value in a subset of valid states is a leaky abstraction — it forces callers to pass empty strings.
 
 **`perfStatus` duplicated as inline literal**: `AnalysisResult.perfStatus` (line 106) and `TestResult.perfStatus` (line 123) both repeat `'passed' | 'degraded' | 'failed'` as inline literals rather than a named type. If a new status were added, all three locations must be updated separately. A `PerfStatus` alias would unify them.
 
@@ -145,7 +145,7 @@ graph LR
 
 `TestRequest` (sent by api-service, consumed by ai-service and workers) and `EnrichedTestRequest` (produced by ai-service, consumed by workers) define the message schema. Since RabbitMQ carries opaque byte buffers, both producer and consumer must JSON-serialize/deserialize using these types. There is no runtime schema validation — a type change in `@alt/shared` that is not rebuilt in all consuming images will silently produce undefined fields at runtime.
 
-The `packages/shared` package must be rebuilt (`npm run build:shared`) after any type change. This is a manual step documented in `CLAUDE.md` but not enforced by CI in a way that would catch stale compiled `.js` output in Docker image layers.
+The `packages/shared` package must be rebuilt (`npm run build:shared`) after any type change. This is a manual step documented in `docs/how-to/development.md` ("Shared types" section) but not enforced by CI in a way that would catch stale compiled `.js` output in Docker image layers.
 
 ### HTTP Contract
 
@@ -159,7 +159,7 @@ The UI maintains its own parallel type definitions. `FlowStep`, `ExtractRule`, `
 
 ## Quality Observations
 
-1. **Type comment accuracy**: `TestRequest.testData` comment at line 58 says "stored in test_results.test_data for re-run restoration", but `CLAUDE.md` (Phase 10, Phase 15) is inconsistent across versions: Phase 10 says NOT stored in DB, Phase 15 says restored from steps. The type comment needs to be verified against actual DB schema and migration code.
+1. **Type comment accuracy (resolved)**: `TestRequest.testData` comment at line 58 says "stored in test_results.test_data for re-run restoration". This has now been verified against the actual DB schema and migration code (`services/results-service/src/db.ts`, `ALTER TABLE test_results ADD COLUMN IF NOT EXISTS test_data JSONB`) and against `services/results-service/src/routes/results.ts`, which writes the field into that column — the comment is accurate.
 
 2. **`description` required when `customScript` present**: Lines 53 and 61 together create a semantic contradiction. Custom script mode bypasses AI generation, making `description` meaningless, yet it is required. This forces the UI (and any API caller) to pass an empty string, which pollutes the semantic history used for `compareDescriptions()`.
 
@@ -183,4 +183,4 @@ The UI maintains its own parallel type definitions. `FlowStep`, `ExtractRule`, `
 
 **Gap — `PerfStatus` as informal string**: The `perfStatus` field on `AnalysisResult` (line 106) and `TestResult` (line 123) controls webhook firing, UI badge colors, and regression detection. Its three values are critical to the system's observable behavior. Inlining the literal union rather than exporting a named `PerfStatus` type means refactoring the set of statuses requires grep-and-replace across the codebase.
 
-**Opportunity — `ClientMetrics` alignment**: `SLOThresholds` (lines 5–15) includes `lcp`, `fcp`, `ttfb`, `cls` fields. `ClientMetrics` (lines 148–156) carries `lcp`, `fid`, `cls`, `ttfb`, `fcp`. The threshold type covers all metric fields except `fid`, and includes no threshold for Lighthouse `performance` score — yet the analyzer treats `lighthouseScore.performance < 50` as a threshold violation (per `CLAUDE.md` Phase 1). This implicit threshold should be made explicit in `SLOThresholds` (e.g., `lighthousePerformance?: number`) so callers can override it.
+**Opportunity — `ClientMetrics` alignment**: `SLOThresholds` (lines 5–15) includes `lcp`, `fcp`, `ttfb`, `cls` fields. `ClientMetrics` (lines 148–156) carries `lcp`, `fid`, `cls`, `ttfb`, `fcp`. The threshold type covers all metric fields except `fid`, and includes no threshold for Lighthouse `performance` score — yet the analyzer treats `lighthouseScore.performance < LIGHTHOUSE_THRESHOLD_PERFORMANCE` (hardcoded to `50` at `packages/shared/src/index.ts:375`) as a threshold violation. This implicit threshold should be made explicit in `SLOThresholds` (e.g., `lighthousePerformance?: number`) so callers can override it.

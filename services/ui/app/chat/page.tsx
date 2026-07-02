@@ -59,6 +59,9 @@ type ChatEntry = TextMsg | PreviewMsg | FlowPreviewMsg | RedirectMsg | StatusMsg
 const STATIC_ASSET_RE = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|mp4|mp3|pdf|map|xml|avif)(\?.*)?$/i;
 const STATIC_MIME_RE = /^(image|font|video|audio)\//;
 
+/** Docker containers cannot reach the host via 'localhost' — show the host that will actually be requested. */
+const resolveDockerHost = (url: string): string => url.replace(/\blocalhost\b/g, 'host.docker.internal');
+
 // Patterns that indicate a Swagger UI viewer page or raw OpenAPI spec URL in typed text
 const SWAGGER_URL_RE = /https?:\/\/[^\s]+(?:\/swagger-ui[^\s]*|\/openapi\.json[^\s]*|\/swagger\.json[^\s]*|\/v3\/api-docs[^\s]*|\/api-docs[^\s]*)/gi;
 
@@ -285,7 +288,7 @@ function FlowStepList({ steps }: { steps: FlowStep[] }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`font-mono text-[10.5px] font-bold ${METHOD_COLORS[step.method] ?? 'text-tx-3'}`}>{step.method}</span>
-              <span className="font-mono text-[11px] text-tx-2 break-all">{step.url}</span>
+              <span className="font-mono text-[11px] text-tx-2 break-all">{resolveDockerHost(step.url)}</span>
             </div>
             <div className="text-[12px] text-tx-4 mt-0.5">{step.name}</div>
             {step.body && (
@@ -740,7 +743,7 @@ export default function ChatPage() {
                     <p className="text-[13px] text-tx-3 mb-3.5">{entry.config.description}</p>
                     <div className="flex flex-wrap gap-2 mb-4">
                       <span className="font-mono text-[11px] rounded-chip px-2 py-0.5 text-accent bg-orange-bg border border-orange-bd">{entry.config.type}</span>
-                      <span className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{entry.config.targetUrl}</span>
+                      <span className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{resolveDockerHost(entry.config.targetUrl)}</span>
                       {optionRows(entry.config.options).map(([k, v]) => (
                         <span key={k} className="font-mono text-[11px] bg-bg border border-border rounded-chip px-2 py-0.75 text-tx-3">{v}</span>
                       ))}
@@ -793,7 +796,7 @@ export default function ChatPage() {
                       <p className="text-[14px] text-tx-2">Here&apos;s the flow I built:</p>
                     </div>
                     <p className="text-[13px] text-tx-3 mb-0.5">{entry.flow.description}</p>
-                    <p className="font-mono text-[11px] text-tx-4 mb-1">{entry.flow.targetUrl}</p>
+                    <p className="font-mono text-[11px] text-tx-4 mb-1">{resolveDockerHost(entry.flow.targetUrl)}</p>
 
                     <FlowStepList steps={entry.flow.steps} />
 

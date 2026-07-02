@@ -6,7 +6,7 @@ All AI functionality in one place. Structured for presentation use.
 
 ## Overview
 
-The platform uses **Google Gemini AI** (`gemini-3.1-flash-lite` by default, configurable via `GEMINI_MODEL` env var) across **4 services** for **18 distinct AI-powered capabilities**. Every AI call is lazy (user-triggered or event-triggered), non-fatal (graceful fallback when quota is exceeded), and surfaced to the user with a clear indicator.
+The platform uses **Google Gemini AI** (`gemini-3.1-flash-lite` by default, configurable via `GEMINI_MODEL` env var) as its default AI provider across **4 services** for **18 distinct AI-powered capabilities**, with a pluggable provider abstraction that supports OpenAI and Anthropic as an admin-configured primary or fallback (see [Model configuration & multi-provider fallback](#model-configuration--multi-provider-fallback) below). Every AI call is lazy (user-triggered or event-triggered), non-fatal (graceful fallback when quota is exceeded), and surfaced to the user with a clear indicator.
 
 ---
 
@@ -354,18 +354,36 @@ fencing adds no value.
 
 ## Infrastructure & Reliability
 
-### Model configuration
-All AI calls use a single configurable model:
+### Model configuration & multi-provider fallback
+
+Gemini is the default provider, but every AI call site resolves its model/provider through a pluggable abstraction (`generateAIText()` in `@alt/shared`) rather than calling the Gemini SDK directly, so OpenAI or Anthropic can serve as an alternate primary or fallback (AI-15, see root [`TODO.md`](../TODO.md) for delivery history):
+
 ```bash
-GEMINI_MODEL=gemini-3.1-flash-lite  # default
-# Override with any Gemini model ID
+GEMINI_MODEL=gemini-3.1-flash-lite          # default Gemini model
+OPENAI_API_KEY=...                          # optional — enables OpenAI as primary/fallback
+OPENAI_MODEL=gpt-4o-mini                    # default OpenAI model
+ANTHROPIC_API_KEY=...                       # optional — enables Anthropic as primary/fallback
+ANTHROPIC_MODEL=claude-3-5-haiku-latest     # default Anthropic model
 ```
 
+- **Platform default** — an admin sets the active provider + fallback chain via `GET`/`PUT /system/ai-provider` (admin-only `PUT`). Every AI call site — `ai-service` (script generation), `analyser-service` (AI insights), `recorder-service` (correlation/naming/ignore suggestions), and results-service's on-demand `/ai/*` endpoints — resolves this setting through `generateAIText()`/`getProviderSetting()`, cached in-process for 30s per lookup.
+- **Per-team override** — teams can override the platform default via `GET`/`PUT`/`DELETE /teams/:id/ai-provider` (admin-only); a team with no override row inherits the platform default. The Team page shows "Custom for this team" vs. "Using platform default" with a one-click revert.
+- **UI** — an admin-only "AI Provider" section on the Team page: provider dropdown + fallback checkboxes, showing "(not configured)" next to any provider with no API key set.
+
 ### Rate limit handling
-When Gemini quota is exceeded, the platform:
-1. Shows an amber **"Gemini API — daily quota exceeded"** banner in the UI (auto-dismisses when quota resets)
-2. Posts a `status_message` on affected test results: *"Gemini quota exceeded — AI insights unavailable until quota resets (midnight UTC)"*
-3. Continues working for all non-AI features — tests with cached scripts still run, deterministic analysis still executes
+
+There are two independent rate-limit layers — Gemini's own per-minute/day quota is a different thing from the platform's own per-team daily quota — and they fail differently:
+
+**1. Gemini API rate limit during script generation — retries automatically.**
+When `ai-service` calls Gemini (or another configured provider) while generating a script or comparing descriptions and gets a `429`, it retries in-process up to 3 attempts, waiting 60s then 120s between attempts. If it's still rate-limited after those 3 attempts, the message is requeued via RabbitMQ for up to 3 further attempts; the test's status line shows `"Gemini unavailable — retrying… (N attempts left)"` while this happens. If every retry is exhausted, the test fails with `"Script generation failed after 3 attempts — test could not start"`.
+
+**2. Everywhere else — fails closed immediately, no retry.**
+- AI insights (`analyser-service`) does not retry on a provider rate-limit: it immediately falls back to deterministic-only analysis (thresholds + regression, no narrative/anomalies/root-causes) and posts a `status_message` on the test result: *"Gemini quota exceeded — AI insights unavailable until quota resets (midnight UTC)"*.
+- All on-demand `/ai/*`, `suggest-*`, and `/results/:testId/diagnose` endpoints in results-service check the caller's own **per-team daily quota** (`team_quotas.maxGeminiCallsPerDay`) before ever calling the AI provider, and return `429 { "error": "Daily AI quota exceeded for this team" }` if it's exhausted — see [API reference → Team quotas](api.md#team-quotas).
+- All non-AI features keep working regardless — tests with cached scripts still run.
+
+**3. UI banner.**
+`AIStatus.tsx` polls `GET /system/ai-status` every 60s, which looks back 2 hours for any Gemini-related `status_message` (retry, quota, or generation-failure wording) on a test result. If one is found, an amber **"Gemini API — daily quota exceeded"** banner appears (dismissible, and reappears if a new occurrence lands after dismissal).
 
 ### LLM tracing (Langfuse, optional)
 
