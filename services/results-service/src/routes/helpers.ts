@@ -237,7 +237,12 @@ const FLOW_READY_RULES = `Rules for "flowReady":
 - "options.vus" and "options.duration" MUST be explicitly stated by the user — if not, return "needsClarification" instead.
 - "thresholds" is optional — only include when the user mentioned performance targets.
 - Every threshold value MUST be a plain JSON number (no unit suffix).
-- "extract" populates only when one step's response feeds a variable into a later step (e.g. auth token). Leave as {} otherwise.`;
+- CORRELATION IS MANDATORY BY DEFAULT — before finalizing steps, check every step for values a later step depends on. Common patterns to detect:
+  1. Auth/session tokens: a login/auth response returns a token → later steps send "Authorization: Bearer {{token}}"
+  2. Session/cart IDs: a response or path returns a session/cart identifier → later steps reuse it as {{sessionId}} in the URL or body
+  3. Entity IDs: a "list"/"create" response returns an id (e.g. productId, orderId, userId) → a later step operating on that entity uses {{entityId}} instead of a hardcoded literal
+  4. CSRF tokens / cookies returned by an earlier response → sent as a header/cookie on later steps
+  For every value you detect, add an "extract" rule on the step that PRODUCES it ({"varName": {"source": "jsonpath"|"header"|"cookie"|"regex", "expression": "..."}}) and reference it as "{{varName}}" in the url/body/headers of every step that CONSUMES it. Never hardcode a literal ID/token/session value that a prior step's response could plausibly have produced — correlate it instead. Leave "extract": {} on a step only when nothing in its response is reused later.`;
 
 const makeTranscript = (messages: ChatMessage[]): string =>
   messages

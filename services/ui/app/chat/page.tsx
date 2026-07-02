@@ -149,10 +149,20 @@ const readFileAsAttachment = (file: File): Promise<ChatAttachment> =>
     reader.readAsText(file);
   });
 
+// Non-text assistant entries (flow proposals, single-test previews, flow-builder redirects) must
+// still be serialized into the thread — otherwise a follow-up turn like "randomize the session id
+// for each run" arrives with no record that a flow was ever proposed, and the AI re-asks for
+// info (base URL, endpoints) that's actually sitting right there in the previous card.
 const toThreadMessages = (entries: ChatEntry[]): ChatMessage[] =>
   entries
-    .filter((e): e is TextMsg => e.kind === 'text')
-    .map(e => ({ role: e.role, content: e.content, attachments: e.attachments }));
+    .map((e): ChatMessage | null => {
+      if (e.kind === 'text') return { role: e.role, content: e.content, attachments: e.attachments };
+      if (e.kind === 'preview') return { role: 'assistant', content: `I proposed this test config: ${JSON.stringify(e.config)}` };
+      if (e.kind === 'flowPreview') return { role: 'assistant', content: `I proposed this flow: ${JSON.stringify(e.flow)}` };
+      if (e.kind === 'redirect') return { role: 'assistant', content: `I suggested using the Flow Builder instead: ${e.reason}` };
+      return null; // 'status' entries are live test-run noise, not conversational context
+    })
+    .filter((m): m is ChatMessage => m !== null);
 
 function optionRows(options: ParsedTestIntent['options']): Array<[string, string]> {
   return Object.entries(options as unknown as Record<string, unknown>)
