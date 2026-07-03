@@ -3,14 +3,7 @@
  * These are pure functions with no external dependencies.
  */
 import { describe, it, expect } from 'vitest';
-import { compileIgnorePatterns } from '../recorder';
-
-// shouldSkip is not exported, so we test it through the public compileIgnorePatterns
-// function and verify matching behavior via a local reimplementation that matches
-// the production logic. We also test compileIgnorePatterns itself thoroughly.
-
-// Reimport the internal logic for black-box testing by reading its behavior from
-// compileIgnorePatterns tests.
+import { compileIgnorePatterns, shouldSkip } from '../recorder';
 
 // ─── compileIgnorePatterns ────────────────────────────────────────────────────
 
@@ -70,10 +63,129 @@ describe('compileIgnorePatterns', () => {
   });
 });
 
-// ─── SKIP_EXTENSIONS behavior (via compileIgnorePatterns integration) ─────────
-// We verify the static SKIP_EXTENSIONS constant logic by importing from recorder
-// and testing that compileIgnorePatterns doesn't affect static extension filters.
-// The extension matching is done separately in shouldSkip (not via ignorePatterns).
+// ─── shouldSkip — SKIP_SCHEMES ────────────────────────────────────────────────
+
+describe('shouldSkip — SKIP_SCHEMES', () => {
+  it('skips data: URLs', () => {
+    expect(shouldSkip('data:image/png;base64,AAAA', '', [])).toBe(true);
+  });
+
+  it('skips blob: URLs', () => {
+    expect(shouldSkip('blob:https://example.com/uuid', '', [])).toBe(true);
+  });
+
+  it('skips chrome-extension: URLs', () => {
+    expect(shouldSkip('chrome-extension://abcdefg/content.js', '', [])).toBe(true);
+  });
+
+  it('skips about: URLs', () => {
+    expect(shouldSkip('about:blank', '', [])).toBe(true);
+  });
+
+  it('does NOT skip a normal https: URL', () => {
+    expect(shouldSkip('https://api.example.com/users', '', [])).toBe(false);
+  });
+
+  it('matches scheme case-insensitively', () => {
+    expect(shouldSkip('DATA:text/plain,hello', '', [])).toBe(true);
+  });
+});
+
+// ─── shouldSkip — SKIP_EXTENSIONS ─────────────────────────────────────────────
+
+describe('shouldSkip — SKIP_EXTENSIONS', () => {
+  it.each([
+    'https://cdn.example.com/logo.png',
+    'https://cdn.example.com/photo.jpg',
+    'https://cdn.example.com/photo.jpeg',
+    'https://cdn.example.com/icon.gif',
+    'https://cdn.example.com/icon.svg',
+    'https://cdn.example.com/favicon.ico',
+    'https://cdn.example.com/app.js',
+    'https://cdn.example.com/app.mjs',
+    'https://cdn.example.com/styles.css',
+    'https://cdn.example.com/font.woff',
+    'https://cdn.example.com/font.woff2',
+    'https://cdn.example.com/font.ttf',
+    'https://cdn.example.com/font.eot',
+    'https://cdn.example.com/image.webp',
+    'https://cdn.example.com/image.avif',
+    'https://cdn.example.com/clip.mp4',
+    'https://cdn.example.com/song.mp3',
+    'https://cdn.example.com/doc.pdf',
+  ])('skips static asset extension in %s', (url) => {
+    expect(shouldSkip(url, '', [])).toBe(true);
+  });
+
+  it('skips an asset URL even with a query string appended', () => {
+    expect(shouldSkip('https://cdn.example.com/logo.png?v=2&cache=1', '', [])).toBe(true);
+  });
+
+  it('matches extensions case-insensitively', () => {
+    expect(shouldSkip('https://cdn.example.com/LOGO.PNG', '', [])).toBe(true);
+  });
+
+  it('does NOT skip an API endpoint with no static extension', () => {
+    expect(shouldSkip('https://api.example.com/users/42', '', [])).toBe(false);
+  });
+
+  it('does NOT skip a path that merely contains an asset extension as a substring', () => {
+    expect(shouldSkip('https://api.example.com/pngconverter', '', [])).toBe(false);
+  });
+});
+
+// ─── shouldSkip — SKIP_CONTENT_TYPES ──────────────────────────────────────────
+
+describe('shouldSkip — SKIP_CONTENT_TYPES', () => {
+  it('skips text/css content-type', () => {
+    expect(shouldSkip('https://api.example.com/dynamic', 'text/css', [])).toBe(true);
+  });
+
+  it('skips application/javascript content-type', () => {
+    expect(shouldSkip('https://api.example.com/dynamic', 'application/javascript', [])).toBe(true);
+  });
+
+  it('skips any font/* content-type', () => {
+    expect(shouldSkip('https://api.example.com/dynamic', 'font/woff2', [])).toBe(true);
+  });
+
+  it('skips any image/* content-type', () => {
+    expect(shouldSkip('https://api.example.com/dynamic', 'image/webp', [])).toBe(true);
+  });
+
+  it('does NOT skip application/json content-type', () => {
+    expect(shouldSkip('https://api.example.com/dynamic', 'application/json', [])).toBe(false);
+  });
+
+  it('does NOT skip text/html content-type', () => {
+    expect(shouldSkip('https://api.example.com/dynamic', 'text/html', [])).toBe(false);
+  });
+
+  it('ignores content-type check when contentType is an empty string', () => {
+    expect(shouldSkip('https://api.example.com/dynamic', '', [])).toBe(false);
+  });
+});
+
+// ─── shouldSkip — ignorePatterns integration ──────────────────────────────────
+
+describe('shouldSkip — user ignorePatterns', () => {
+  it('skips a URL matching a compiled user ignore pattern', () => {
+    const patterns = compileIgnorePatterns(['analytics.example.com']);
+    expect(shouldSkip('https://analytics.example.com/collect', '', patterns)).toBe(true);
+  });
+
+  it('does not skip a URL matching none of the ignore patterns', () => {
+    const patterns = compileIgnorePatterns(['analytics.example.com']);
+    expect(shouldSkip('https://api.example.com/users', '', patterns)).toBe(false);
+  });
+
+  it('checks scheme/extension/content-type before falling through to ignorePatterns', () => {
+    // matches SKIP_EXTENSIONS regardless of an (empty) ignorePatterns list
+    expect(shouldSkip('https://cdn.example.com/logo.png', '', [])).toBe(true);
+  });
+});
+
+// ─── compileIgnorePatterns — edge cases ───────────────────────────────────────
 
 describe('compileIgnorePatterns — edge cases', () => {
   it('handles a regex with no flags', () => {

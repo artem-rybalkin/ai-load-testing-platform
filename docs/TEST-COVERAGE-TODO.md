@@ -119,7 +119,7 @@ Still missing:
 
 ## 🟢 Low Priority
 
-### L1 — `startSession` / CDP event pipeline (recorder-service)
+### L1 — `startSession` / CDP event pipeline (recorder-service) — ✅ DONE (2026-07-03)
 **File:** `services/recorder-service/src/recorder.ts`
 
 `startSession`, `stopSession`, and CDP event handlers (`Network.requestWillBeSent`,
@@ -134,9 +134,22 @@ Neither touches the real session/CDP pipeline.
 
 **Note:** Puppeteer dependency makes CI-safe testing hard without a real browser.
 
+**Resolved:** the "real browser" note was overly pessimistic — `puppeteer.launch()` is mockable the
+same way `worker-client`'s `puppeteer.launch`/`newPage` were (H3), and `CDPSession` is just an
+`EventEmitter`, so a real `EventEmitter` standing in for it lets the actual CDP event handlers in
+`recorder.ts` run unmodified. Added `services/recorder-service/src/__tests__/startSession.test.ts`
+(19 tests, `puppeteer-core` mocked via `vi.mock` + a fake Browser/Page/CDPSession): full
+request/response assembly across `requestWillBeSent`→`responseReceived`→`loadingFinished`,
+`onStep`/`stepCount`/`lastActivityAt` updates, JSON-only `Network.getResponseBody` fetching
+(and non-fatal handling when it throws), orphaned `loadingFinished` with no prior request,
+skip filtering wired through real CDP events (extensions, schemes, content-type, user
+ignorePatterns), launch wiring (`headless:false`, viewport, `Network.enable`/`Page.enable`),
+and `stopSession` (detach/close, status transition, snapshot-copy return, swallowing
+already-detached/already-closed errors). 230/230 recorder-service tests passing.
+
 ---
 
-### L2 — `shouldSkip` (recorder-service)
+### L2 — `shouldSkip` (recorder-service) — ✅ DONE (2026-07-03)
 **File:** `services/recorder-service/src/recorder.ts`
 
 No unit test for skip conditions (`SKIP_SCHEMES`, `SKIP_EXTENSIONS`, `SKIP_CONTENT_TYPES`,
@@ -149,6 +162,14 @@ flag, and invalid-pattern edge cases. **Still open:** the static `SKIP_SCHEMES` 
 `SKIP_EXTENSIONS` / `SKIP_CONTENT_TYPES` branches inside `shouldSkip()` itself (e.g. `data:` URLs,
 `.png`/`.jpg` asset extensions, `image/*` content-type filtering) remain untested — `shouldSkip`
 isn't exported, and no existing test imports/exercises it directly for those branches.
+
+**Resolved:** exported `shouldSkip` (matching the existing pattern for `compileIgnorePatterns`/
+`toFlowSteps`/`computeThinkTimes`) and added 19 direct unit tests to `shouldSkip.test.ts`:
+all 4 `SKIP_SCHEMES` (`data:`/`blob:`/`chrome-extension:`/`about:`, case-insensitive), all 18
+`SKIP_EXTENSIONS` values (incl. query-string and case-insensitivity), all 4 `SKIP_CONTENT_TYPES`
+groups (`text/css`, `application/javascript`, `font/*`, `image/*`), negative cases for each
+(JSON/HTML content-type, non-asset paths, substring-not-extension), and `ignorePatterns`
+integration (both skip and no-skip, plus static-rule precedence over the pattern list).
 
 ---
 

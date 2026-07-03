@@ -35,7 +35,7 @@ const SKIP_EXTENSIONS = /\.(js|mjs|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|e
 const SKIP_CONTENT_TYPES = /^(text\/css|application\/javascript|font\/|image\/)/i;
 const SKIP_SCHEMES = /^(chrome-extension:|data:|blob:|about:)/i;
 
-function shouldSkip(url: string, contentType: string, ignorePatterns: RegExp[]): boolean {
+export function shouldSkip(url: string, contentType: string, ignorePatterns: RegExp[]): boolean {
   if (SKIP_SCHEMES.test(url)) return true;
   if (SKIP_EXTENSIONS.test(url)) return true;
   if (contentType && SKIP_CONTENT_TYPES.test(contentType)) return true;
