@@ -58,15 +58,17 @@ RabbitMQ consumer branching logic has no unit tests (only covered by Playwright 
 
 ## 🟡 Medium Priority
 
-### M3 — `callAnalyserService` — `geminiRateLimited` branch (results-service)
+### M3 — `callAnalyserService` — `geminiRateLimited` branch (results-service) — ✅ DONE (already resolved)
 **File:** `services/results-service/src/consumer.ts`
 
 - Fire-and-forget `POST /results/:testId/message` when `geminiRateLimited: true` is not asserted
 - Scenario where `geminiRateLimited` is true but `aiInsights` is absent
 
+**Resolved:** this item was already closed (never reflected here) — `services/results-service/src/__tests__/consumer.test.ts` → `describe('handleResult — geminiRateLimited branch (M3)')` (3 tests): posts the quota-exceeded status_message when `geminiRateLimited=true`, still saves the analysis when `aiInsights` is absent, and does NOT post a message when `geminiRateLimited` is false.
+
 ---
 
-### M5 — `handleResult` transaction rollback (results-service)
+### M5 — `handleResult` transaction rollback (results-service) — ✅ DONE (2026-07-03)
 **File:** `services/results-service/src/consumer.ts`
 
 No test forces an INSERT failure to verify:
@@ -74,9 +76,11 @@ No test forces an INSERT failure to verify:
 - Error propagates correctly to the consumer's `channel.consume` handler
 - Message gets retried / routed to DLQ
 
+**Resolved:** the `ROLLBACK`-on-INSERT-failure half was already covered by `describe('handleResult — transaction rollback (M5)')` (2 tests, real Postgres via testcontainers: FK-violation INSERT → rollback → re-throw → no committed row, no webhook fired). The remaining half — retry/DLQ routing around the `channel.consume(QUEUE, ...)` wrapper in `startConsumer()` — had no coverage; added `describe('Queue consumer — retry/DLQ routing when handleResult throws (M5)')` (5 tests, mocked channel/msg, no DB/broker needed): republish with incremented `x-retry-count` below `MAX_RETRIES`, DLQ routing at/above `MAX_RETRIES`, missing-header treated as first attempt, ack-only on success. 53/53 tests passing across `consumer.test.ts` + `db.test.ts`.
+
 ---
 
-### M7 — `queryWithRetry` retry/backoff (results-service)
+### M7 — `queryWithRetry` retry/backoff (results-service) — ✅ DONE (already resolved)
 **File:** `services/results-service/src/db.ts`
 
 `db.test.ts` only covers `readPool` fallback (2 tests). Still missing:
@@ -84,26 +88,32 @@ No test forces an INSERT failure to verify:
 - Succeeds on a later attempt after N failures
 - Throws after exhausting all retries
 
+**Resolved:** this item was already closed (never reflected here) — `services/results-service/src/__tests__/db.test.ts` → `describe('queryWithRetry (M7)')` (5 tests): resolves immediately on first success, retries and succeeds on the second attempt, retries N-1 times then throws after exhausting all retries, defaults to `retries=5`, throws immediately when `retries=1`.
+
 ---
 
-### M8 — `createSchema` idempotency (results-service)
+### M8 — `createSchema` idempotency (results-service) — ✅ DONE (already resolved)
 **File:** `services/results-service/src/db.ts`
 
 No assertion that running `createSchema(pool)` twice does not re-apply migrations.
 The `schema_migrations` row count should equal `MIGRATIONS.length` after both calls.
 
+**Resolved:** this item was already closed (never reflected here) — `services/results-service/src/__tests__/db.test.ts` → `describe('createSchema — idempotency (M8)')` (3 tests): no migration re-applied on a second `createSchema(pool)` call, `schema_migrations` row count equals `MIGRATIONS.length` (14), and versions are sequential 1..14.
+
 ---
 
-### M11 — Result detail page (UI)
+### M11 — Result detail page (UI) — ✅ DONE (already resolved, commit `de2c12d`, 2026-06-29)
 **File:** `services/ui/app/results/[testId]/page.tsx` (714 lines)
 
 `ResultDetail.test.tsx` only has 5 tests (status_message + self-healing poll).
 Still missing:
-- Tab switching (Overview / Execution Log / Steps)
+- ~~Tab switching (Overview / Execution Log / Steps)~~ — stale: the page has no tabs, it's a single scrolling layout with an inline `StepMetricsTable` and a collapsible `ExecutionLogPanel`, not a tabbed view
 - Baseline set/clear interactions
 - Re-run button behavior
 - PDF report download link rendering
 - Analysis panel for failed tests
+
+**Resolved:** this item was already closed in commit `de2c12d` (never reflected here) — `services/ui/__tests__/ResultDetailPage.test.tsx` adds 29 tests covering loading state, completed backend metric cells, status badge, baseline set/clear toggle, Re-run link, PDF/CSV links, Stop button (running/pending), client-side LCP/FCP/TTFB/CLS cells, analysis panel presence, and the execution log panel (collapsed by default, fetch on expand, empty-log message). Verified still passing alongside the original `ResultDetail.test.tsx`: 34/34 tests across both files.
 
 ---
 
