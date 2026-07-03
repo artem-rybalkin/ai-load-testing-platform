@@ -8,7 +8,7 @@ This is a narrower, dated unit-test-coverage gap list — unrelated in scope to 
 
 ## 🔴 High Priority
 
-### H1 — `runK6Test` orchestration (worker-backend)
+### H1 — `runK6Test` orchestration (worker-backend) — ✅ DONE (2026-07-03)
 **File:** `services/worker-backend/src/index.ts`
 
 Zero tests for the core k6 execution path:
@@ -21,9 +21,11 @@ Zero tests for the core k6 execution path:
 
 **Approach:** Mock `child_process.spawn` in Vitest; test cancel/timeout/retry paths as unit tests.
 
+**Resolved:** `services/worker-backend/src/__tests__/runner.test.ts` (spawn mocking, temp file writing/cleanup, SIGTERM→SIGKILL escalation, exit-code handling, `handleRetry` DLQ routing) and `__tests__/index.test.ts` (`cancelledTests` interplay, notify* REST helpers) already covered every item except the live-metric polling loop — added 4 new tests for `readAndPost`/`aggregateWindow` (posts on new data, skips when no new bytes, final flush on close, interval cleared after close). 129/129 worker-backend tests passing.
+
 ---
 
-### H3 — `runClientTest` orchestration (worker-client)
+### H3 — `runClientTest` orchestration (worker-client) — ✅ DONE (already resolved, commit `de2c12d`, 2026-06-29)
 **File:** `services/worker-client/src/index.ts`
 
 `avg()` / `avgNum()` / `avgResourceBreakdown()` helpers are tested in `metrics.test.ts`.
@@ -35,9 +37,11 @@ Still missing — the orchestration layer:
 
 **Approach:** Mock `puppeteer.launch()` and `newPage()` for lifecycle tests.
 
+**Resolved:** this item was already closed in commit `de2c12d` (never reflected here) — `runClientTest` was extracted into `services/worker-client/src/runner.ts` with an injectable `ClientRunnerContext` (`launchBrowser`/`runLighthouse` overrides), and `services/worker-client/src/__tests__/runner.test.ts` adds 22 tests covering session flow, multi-session averaging, Lighthouse score/INP/TBT extraction, non-fatal Lighthouse failure, `runningBrowsers` lifecycle, `partialLog` on throw, custom headers, and execution log output. Verified still passing: 50/50 worker-client tests.
+
 ---
 
-### H4 — ai-service consumer routing (ai-service)
+### H4 — ai-service consumer routing (ai-service) — ✅ DONE (already resolved, commit `828ce41`)
 **File:** `services/ai-service/src/index.ts`
 
 RabbitMQ consumer branching logic has no unit tests (only covered by Playwright E2E):
@@ -47,6 +51,8 @@ RabbitMQ consumer branching logic has no unit tests (only covered by Playwright 
 - `cachedScript` + `cachedScriptDescription` passthrough in the message
 
 **Approach:** Extract routing into a pure function; add Vitest tests per branch.
+
+**Resolved:** this item was already closed (never reflected here) — routing logic lives in `services/ai-service/src/processor.ts` (`processAiRequest`, pure function taking injectable `generateScript`/`compareDescriptions` deps), and `services/ai-service/src/__tests__/processor.test.ts` adds 20 tests covering REUSE, REGENERATE, generation fallthrough, DLQ after `MAX_RETRIES`, retry-count incrementing, `cachedScript` without description, backend/client/flow queue routing, and ack guarantees on every path. Verified still passing: 78/78 ai-service tests.
 
 ---
 

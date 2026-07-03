@@ -472,6 +472,145 @@ describe('runK6Test — SIGTERM/SIGKILL escalation', () => {
   });
 });
 
+// ─── runK6Test — live metric polling loop (readAndPost) ──────────────────────
+
+describe('runK6Test — live metric polling loop (readAndPost)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    vi.resetModules();
+    setupFs();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A JSON line k6's --out json would emit for one HTTP request duration point. */
+  const LIVE_LINE = JSON.stringify({
+    type: 'Point',
+    metric: 'http_req_duration',
+    data: { value: 123, time: new Date().toISOString(), tags: {} },
+  }) + '\n';
+
+  /** Makes mockOpen's file handle reflect `content`, writing the requested slice
+   *  into the caller-provided buffer the way real fs.read() would (the default
+   *  setupFs() mock leaves the buffer untouched, which would hide real bugs here). */
+  function mockJsonFile(content: string): void {
+    const buf = Buffer.from(content, 'utf-8');
+    mockOpen.mockResolvedValue({
+      stat: vi.fn().mockResolvedValue({ size: buf.length }),
+      read: vi.fn().mockImplementation(async (dest: Buffer, offset: number, length: number, position: number) => {
+        const slice = buf.subarray(position, position + length);
+        slice.copy(dest, offset);
+        return { bytesRead: slice.length };
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+  }
+
+  it('posts an aggregated live metric point when the json output file has new data', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+    mockJsonFile(LIVE_LINE);
+
+    const ctx = makeCtx();
+    ctx.liveIntervalMs = 5_000;
+
+    const promise = runK6Test('test-live', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(ctx.postLiveMetric).toHaveBeenCalledWith('test-live', expect.objectContaining({ avgResponseTime: 123 }));
+
+    run.emit('close', 0);
+    await promise;
+  });
+
+  it('does NOT post a live metric when the json file has no new bytes since the last read', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+    mockJsonFile(''); // size 0 === starting fileOffset(0) → readAndPost returns early, nothing posted
+
+    const ctx = makeCtx();
+    ctx.liveIntervalMs = 5_000;
+
+    const promise = runK6Test('test-live-empty', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(ctx.postLiveMetric).not.toHaveBeenCalled();
+
+    run.emit('close', 0);
+    await promise;
+  });
+
+  it('does a final readAndPost flush on process close, posting trailing data the interval never reached', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+    mockJsonFile(LIVE_LINE);
+
+    const ctx = makeCtx();
+    ctx.liveIntervalMs = 999_999; // long enough that the interval itself never fires before close
+
+    const promise = runK6Test('test-live-flush', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    run.emit('close', 0);
+    await promise;
+
+    expect(ctx.postLiveMetric).toHaveBeenCalledWith('test-live-flush', expect.objectContaining({ avgResponseTime: 123 }));
+  });
+
+  it('clears the polling interval on close — no further postLiveMetric calls afterward', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+    mockJsonFile(LIVE_LINE);
+
+    const ctx = makeCtx();
+    ctx.liveIntervalMs = 5_000;
+
+    const promise = runK6Test('test-live-clear', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    run.emit('close', 0);
+    await promise;
+
+    const callsAfterClose = ctx.postLiveMetric.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(ctx.postLiveMetric.mock.calls.length).toBe(callsAfterClose);
+  });
+});
+
 // ─── runK6Test — runningTests / cancellation tracking ─────────────────────────
 
 describe('runK6Test — runningTests map', () => {
