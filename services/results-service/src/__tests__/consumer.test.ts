@@ -827,7 +827,10 @@ const CONSUMER_QUEUE       = 'test-results';
 const CONSUMER_DLQ         = `${CONSUMER_QUEUE}.dlq`;
 const CONSUMER_MAX_RETRIES = 3;
 
-const makeConsumerChannel = (): { publish: ReturnType<typeof vi.fn>; sendToQueue: ReturnType<typeof vi.fn>; ack: ReturnType<typeof vi.fn> } => ({
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ConsumerMockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
+
+const makeConsumerChannel = (): { publish: ConsumerMockFn; sendToQueue: ConsumerMockFn; ack: ConsumerMockFn } => ({
   publish:     vi.fn(),
   sendToQueue: vi.fn(),
   ack:         vi.fn(),
