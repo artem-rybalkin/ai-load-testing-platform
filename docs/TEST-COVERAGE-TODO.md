@@ -173,11 +173,19 @@ integration (both skip and no-skip, plus static-rule precedence over the pattern
 
 ---
 
-### L3 — Presentational UI components
-- `app/components/BackendChart.tsx` — status code grouping, error breakdown rendering
+### L3 — Presentational UI components — ✅ DONE (2026-07-03)
+- ~~`app/components/BackendChart.tsx` — status code grouping, error breakdown rendering~~ — stale description: the component has no status-code grouping or error-breakdown UI (that lives elsewhere, e.g. the AI-4 "Error Breakdown" card); it actually renders response-time bars, a success/failed request-count breakdown, and a throughput bar
 - `app/components/FlowStepChart.tsx` — per-step bar chart
 - `app/components/TrendChart.tsx` — p95/LCP trend line
 - `app/components/AIStatus.tsx` — AI status polling
+
+**Resolved:** added 4 new test files (41 tests total), following the existing `ClientChart.test.tsx`/`RealtimeChart.test.tsx`/`WorkerHealth.test.tsx` conventions:
+- `BackendChart.test.tsx` (8 tests) — recharts stubbed to null (headings/labels are plain elements outside the chart), asserts section headings, error-rate calculation (incl. 0-total and 100%-failed edge cases), rps display, and render safety with all-zero metrics.
+- `FlowStepChart.test.tsx` (7 tests) — since this component has no plain-text output of its own, `BarChart` is mocked to dump its `data` prop as JSON into the DOM (no source changes needed), verifying the name-truncation-at-20-chars/ellipsis, rounding, and step-order transform.
+- `TrendChart.test.tsx` (13 tests) — same JSON-dump technique for `LineChart`'s `data` prop (run numbering, rounding, metricKey defaulting, date formatting), plus `Line`'s `dot` render-prop is invoked directly per test to verify the `perf_status` → color mapping (green/amber/red/default-green).
+- `AIStatus.test.tsx` (13 tests) — mirrors `WorkerHealth.test.tsx`'s polling-component pattern: hidden/shown states, the dismiss-then-persist-then-re-show-if-exceeded-again localStorage flow, and the 60s polling interval (incl. cleanup on unmount).
+
+482/482 UI tests passing.
 
 ---
 
