@@ -108,6 +108,7 @@ Requirements:
 - Include realistic think time between requests (sleep 1-3s)
 - Add checks for HTTP status AND at least one body/header assertion per request
 - Always include thresholds: p(95) < 1000 (adjust if description implies stricter SLO) and http_req_failed rate < 0.01
+- Log failures: if res.status is 0 or >= 400, console.error a line with the status and URL (e.g. \`console.error(\`FAILED \${res.status} \${res.request.url}\`)\`) right after the check — this is the only way a failed request shows up in the execution log, since k6 does not print anything for a failing check or a non-2xx response on its own
 - For JSON APIs: set Content-Type: application/json header, use JSON.stringify for request body, call res.json() to parse
 - For authenticated endpoints: read credentials from __ENV.USERNAME / __ENV.PASSWORD / __ENV.API_TOKEN — never hardcode secrets
 - Return ONLY the JavaScript code, no markdown, no explanation
@@ -118,10 +119,12 @@ const payload = JSON.stringify({ username: __ENV.USERNAME, password: __ENV.PASSW
 const params = { headers: { 'Content-Type': 'application/json', 'Authorization': \`Bearer \${__ENV.API_TOKEN}\` } };
 const res = http.post('${test.targetUrl}', payload, params);
 check(res, { 'status 200': (r) => r.status === 200, 'has id': (r) => r.json('id') !== undefined });
+if (res.status === 0 || res.status >= 400) console.error(\`FAILED \${res.status} \${res.request.url}\`);
 
 // GET with query params
 const res = http.get(\`\${__ENV.BASE_URL}/items?page=1&limit=20\`, params);
 check(res, { 'status 200': (r) => r.status === 200, 'non-empty list': (r) => r.json('items').length > 0 });
+if (res.status === 0 || res.status >= 400) console.error(\`FAILED \${res.status} \${res.request.url}\`);
 
 Structure:
 import http from 'k6/http';

@@ -271,6 +271,20 @@ describe('BACKEND_PROMPT — basic content', () => {
     await generateScript(baseBackend());
     expect(await getLastPrompt()).not.toContain('Custom headers');
   });
+
+  it('instructs logging failed requests via console.error', async () => {
+    await generateScript(baseBackend());
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('Log failures');
+    expect(prompt).toContain('console.error');
+  });
+
+  it('includes literal FAILED console.error examples for both sample requests, unevaluated', async () => {
+    await generateScript(baseBackend());
+    const prompt = await getLastPrompt();
+    const occurrences = prompt.match(/if \(res\.status === 0 \|\| res\.status >= 400\) console\.error\(`FAILED \$\{res\.status\} \$\{res\.request\.url\}`\);/g);
+    expect(occurrences).toHaveLength(2);
+  });
 });
 
 describe('BACKEND_PROMPT — profileInstructions', () => {
