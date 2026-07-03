@@ -2,8 +2,6 @@
 
 Improvements, suggestions, and large future work items. Open items are listed first; everything under **Completed** below has already shipped and is kept for history/context, not for tracking active work.
 
-For the (separate, narrower) unit-test-coverage gap list, see [docs/TEST-COVERAGE-TODO.md](docs/TEST-COVERAGE-TODO.md).
-
 ## Open
 
 - [ ] **Live metrics result page freezes on long-running tests** — performance issue on the result detail page's live view; investigate whether this is unbounded state growth (e.g. every live-metric tick appended to an ever-growing array/chart dataset), missing windowing/downsampling, or a rendering cost issue in the chart component during long test durations
