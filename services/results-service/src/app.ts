@@ -81,6 +81,9 @@ export const buildApp = async (
     // GET is read by ai-service (no session) to pick the active provider; PUT
     // still requires normal session/admin auth (handled below + in the handler).
     if (url === '/system/ai-provider' && request.method === 'GET') return;
+    // GET is read by worker-backend (no session) at test-dequeue time to pick the
+    // live-metrics window; PUT still requires normal session/admin auth.
+    if (url === '/system/live-metric-window' && request.method === 'GET') return;
 
     if (isInternalCallback(url, request.method)) {
       if (internalApiKey && request.headers['x-internal-key'] !== internalApiKey) {

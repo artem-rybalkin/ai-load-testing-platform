@@ -141,6 +141,7 @@ export const runK6Test = async (
     k6.stderr.on('data', (d: Buffer) => { stderrChunks.push(d); stderrLineBuf(d); });
 
     const liveIntervalMs = ctx?.liveIntervalMs ?? LIVE_INTERVAL_MS;
+    const liveWindowSec = liveIntervalMs / 1_000;
 
     const readAndPost = async (): Promise<void> => {
       try {
@@ -152,7 +153,7 @@ export const runK6Test = async (
           await fh.read(buf, 0, buf.length, fileOffset);
           fileOffset = size;
           const newLines = buf.toString('utf-8').split('\n').filter(l => l.trim());
-          const agg = aggregateWindow(newLines);
+          const agg = aggregateWindow(newLines, liveWindowSec);
           if (agg) await ctx?.postLiveMetric(testId, { timestamp: new Date().toISOString(), ...agg });
         } finally {
           await fh.close();

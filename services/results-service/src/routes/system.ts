@@ -1,17 +1,20 @@
 /**
  * System / health route plugin:
  * GET /health, GET /system/ai-status, GET /system/ai-provider,
- * PUT /system/ai-provider, GET /system/health.
+ * PUT /system/ai-provider, GET /system/live-metric-window,
+ * PUT /system/live-metric-window, GET /system/health.
  */
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
-import type { AiProviderName } from '@alt/shared';
+import type { AiProviderName, LiveMetricWindowSec } from '@alt/shared';
 import { AI_PROVIDER_NAMES, isProviderConfigured } from '@alt/shared';
 import {
   getAiProviderSetting,
   setAiProviderSetting,
   getEffectiveAiProviderSetting,
   getTeamAiProviderSetting,
+  getLiveMetricWindowSetting,
+  setLiveMetricWindowSetting,
 } from '../settings';
 import { isConsumerConnected } from '../consumer';
 import { redisClient } from '../redis';
@@ -90,6 +93,27 @@ export async function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool;
       const setting = { provider, fallbacks: cleanFallbacks };
       await setAiProviderSetting(pool, setting);
       return setting;
+    },
+  );
+
+  // ── GET /system/live-metric-window ────────────────────────────────────────
+  app.get('/system/live-metric-window', async () => {
+    const windowSec = await getLiveMetricWindowSetting(pool);
+    return { windowSec };
+  });
+
+  // ── PUT /system/live-metric-window ────────────────────────────────────────
+  const LIVE_METRIC_WINDOW_VALUES: LiveMetricWindowSec[] = [10, 30, 60];
+  app.put<{ Body: { windowSec: number } }>(
+    '/system/live-metric-window',
+    async (request, reply) => {
+      if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+      const { windowSec } = request.body;
+      if (!LIVE_METRIC_WINDOW_VALUES.includes(windowSec as LiveMetricWindowSec)) {
+        return reply.code(400).send({ error: `windowSec must be one of: ${LIVE_METRIC_WINDOW_VALUES.join(', ')}` });
+      }
+      await setLiveMetricWindowSetting(pool, windowSec as LiveMetricWindowSec);
+      return { windowSec };
     },
   );
 

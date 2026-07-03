@@ -670,7 +670,7 @@ curl "http://localhost:3004/results/preview-thresholds?url=https://api.example.c
 
 ### `GET /results/:testId/live`
 
-All live metric points recorded during a k6 test (5-second windows, chronological). Requires a valid session when `SESSION_SECRET` is set, and is project-scoped — returns only points for tests owned by the caller's project (only `POST /results/:testId/live`, used internally by `worker-backend`, is exempt from auth).
+All live metric points recorded during a k6 test (admin-configurable aggregation window — 10s/30s/1min, default 10s, see `GET/PUT /system/live-metric-window` — chronological). Requires a valid session when `SESSION_SECRET` is set, and is project-scoped — returns only points for tests owned by the caller's project (only `POST /results/:testId/live`, used internally by `worker-backend`, is exempt from auth).
 
 ```bash
 curl http://localhost:3004/results/550e8400/live

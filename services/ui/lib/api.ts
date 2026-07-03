@@ -24,8 +24,8 @@ export { getSchedules, createSchedule, updateSchedule, deleteSchedule, runSchedu
 export type { Preset } from './api/presets';
 export { getPresets, createPreset, getPreset, deletePreset } from './api/presets';
 
-export type { WorkerMetrics, ServiceHealth, SystemHealth, AIStatus } from './api/system';
-export { getSystemHealth, getAIStatus } from './api/system';
+export type { WorkerMetrics, ServiceHealth, SystemHealth, AIStatus, LiveMetricWindowSec } from './api/system';
+export { getSystemHealth, getAIStatus, getLiveMetricWindow, setLiveMetricWindow } from './api/system';
 
 export type { LogSource } from './api/logSources';
 export { interpolateLogSourceUrl, getLogSources, createLogSource, updateLogSource, deleteLogSource } from './api/logSources';

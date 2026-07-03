@@ -138,6 +138,12 @@ export interface Workspace {
 
 export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak';
 
+/** Live-metrics chart aggregation window, in seconds. Admin-configurable via
+ *  the Settings page (GET/PUT /system/live-metric-window) — applies to new
+ *  tests only, not tests already running when the setting changes. */
+export type LiveMetricWindowSec = 10 | 30 | 60;
+export const DEFAULT_LIVE_METRIC_WINDOW_SEC: LiveMetricWindowSec = 10;
+
 export interface HttpOptions {
   keepAlive?: boolean;             // default true in k6
   timeout?: string;                // per-request timeout, e.g. "30s"

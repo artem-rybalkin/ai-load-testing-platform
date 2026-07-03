@@ -23,6 +23,7 @@ const WebhooksPage     = lazy(() => import('@/app/webhooks/page'));
 const TeamPage         = lazy(() => import('@/app/team/page'));
 const OrgPage          = lazy(() => import('@/app/org/page'));
 const WorkspacesPage   = lazy(() => import('@/app/workspaces/page'));
+const SettingsPage     = lazy(() => import('@/app/settings/page'));
 const LoginPage        = lazy(() => import('@/app/login/page'));
 
 function AuthGate() {
@@ -80,6 +81,7 @@ export default function App() {
                   <Route path="/team"            element={<TeamPage />} />
                   <Route path="/org"             element={<OrgPage />} />
                   <Route path="/workspaces"      element={<WorkspacesPage />} />
+                  <Route path="/settings"        element={<SettingsPage />} />
                 </Route>
               </Route>
             </Routes>

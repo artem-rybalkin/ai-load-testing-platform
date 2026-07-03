@@ -22,7 +22,7 @@ Functional and non-functional requirements. Extracted from CLAUDE.md + architect
 - FR-3.2 [MUST] System SHALL classify results as passed / degraded / failed based on configurable SLO thresholds
 - FR-3.3 [MUST] System SHALL detect regressions by comparing against a baseline or the previous run for the same URL
 - FR-3.4 [SHOULD] System SHALL generate AI narrative insights (anomalies, root causes, recommendations) via Gemini per test result
-- FR-3.5 [MUST] System SHALL stream live metrics (response time, error rate, throughput) during k6 execution at 5-second windows
+- FR-3.5 [MUST] System SHALL stream live metrics (response time, error rate, throughput) during k6 execution at an admin-configurable aggregation window (10s/30s/1min, default 10s; changes apply to new tests only)
 
 ### FR-4: Flow Recording
 - FR-4.1 [SHOULD] System SHALL capture real browser interactions via CDP and convert them to FlowStep definitions

@@ -66,7 +66,7 @@ Scheduled path:
 |-------|---------|
 | test_results | Test run state, metrics, analysis, status |
 | test_scripts | Generated k6/Puppeteer scripts (reused across tests) |
-| live_metrics | 5-second streaming metric windows during execution |
+| live_metrics | Streaming metric windows during execution (admin-configurable aggregation window — 10s/30s/1min via Settings, default 10s; applies to new tests only) |
 | log_sources | External log deep-link URL templates |
 | webhooks | Webhook endpoints (fired on failed/degraded) |
 | schedules | node-cron schedule definitions |

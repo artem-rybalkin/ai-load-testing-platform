@@ -97,6 +97,20 @@ export default function RealtimeChart({ points, startedAt }: Props) {
   }
   const hasSteps = stepNames.length > 0;
 
+  // The chart has no direct access to the admin-configured window size (it's a
+  // producer-side setting, not persisted per-test) — derive it from consecutive
+  // live-point timestamps instead, snapped to the nearest known bucket so poll
+  // jitter never produces an odd label like "9.87s windows".
+  const WINDOW_BUCKETS = [10, 30, 60] as const;
+  const windowSec = points.length >= 2
+    ? WINDOW_BUCKETS.reduce((best, b) => {
+        const raw = (new Date(points[points.length - 1].timestamp).getTime()
+                   - new Date(points[points.length - 2].timestamp).getTime()) / 1000;
+        return Math.abs(b - raw) < Math.abs(best - raw) ? b : best;
+      }, WINDOW_BUCKETS[0] as number)
+    : null;
+  const windowLabel = windowSec === 60 ? '1min windows' : windowSec ? `${windowSec}s windows` : 'live windows';
+
   const data = points.map(p => {
     const row: Record<string, number | string> = {
       t:               fmtElapsed(p.timestamp, startedAt),
@@ -124,7 +138,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
           <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">
             {hasSteps ? 'Response Time per Step' : 'Response Time'}
           </span>
-          <span className="text-[10px] font-mono text-tx-4">ms · 5s windows</span>
+          <span className="text-[10px] font-mono text-tx-4">ms · {windowLabel}</span>
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>

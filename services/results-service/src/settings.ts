@@ -1,5 +1,7 @@
 import { Pool } from 'pg';
-import { AiProviderSetting, AiProviderName, AI_PROVIDER_NAMES, DEFAULT_AI_PROVIDER_SETTING } from '@alt/shared';
+import { AiProviderSetting, AiProviderName, AI_PROVIDER_NAMES, DEFAULT_AI_PROVIDER_SETTING, LiveMetricWindowSec, DEFAULT_LIVE_METRIC_WINDOW_SEC } from '@alt/shared';
+
+const LIVE_METRIC_WINDOW_VALUES: LiveMetricWindowSec[] = [10, 30, 60];
 
 export async function getAiProviderSetting(pool: Pool): Promise<AiProviderSetting> {
   const { rows } = await pool.query<{ value: string }>(
@@ -59,4 +61,24 @@ export async function getEffectiveAiProviderSetting(pool: Pool, teamId?: string 
     if (teamSetting) return teamSetting;
   }
   return getAiProviderSetting(pool);
+}
+
+/** Global live-metrics chart aggregation window (admin-configurable, applies to new tests only). */
+export async function getLiveMetricWindowSetting(pool: Pool): Promise<LiveMetricWindowSec> {
+  const { rows } = await pool.query<{ value: string }>(
+    `SELECT value FROM app_settings WHERE key = 'live_metric_window_sec'`
+  );
+  if (rows.length === 0) return DEFAULT_LIVE_METRIC_WINDOW_SEC;
+  const parsed = Number(rows[0].value);
+  return LIVE_METRIC_WINDOW_VALUES.includes(parsed as LiveMetricWindowSec)
+    ? (parsed as LiveMetricWindowSec)
+    : DEFAULT_LIVE_METRIC_WINDOW_SEC;
+}
+
+export async function setLiveMetricWindowSetting(pool: Pool, windowSec: LiveMetricWindowSec): Promise<void> {
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ('live_metric_window_sec', $1)
+     ON CONFLICT (key) DO UPDATE SET value = $1`,
+    [String(windowSec)]
+  );
 }

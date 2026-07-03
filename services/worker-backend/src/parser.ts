@@ -149,7 +149,7 @@ interface K6JsonPoint {
 
 export const LIVE_WINDOW_SEC = 2;
 
-export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timestamp'> | null => {
+export const aggregateWindow = (lines: string[], windowSec: number = LIVE_WINDOW_SEC): Omit<LiveMetricPoint, 'timestamp'> | null => {
   const durations: number[] = [];
   const durationsByGroup: Record<string, number[]> = {};
   const countByGroup:     Record<string, number>   = {};
@@ -192,7 +192,7 @@ export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timesta
   const stepMetrics: LiveStepMetric[] = Object.entries(durationsByGroup).map(([name, d]) => ({
     name,
     avgResponseTime: Math.round(avg(d)),
-    rps:             parseFloat(((countByGroup[name] ?? d.length) / LIVE_WINDOW_SEC).toFixed(2)),
+    rps:             parseFloat(((countByGroup[name] ?? d.length) / windowSec).toFixed(2)),
     errorRate:       failedByGroup[name]?.length
                        ? parseFloat((avg(failedByGroup[name]) * 100).toFixed(2))
                        : 0,
@@ -200,7 +200,7 @@ export const aggregateWindow = (lines: string[]): Omit<LiveMetricPoint, 'timesta
 
   return {
     vus:             vusValues.length    ? Math.round(max(vusValues))                    : 0,
-    rps:             parseFloat((requestCount / LIVE_WINDOW_SEC).toFixed(2)),
+    rps:             parseFloat((requestCount / windowSec).toFixed(2)),
     avgResponseTime: durations.length    ? Math.round(avg(durations))                    : 0,
     errorRate:       failedValues.length ? parseFloat((avg(failedValues)*100).toFixed(2)): 0,
     ...(stepMetrics.length > 0 && { stepMetrics }),

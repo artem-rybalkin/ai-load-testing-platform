@@ -318,6 +318,47 @@ describe('aggregateWindow', () => {
     expect(result!.avgResponseTime).toBe(0);
   });
 
+  // ─── windowSec parameter (admin-configurable live metrics window) ──────────
+
+  describe('windowSec parameter', () => {
+    // aggregateWindow returns null unless there's at least one duration or vus
+    // point — http_reqs alone isn't enough, so every fixture includes one vus point.
+    const reqLines = (n: number): string[] => [
+      makeJsonPoint('vus', 1),
+      ...Array.from({ length: n }, () => makeJsonPoint('http_reqs', 1)),
+    ];
+
+    it('defaults to LIVE_WINDOW_SEC (2) when no windowSec argument is given', () => {
+      const result = aggregateWindow(reqLines(10));
+      expect(result!.rps).toBeCloseTo(10 / LIVE_WINDOW_SEC, 2);
+    });
+
+    it('divides by the given windowSec instead of the default', () => {
+      const result = aggregateWindow(reqLines(30), 30);
+      expect(result!.rps).toBeCloseTo(1, 2); // 30 reqs / 30s
+    });
+
+    it('supports the 10s bucket', () => {
+      const result = aggregateWindow(reqLines(25), 10);
+      expect(result!.rps).toBeCloseTo(2.5, 2);
+    });
+
+    it('supports the 60s (1min) bucket', () => {
+      const result = aggregateWindow(reqLines(120), 60);
+      expect(result!.rps).toBeCloseTo(2, 2);
+    });
+
+    it('applies windowSec to per-step rps as well as the aggregate rps', () => {
+      const lines = [
+        ...Array.from({ length: 6 }, () => makeGroupJsonPoint('http_reqs', 1, 'Login')),
+        makeGroupJsonPoint('http_req_duration', 100, 'Login'),
+      ];
+      const result = aggregateWindow(lines, 30);
+      const login = result!.stepMetrics!.find(s => s.name === 'Login');
+      expect(login!.rps).toBeCloseTo(6 / 30, 2);
+    });
+  });
+
   // ─── per-step stepMetrics branch ────────────────────────────────────────────
 
   const makeGroupJsonPoint = (metric: string, value: number, group: string): string =>

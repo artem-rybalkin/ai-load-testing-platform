@@ -534,6 +534,68 @@ describe('runK6Test — live metric polling loop (readAndPost)', () => {
     await promise;
   });
 
+  it('derives the aggregation window from liveIntervalMs — rps reflects /30, not the default /2', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+    // 30 http_reqs points in the window + one duration point (aggregateWindow
+    // needs at least one duration/vus point to return non-null).
+    const lines = [
+      JSON.stringify({ type: 'Point', metric: 'http_req_duration', data: { value: 100, time: new Date().toISOString(), tags: {} } }),
+      ...Array.from({ length: 30 }, () => JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, time: new Date().toISOString(), tags: {} } })),
+    ].join('\n') + '\n';
+    mockJsonFile(lines);
+
+    const ctx = makeCtx();
+    ctx.liveIntervalMs = 30_000; // admin-configured 30s window
+
+    const promise = runK6Test('test-live-30s', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(ctx.postLiveMetric).toHaveBeenCalledWith('test-live-30s', expect.objectContaining({ rps: 1 })); // 30 reqs / 30s
+
+    run.emit('close', 0);
+    await promise;
+  });
+
+  it('falls back to the default 2s window when ctx.liveIntervalMs is not set', async () => {
+    const { runK6Test, LIVE_INTERVAL_MS } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+    const lines = [
+      JSON.stringify({ type: 'Point', metric: 'http_req_duration', data: { value: 100, time: new Date().toISOString(), tags: {} } }),
+      ...Array.from({ length: 4 }, () => JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, time: new Date().toISOString(), tags: {} } })),
+    ].join('\n') + '\n';
+    mockJsonFile(lines);
+
+    const ctx = makeCtx();
+    ctx.liveIntervalMs = undefined as unknown as number; // simulate a caller that never sets it
+
+    const promise = runK6Test('test-live-default', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(LIVE_INTERVAL_MS);
+
+    expect(ctx.postLiveMetric).toHaveBeenCalledWith('test-live-default', expect.objectContaining({ rps: 2 })); // 4 reqs / 2s default
+
+    run.emit('close', 0);
+    await promise;
+  });
+
   it('does NOT post a live metric when the json file has no new bytes since the last read', async () => {
     const { runK6Test } = await import('../runner');
     const validate = makeProc();

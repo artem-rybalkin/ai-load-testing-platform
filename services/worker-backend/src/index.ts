@@ -6,9 +6,9 @@ import * as os from 'os';
 import Fastify from 'fastify';
 
 import { trace } from '@opentelemetry/api';
-import { EnrichedTestRequest, TestResult, connectWithBackoff, internalHeaders } from '@alt/shared';
+import { EnrichedTestRequest, TestResult, connectWithBackoff, internalHeaders, LiveMetricWindowSec, DEFAULT_LIVE_METRIC_WINDOW_SEC } from '@alt/shared';
 import { log } from './logger';
-import { runK6Test, handleRetry, GRACE_PERIOD_MS, LIVE_INTERVAL_MS } from './runner';
+import { runK6Test, handleRetry, GRACE_PERIOD_MS } from './runner';
 
 let queueConnected = false;
 let connection: amqplib.ChannelModel | null = null;
@@ -113,6 +113,30 @@ const postLiveMetric = async (testId: string, point: import('@alt/shared').LiveM
   } catch { /* best-effort */ }
 };
 
+const LIVE_METRIC_WINDOW_CACHE_MS = 30000;
+let liveMetricWindowCache: { windowSec: LiveMetricWindowSec; cachedAt: number } | null = null;
+
+/** Fetches the admin-configured live-metrics aggregation window from results-service,
+ *  cached for 30s. Read once per test at dequeue time, so a setting change only
+ *  affects tests that start executing after the change — never a test already running. */
+const getLiveMetricWindowSec = async (): Promise<LiveMetricWindowSec> => {
+  if (liveMetricWindowCache && Date.now() - liveMetricWindowCache.cachedAt < LIVE_METRIC_WINDOW_CACHE_MS) {
+    return liveMetricWindowCache.windowSec;
+  }
+  try {
+    const res = await fetch(`${RESULTS_URL}/system/live-metric-window`, {
+      headers: internalHeaders(),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const data = await res.json() as { windowSec: LiveMetricWindowSec };
+      liveMetricWindowCache = { windowSec: data.windowSec, cachedAt: Date.now() };
+      return data.windowSec;
+    }
+  } catch { /* results-service unreachable — keep using cached/default setting */ }
+  return liveMetricWindowCache?.windowSec ?? DEFAULT_LIVE_METRIC_WINDOW_SEC;
+};
+
 let reconnecting = false;
 
 /** Reconnect with capped exponential backoff (1s -> 30s), retrying forever until RabbitMQ is back. */
@@ -205,6 +229,10 @@ const start = async (): Promise<void> => {
       // so k6 can actually connect when the user tests a local service.
       const script = test.generatedScript!.replace(/\blocalhost\b/g, 'host.docker.internal');
 
+      // Read once per test at dequeue time — a setting change only affects tests that
+      // start executing after the change, never one already running.
+      const liveWindowSec = await getLiveMetricWindowSec();
+
       const { metrics, executionLog } = await runK6Test(
         test.id,
         script,
@@ -218,7 +246,7 @@ const start = async (): Promise<void> => {
           postLiveMetric,
           maxDurationMs:  MAX_TEST_DURATION_MS,
           gracePeriodMs:  GRACE_PERIOD_MS,
-          liveIntervalMs: LIVE_INTERVAL_MS,
+          liveIntervalMs: liveWindowSec * 1_000,
         },
       );
 
