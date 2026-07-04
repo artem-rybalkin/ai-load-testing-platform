@@ -11,6 +11,7 @@ import { broadcast } from '../ws';
 import { recordAudit } from '../audit';
 import { analyzeResult } from '../analyzer';
 import { isAiConfigured, aiGenerateText } from './helpers';
+import { downsampleLivePoints } from '../liveMetricsDownsample';
 
 export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): Promise<void> {
 
@@ -337,7 +338,7 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
            ORDER BY lm.timestamp ASC`,
           [testId, projectId],
         );
-        return { points: rows };
+        return { points: downsampleLivePoints(rows) };
       } catch {
         return reply.code(500).send({ error: 'Failed to fetch live metrics' });
       }

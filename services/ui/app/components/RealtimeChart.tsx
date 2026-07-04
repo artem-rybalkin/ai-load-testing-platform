@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -78,7 +78,7 @@ function StepLegend({ stepNames, expanded, onToggle }: LegendProps) {
   );
 }
 
-export default function RealtimeChart({ points, startedAt }: Props) {
+function RealtimeChart({ points, startedAt }: Props) {
   const [legendExpanded, setLegendExpanded] = useState(false);
 
   if (points.length === 0) {
@@ -201,17 +201,40 @@ export default function RealtimeChart({ points, startedAt }: Props) {
               <>
                 <Line yAxisId="vus" type="monotone" dataKey="vus"
                   stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />
-                <Line yAxisId="err" type="monotone" dataKey="errorRate"
-                  stroke="#dc2626" strokeWidth={1.5} dot={false} name="Error rate (total)" />
+                {/* Dashed + drawn last so "total" stays visible even when it exactly
+                    overlaps a component line below (e.g. a run with only 4xx errors) */}
                 <Line yAxisId="err" type="monotone" dataKey="clientErrorRate"
                   stroke="#ca8a04" strokeWidth={1.5} dot={false} name="Client error (4xx)" />
                 <Line yAxisId="err" type="monotone" dataKey="serverErrorRate"
                   stroke="#991b1b" strokeWidth={1.5} dot={false} name="Server error (5xx)" />
+                <Line yAxisId="err" type="monotone" dataKey="errorRate"
+                  stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 2" dot={false} name="Error rate (total)" />
               </>
             )}
           </LineChart>
         </ResponsiveContainer>
-        {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
+        {hasSteps
+          ? <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />
+          : (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
+              {[
+                { label: 'VUs', color: '#16a34a' },
+                { label: 'Client error (4xx)', color: '#ca8a04' },
+                { label: 'Server error (5xx)', color: '#991b1b' },
+                { label: 'Error rate (total)', color: '#dc2626', dashed: true },
+              ].map(item => (
+                <span key={item.label} className="inline-flex items-center gap-1 text-[11px] font-mono text-tx whitespace-nowrap">
+                  <span
+                    className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
+                    style={item.dashed
+                      ? { backgroundImage: `repeating-linear-gradient(to right, ${item.color} 0 4px, transparent 4px 6px)` }
+                      : { backgroundColor: item.color }}
+                  />
+                  {item.label}
+                </span>
+              ))}
+            </div>
+          )}
       </div>
 
       {/* ── Throughput ────────────────────────────────────────────── */}
@@ -246,3 +269,9 @@ export default function RealtimeChart({ points, startedAt }: Props) {
     </div>
   );
 }
+
+// The parent page re-renders every second (elapsed/countdown timers) even
+// when no new live metric has arrived — memoize so this component (and the
+// Recharts SVG rebuild it triggers) only redoes work when points/startedAt
+// actually change.
+export default memo(RealtimeChart);

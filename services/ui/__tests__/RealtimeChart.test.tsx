@@ -79,6 +79,22 @@ describe('RealtimeChart — chart titles with step metrics', () => {
     expect(screen.getByText('VUs & Error Rate')).toBeInTheDocument();
     expect(screen.getByText('Throughput')).toBeInTheDocument();
   });
+
+  // ── Aggregate error-rate legend (VUs, total/4xx/5xx are otherwise indistinguishable
+  // when errors are all one status class, since the lines then overlap exactly) ──
+
+  it('shows a legend identifying VUs, total, 4xx and 5xx lines in the aggregate view', () => {
+    render(<RealtimeChart points={[basePoint({ errorRate: 20, clientErrorRate: 20, serverErrorRate: 0 })]} />);
+    expect(screen.getByText('VUs')).toBeInTheDocument();
+    expect(screen.getByText('Client error (4xx)')).toBeInTheDocument();
+    expect(screen.getByText('Server error (5xx)')).toBeInTheDocument();
+    expect(screen.getByText('Error rate (total)')).toBeInTheDocument();
+  });
+
+  it('does not show the aggregate error-rate legend when steps are present', () => {
+    render(<RealtimeChart points={[basePoint({ stepMetrics: steps(150, 5, 3.5) })]} />);
+    expect(screen.queryByText('Error rate (total)')).not.toBeInTheDocument();
+  });
 });
 
 // ─── toKey ──────────────────────────────────────────────────────────────────────
