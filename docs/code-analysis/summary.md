@@ -243,7 +243,7 @@ flowchart TD
 | AMQP channel-error reconnect wiring (R1) | See Reliability Gaps → R1. Wire `channel.on('error'/'close')` to the existing `scheduleReconnect()` path in all four queue-connected services |
 | analyzeResult extraction to @alt/shared (D1) | See Duplication → D1. Move to packages/shared/src/; import from both services |
 | UI type unification (D2) | See Duplication → D2. Define canonical shape in @alt/shared; import in ui/lib/api.ts |
-| worker-client metrics accuracy (B2) | See Real Bugs → B2. Remove FID collection or replace with INP; respect options.duration in session loop; add SIGTERM handler for graceful browser close |
+| worker-client metrics accuracy (B2) | See Real Bugs → B2. Remove FID collection or replace with INP; respect options.duration in session loop. (SIGTERM handling now drains in-flight tests before exit — see module-worker-client.md.) |
 | WebSocket heartbeat (R4) | See Reliability Gaps → R4. Add server-side ping on 30 s interval with pong timeout detection; add client-side reconnect trigger on ping timeout |
 | results-service SIGTERM handler (R2) | See Reliability Gaps → R2. Drain in-flight requests and close DB pool before exit |
 | worker-backend index.ts tests (T1, T2) | See Test Coverage Gaps → T1, T2. Add Vitest unit tests mocking child_process.spawn and amqplib channel; cover retry, cancel, timeout, and DLQ paths |

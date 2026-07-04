@@ -633,6 +633,19 @@ export async function connectWithBackoff<T>(connect: () => Promise<T>, options: 
   }
 }
 
+/**
+ * Polls `getCount()` until it reaches 0 or `timeoutMs` elapses. Used by
+ * worker-backend/worker-client's SIGTERM handlers to let in-flight test
+ * executions finish before the process exits, instead of a scale-down
+ * killing them mid-run and having RabbitMQ redeliver (and duplicate) the work.
+ */
+export async function drainInFlight(getCount: () => number, timeoutMs: number, pollMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (getCount() > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
 // ── Internal service-to-service auth ────────────────────────────────────────
 // Shared by api-service, ai-service, worker-backend, worker-client: every
 // outbound HTTP call that targets results-service internal-callback endpoints

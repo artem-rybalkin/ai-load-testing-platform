@@ -4,7 +4,7 @@ import { Browser } from 'puppeteer';
 import Fastify from 'fastify';
 import * as os from 'os';
 
-import { TestRequest, TestResult, connectWithBackoff, internalHeaders } from '@alt/shared';
+import { TestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders } from '@alt/shared';
 import { log } from './logger';
 import { handleRetry, MAX_RETRIES } from './retry';
 import { runClientTest, avgNum, avgResourceBreakdown } from './runner';
@@ -18,6 +18,12 @@ let queueConnected = false;
 let reconnecting = false;
 let connection: amqplib.ChannelModel | null = null;
 let channel: amqplib.Channel | null = null;
+let queueConsumerTag: string | null = null;
+// Counts a message as "in flight" for its full handler lifetime — including the
+// post-browser-close bookkeeping (result-queue send, ack) — not just while the
+// browser itself is open, so shutdown() can't close the channel out from under
+// an ack/send that's still in progress.
+let inFlightMessages = 0;
 
 // Rolling CPU usage sampled every 5 seconds
 let cpuPercent = 0;
@@ -117,62 +123,67 @@ const start = async (): Promise<void> => {
     ch.ack(msg);
   }, { noAck: false });
 
-  ch.consume(QUEUE, async (msg) => {
+  const { consumerTag } = await ch.consume(QUEUE, async (msg) => {
     if (!msg) return;
-
-    const rawTest: TestRequest = JSON.parse(msg.content.toString());
-    // Docker containers cannot reach the host via 'localhost' — rewrite to host.docker.internal.
-    const test: TestRequest = {
-      ...rawTest,
-      targetUrl: rawTest.targetUrl.replace(/\blocalhost\b/g, 'host.docker.internal'),
-    };
-    log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Received client test');
-
+    inFlightMessages++;
     try {
-      fetch(`${RESULTS_URL}/results/${test.id}/running`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
-
-      const { metrics, executionLog } = await runClientTest(test, {
-        maxDurationMs: MAX_TEST_DURATION_MS,
-        navTimeoutMs:  NAV_TIMEOUT_MS,
-        resultsUrl:    RESULTS_URL,
-        runningBrowsers,
-        postLogLine,
-      });
-
-      // r2: check if cancelled while running
-      if (cancelledTests.has(test.id)) {
-        cancelledTests.delete(test.id);
-        log.info({ testId: test.id }, 'Client test cancelled during execution');
-        ch.ack(msg);
-        return;
-      }
-
-      const result: TestResult = {
-        testId: test.id,
-        targetUrl: test.targetUrl,
-        status: 'completed',
-        metrics,
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
+      const rawTest: TestRequest = JSON.parse(msg.content.toString());
+      // Docker containers cannot reach the host via 'localhost' — rewrite to host.docker.internal.
+      const test: TestRequest = {
+        ...rawTest,
+        targetUrl: rawTest.targetUrl.replace(/\blocalhost\b/g, 'host.docker.internal'),
       };
+      log.info({ testId: test.id, targetUrl: test.targetUrl }, 'Received client test');
 
-      ch.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId, executionLog })), { persistent: true });
-      log.info({ testId: test.id, metrics }, 'Client test completed');
-      ch.ack(msg);
-    } catch (err) {
-      log.error({ testId: test.id, err: (err as Error).message }, 'Client test failed');
-      const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
-      if (retryCount >= MAX_RETRIES) {
-        const partialLog = (err as { partialLog?: string }).partialLog;
-        fetch(`${RESULTS_URL}/results/${test.id}/fail`, {
-          method: 'POST',
-          headers: internalHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ executionLog: partialLog ?? null }),
-        }).catch(() => {});
+      try {
+        fetch(`${RESULTS_URL}/results/${test.id}/running`, { method: 'POST', headers: internalHeaders() }).catch(() => {});
+
+        const { metrics, executionLog } = await runClientTest(test, {
+          maxDurationMs: MAX_TEST_DURATION_MS,
+          navTimeoutMs:  NAV_TIMEOUT_MS,
+          resultsUrl:    RESULTS_URL,
+          runningBrowsers,
+          postLogLine,
+        });
+
+        // r2: check if cancelled while running
+        if (cancelledTests.has(test.id)) {
+          cancelledTests.delete(test.id);
+          log.info({ testId: test.id }, 'Client test cancelled during execution');
+          ch.ack(msg);
+          return;
+        }
+
+        const result: TestResult = {
+          testId: test.id,
+          targetUrl: test.targetUrl,
+          status: 'completed',
+          metrics,
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+        };
+
+        ch.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId, executionLog })), { persistent: true });
+        log.info({ testId: test.id, metrics }, 'Client test completed');
+        ch.ack(msg);
+      } catch (err) {
+        log.error({ testId: test.id, err: (err as Error).message }, 'Client test failed');
+        const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
+        if (retryCount >= MAX_RETRIES) {
+          const partialLog = (err as { partialLog?: string }).partialLog;
+          fetch(`${RESULTS_URL}/results/${test.id}/fail`, {
+            method: 'POST',
+            headers: internalHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ executionLog: partialLog ?? null }),
+          }).catch(() => {});
+        }
+        handleRetry(ch, msg, QUEUE, DLQ, test.id);
       }
-      handleRetry(ch, msg, QUEUE, DLQ, test.id);
+    } finally {
+      inFlightMessages--;
     }
   });
+  queueConsumerTag = consumerTag;
 };
 
 const startHealthServer = async (): Promise<void> => {
@@ -205,8 +216,24 @@ const startHealthServer = async (): Promise<void> => {
 startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
 start().catch(err => log.error({ err: (err as Error).message }, 'Worker-client startup failed'));
 
+// Worst-case a single in-flight message can still take: Puppeteer's own
+// max-duration enforcement (closes the browser) plus a buffer for the
+// post-close bookkeeping (result-queue send, ack).
+const DRAIN_TIMEOUT_MS = MAX_TEST_DURATION_MS + 10_000;
+
 async function shutdown(signal: string) {
-  log.info({ signal }, 'Shutting down gracefully');
+  log.info({ signal, inFlight: inFlightMessages }, 'Shutting down — draining in-flight tests before exit');
+  try {
+    // Stop new deliveries — in-flight messages keep running to completion on this
+    // same channel (cancel does not affect messages already delivered to us).
+    if (channel && queueConsumerTag) await channel.cancel(queueConsumerTag);
+  } catch (_) { /* best-effort — a KEDA scale-down still shouldn't hang forever on this */ }
+
+  await drainInFlight(() => inFlightMessages, DRAIN_TIMEOUT_MS);
+  if (inFlightMessages > 0) {
+    log.warn({ remaining: inFlightMessages }, 'Shutdown drain deadline reached with tests still in flight — exiting anyway');
+  }
+
   try {
     if (channel) await channel.close();
     if (connection) await connection.close();

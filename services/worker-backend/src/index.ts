@@ -6,13 +6,19 @@ import * as os from 'os';
 import Fastify from 'fastify';
 
 import { trace } from '@opentelemetry/api';
-import { EnrichedTestRequest, TestResult, connectWithBackoff, internalHeaders, LiveMetricWindowSec, DEFAULT_LIVE_METRIC_WINDOW_SEC } from '@alt/shared';
+import { EnrichedTestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders, LiveMetricWindowSec, DEFAULT_LIVE_METRIC_WINDOW_SEC } from '@alt/shared';
 import { log } from './logger';
 import { runK6Test, handleRetry, GRACE_PERIOD_MS } from './runner';
 
 let queueConnected = false;
 let connection: amqplib.ChannelModel | null = null;
 let channel: amqplib.Channel | null = null;
+let queueConsumerTag: string | null = null;
+// Counts a message as "in flight" for its full handler lifetime — including the
+// post-k6-exit bookkeeping (DB write, result-queue send, ack) — not just while
+// the k6 child process itself is alive, so shutdown() can't close the channel
+// out from under an ack/send that's still in progress.
+let inFlightMessages = 0;
 
 // Rolling CPU usage sampled every 5 seconds
 let cpuPercent = 0;
@@ -203,107 +209,112 @@ const start = async (): Promise<void> => {
     ch.ack(msg);
   }, { noAck: false });
 
-  ch.consume(QUEUE, async (msg) => {
+  const { consumerTag } = await ch.consume(QUEUE, async (msg) => {
     if (!msg) return;
-
-    const test: EnrichedTestRequest = JSON.parse(msg.content.toString());
-    const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
-    testLog.info('Received backend test');
-
-    // Tag the active OTel span so traces are searchable by testId in Tempo
-    const span = trace.getActiveSpan();
-    if (span) { span.setAttribute('test.id', test.id); span.setAttribute('test.url', test.targetUrl); }
-
-    // r2: skip if already cancelled
-    const { rows: statusRows } = await pool.query(
-      `SELECT status FROM test_results WHERE test_id = $1`, [test.id]
-    );
-    if (statusRows[0]?.status === 'cancelled') {
-      testLog.info('Test was cancelled before execution, skipping');
-      ch.ack(msg);
-      return;
-    }
-
+    inFlightMessages++;
     try {
-      // Docker containers cannot reach the host via 'localhost' — rewrite to host.docker.internal
-      // so k6 can actually connect when the user tests a local service.
-      const script = test.generatedScript!.replace(/\blocalhost\b/g, 'host.docker.internal');
+      const test: EnrichedTestRequest = JSON.parse(msg.content.toString());
+      const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
+      testLog.info('Received backend test');
 
-      // Read once per test at dequeue time — a setting change only affects tests that
-      // start executing after the change, never one already running.
-      const liveWindowSec = await getLiveMetricWindowSec();
+      // Tag the active OTel span so traces are searchable by testId in Tempo
+      const span = trace.getActiveSpan();
+      if (span) { span.setAttribute('test.id', test.id); span.setAttribute('test.url', test.targetUrl); }
 
-      const { metrics, executionLog } = await runK6Test(
-        test.id,
-        script,
-        test.envVars,
-        test.testData,
-        test.csvData,
-        {
-          runningTests,
-          notifyRunning,
-          postLogLine,
-          postLiveMetric,
-          maxDurationMs:  MAX_TEST_DURATION_MS,
-          gracePeriodMs:  GRACE_PERIOD_MS,
-          liveIntervalMs: liveWindowSec * 1_000,
-        },
+      // r2: skip if already cancelled
+      const { rows: statusRows } = await pool.query(
+        `SELECT status FROM test_results WHERE test_id = $1`, [test.id]
       );
-
-      const wasStopped = cancelledTests.has(test.id);
-      if (wasStopped) cancelledTests.delete(test.id);
-
-      const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
-
-      // When stopped with partial data, save the collected metrics as a completed
-      // result so the user can inspect what ran before they clicked Stop.
-      if (wasStopped && metrics.requestsTotal === 0) {
-        await notifyCancelled(test.id);
-        testLog.info('Test stopped with no metrics — marked cancelled');
+      if (statusRows[0]?.status === 'cancelled') {
+        testLog.info('Test was cancelled before execution, skipping');
         ch.ack(msg);
         return;
       }
 
-      const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description, test.projectId, test.workspaceId);
+      try {
+        // Docker containers cannot reach the host via 'localhost' — rewrite to host.docker.internal
+        // so k6 can actually connect when the user tests a local service.
+        const script = test.generatedScript!.replace(/\blocalhost\b/g, 'host.docker.internal');
 
-      const result: TestResult = {
-        testId: test.id,
-        targetUrl: test.targetUrl,
-        status: 'completed',
-        metrics,
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString()
-      };
+        // Read once per test at dequeue time — a setting change only affects tests that
+        // start executing after the change, never one already running.
+        const liveWindowSec = await getLiveMetricWindowSec();
 
-      ch.sendToQueue(
-        RESULTS_QUEUE,
-        Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds, projectId: test.projectId, executionLog })),
-        { persistent: true }
-      );
+        const { metrics, executionLog } = await runK6Test(
+          test.id,
+          script,
+          test.envVars,
+          test.testData,
+          test.csvData,
+          {
+            runningTests,
+            notifyRunning,
+            postLogLine,
+            postLiveMetric,
+            maxDurationMs:  MAX_TEST_DURATION_MS,
+            gracePeriodMs:  GRACE_PERIOD_MS,
+            liveIntervalMs: liveWindowSec * 1_000,
+          },
+        );
 
-      if (wasStopped) {
-        testLog.info({ requestsTotal: metrics.requestsTotal }, 'Test stopped — partial metrics saved');
-      } else {
-        testLog.info({ requestsTotal: metrics.requestsTotal, rps: metrics.rps, p95: metrics.p95ResponseTime, errorRate: (metrics.requestsFailed / (metrics.requestsTotal || 1) * 100).toFixed(2) }, 'k6 test completed');
-      }
-      testLog.debug({ metrics }, 'k6 test full metrics');
-      ch.ack(msg);
-    } catch (err) {
-      // If the test was stopped (cancelled) and k6 exited before collecting any
-      // requests, treat it as a clean cancel — don't retry and don't fail the test.
-      if (cancelledTests.has(test.id)) {
-        cancelledTests.delete(test.id);
-        await notifyCancelled(test.id);
-        testLog.info('Test stopped before metrics were collected — marked cancelled');
+        const wasStopped = cancelledTests.has(test.id);
+        if (wasStopped) cancelledTests.delete(test.id);
+
+        const scriptSaveKey = test.scriptCacheKey ?? test.targetUrl;
+
+        // When stopped with partial data, save the collected metrics as a completed
+        // result so the user can inspect what ran before they clicked Stop.
+        if (wasStopped && metrics.requestsTotal === 0) {
+          await notifyCancelled(test.id);
+          testLog.info('Test stopped with no metrics — marked cancelled');
+          ch.ack(msg);
+          return;
+        }
+
+        const scriptId = await saveScript(scriptSaveKey, test.generatedScript!, test.scriptId, test.description, test.projectId, test.workspaceId);
+
+        const result: TestResult = {
+          testId: test.id,
+          targetUrl: test.targetUrl,
+          status: 'completed',
+          metrics,
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString()
+        };
+
+        ch.sendToQueue(
+          RESULTS_QUEUE,
+          Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds, projectId: test.projectId, executionLog })),
+          { persistent: true }
+        );
+
+        if (wasStopped) {
+          testLog.info({ requestsTotal: metrics.requestsTotal }, 'Test stopped — partial metrics saved');
+        } else {
+          testLog.info({ requestsTotal: metrics.requestsTotal, rps: metrics.rps, p95: metrics.p95ResponseTime, errorRate: (metrics.requestsFailed / (metrics.requestsTotal || 1) * 100).toFixed(2) }, 'k6 test completed');
+        }
+        testLog.debug({ metrics }, 'k6 test full metrics');
         ch.ack(msg);
-        return;
+      } catch (err) {
+        // If the test was stopped (cancelled) and k6 exited before collecting any
+        // requests, treat it as a clean cancel — don't retry and don't fail the test.
+        if (cancelledTests.has(test.id)) {
+          cancelledTests.delete(test.id);
+          await notifyCancelled(test.id);
+          testLog.info('Test stopped before metrics were collected — marked cancelled');
+          ch.ack(msg);
+          return;
+        }
+        testLog.error({ err: (err as Error).message }, 'Test failed');
+        const partialLog = (err as { partialLog?: string }).partialLog;
+        await notifyFailed(test.id, partialLog);
+        handleRetry(ch, msg, QUEUE, DLQ, test.id);
       }
-      testLog.error({ err: (err as Error).message }, 'Test failed');
-      const partialLog = (err as { partialLog?: string }).partialLog;
-      await notifyFailed(test.id, partialLog);
-      handleRetry(ch, msg, QUEUE, DLQ, test.id);
+    } finally {
+      inFlightMessages--;
     }
   });
+  queueConsumerTag = consumerTag;
 };
 
 const startHealthServer = async (): Promise<void> => {
@@ -344,8 +355,24 @@ const startWithQueue = async (): Promise<void> => {
 startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
 startWithQueue().catch(err => log.error({ err: (err as Error).message }, 'Worker-backend startup failed'));
 
+// Worst-case a single in-flight message can still take: k6's own max-duration
+// enforcement (SIGTERM then SIGKILL after a grace period) plus a buffer for the
+// post-exit bookkeeping (DB write, result-queue send, ack) once k6 has exited.
+const DRAIN_TIMEOUT_MS = MAX_TEST_DURATION_MS + GRACE_PERIOD_MS + 10_000;
+
 async function shutdown(signal: string) {
-  log.info({ signal }, 'Shutting down gracefully');
+  log.info({ signal, inFlight: inFlightMessages }, 'Shutting down — draining in-flight tests before exit');
+  try {
+    // Stop new deliveries — in-flight messages keep running to completion on this
+    // same channel (cancel does not affect messages already delivered to us).
+    if (channel && queueConsumerTag) await channel.cancel(queueConsumerTag);
+  } catch (_) { /* best-effort — a KEDA scale-down still shouldn't hang forever on this */ }
+
+  await drainInFlight(() => inFlightMessages, DRAIN_TIMEOUT_MS);
+  if (inFlightMessages > 0) {
+    log.warn({ remaining: inFlightMessages }, 'Shutdown drain deadline reached with tests still in flight — exiting anyway');
+  }
+
   try {
     if (channel) await channel.close();
     if (connection) await connection.close();

@@ -236,6 +236,8 @@ but does not block internal network targets — SSRF-adjacent risk on multi-tena
 
 1. Replace the fixed 3 s observer window with Web Vitals library promise-based collection
    (`web-vitals` npm package) to avoid missing LCP after 3 s or wasting time on fast pages.
-2. Register a `process.on('SIGTERM', ...)` handler that closes all `runningBrowsers` entries
-   before exiting, ensuring graceful shutdown on Docker stop rather than SIGKILL.
+2. ~~Register a `process.on('SIGTERM', ...)` handler~~ — done: `shutdown()` (index.ts) now cancels
+   the queue consumer (no new deliveries), drains in-flight message handlers via `drainInFlight()`
+   (bounded by `PUPPETEER_MAX_DURATION_MS` + a buffer) before closing the AMQP channel/connection,
+   so a scale-down/Docker-stop no longer kills a running test mid-execution.
 3. Make `options.duration` influence a time-bounded session loop rather than being silently ignored.
