@@ -1,0 +1,247 @@
+# Test Coverage Gaps — QA Audit (2026-07-05)
+
+Full-repo audit of test coverage and test-type gaps across all 8 services, `packages/shared`,
+the Playwright e2e suite, and the chaos-testing suite. Produced by reading actual source/test
+files and cross-referencing them — every item below was verified, not guessed. Supersedes the
+previous `docs/TEST-COVERAGE-TODO.md` (removed once its gaps were closed); this is a fresh pass
+reflecting the codebase as of today, including features added this week (live-metrics
+downsampling, 4xx/5xx breakdown, `HealthContext` centralization, worker SIGTERM draining,
+log-line batching).
+
+**Snapshot:** 1297+ unit/integration tests across 8 services + shared + chaos, plus 11 Playwright
+e2e specs. No `TODO`/`FIXME`/`.skip`/`xit` markers were found anywhere in the repo — there is no
+self-documented backlog to cross-check against; every gap here was found by direct comparison of
+source files to test files.
+
+## How to use this doc
+
+Items are grouped by area, each with a file reference and what's actually missing (not "more
+tests would be nice" — a specific behavior, branch, or file with zero or shallow coverage).
+Ranked roughly by risk × likelihood within each group. This is a findings list, not a task
+tracker — pull items into `TODO.md` if/when someone picks them up.
+
+---
+
+## 1. Structural gaps (highest impact — apply broadly)
+
+### 1.1 `ai-service/src/index.ts` has zero direct test coverage
+Unlike `api-service`, `analyser-service`, and `recorder-service` — each of which extracts a
+`buildApp()` guarded by a `VITEST`/env check so the real HTTP entrypoint is exercised via
+`app.inject` — `ai-service/src/index.ts` calls `start()` unconditionally at module scope, so it
+can't be imported by a test without opening a real AMQP connection. `index.test.ts`'s own header
+comment admits the routing logic is tested by **re-implementing the decision tree as a pure
+function** that mirrors `index.ts`'s branching by hand. That hand-copy can silently drift from the
+real file — someone edits the routing in `index.ts`, forgets to mirror the change, and CI stays
+green. None of the following in the real module are ever executed by a test: `startConsumer`,
+`scheduleReconnect`, `connection.on('error'/'close')`/`channel.on('error')` handlers, queue/DLQ
+assertion, `channel.prefetch`, the `/health` route, or the malformed-JSON→DLQ handler
+(`index.ts:80-88`).
+
+### 1.2 Neither worker's AMQP connect/reconnect/backoff wiring is tested
+`worker-backend/src/index.ts` and `worker-client/src/index.ts` both extract their message-handler
+logic into testable functions (`runK6Test`/`runClientTest`, `handleRetry`, `saveScript`), and those
+are well covered — but the surrounding `amqplib.connect()` → `scheduleReconnect()` → reconnect-with-
+backoff loop, and the `connection.on('close')`/`channel.on('error')` handlers, have no dedicated
+test in either service. Same pattern as `api-service/src/queue.ts:23-55` (connection error/close/
+reconnect-dedupe untested there too) — this is a recurring gap across every service that owns an
+AMQP connection, not a one-off.
+
+### 1.3 No contract/schema validation between services
+RabbitMQ messages are consumed via raw `JSON.parse` with no schema validation (e.g.
+`results-service/src/consumer.ts:286`, `ai-service/src/index.ts:82`) and no zod/ajv contract tests
+assert producer/consumer message-shape compatibility across `api-service` → `ai-service` →
+`worker-backend`/`worker-client` → `results-service`. A field rename or type change on one side of
+a queue would only surface as a runtime `undefined` deep in a handler, not a test failure.
+
+### 1.4 No coverage threshold enforced anywhere
+`vitest.config.ts`'s `coverage` block has no `thresholds`, and the CI step uploads to Codecov with
+`fail_ci_if_error: false` — coverage can regress indefinitely without failing a build.
+
+### 1.5 Background/scheduled logic is a recurring blind spot
+No interval- or event-driven background path has a fake-timer-based test anywhere in the repo:
+- `recorder-service/src/index.ts:216-233` — the auto-stop sweep (60s interval, auto-stops sessions
+  past `RECORDER_MAX_DURATION_MS`/`RECORDER_IDLE_TIMEOUT_MS`) has **no test at all**, and no test
+  covers the race between an auto-stop and a concurrent manual `/stop` on the same session.
+- `api-service/src/queue.ts` / both workers' `index.ts` — reconnect-on-drop handlers (see 1.2).
+- `results-service/src/scheduler.ts` — covered against a real Testcontainers Postgres, but no test
+  of the cron callback itself throwing, or of duplicate schedule registration on restart.
+
+---
+
+## 2. Per-service findings
+
+### api-service (9 source / 10 test files — best-tested backend service)
+- `src/index.ts:276-283` (`tryPublish`) — the catch branch (broker unavailable → user-facing
+  message) is never exercised; the mocked `publishTest` is never made to throw.
+- `src/queue.ts` — connection error/close/reconnect and the `reconnecting`-flag dedupe for
+  concurrent `scheduleReconnect()` calls are untested (see 1.2).
+- `src/scripts.ts` — no test for `findExistingScript` DB-error path, or for `/health`'s DB check
+  failing independently of the queue check.
+- No test for a race on `usedCount` increment from two concurrent requests sharing a cache key.
+
+### ai-service (5 source / 3 test files)
+- See 1.1 (`index.ts` untested via real module).
+- `generator.ts` — no test of a multi-provider fallback chain where the **primary fails and a
+  fallback also fails** (existing tests cover single-provider 429 retry, not chained failures).
+
+### analyser-service (4 source / 3 test files — thorough)
+- `aiInsights.ts`'s retry-on-transient-error test does not use fake timers — it sleeps a real 3
+  real seconds rather than verifying timer behavior (`setTimeout(...,3000)` at line ~315-317).
+- `isAnyProviderConfigured` with a multi-entry `fallbacks` array (primary unconfigured → first
+  fallback unconfigured → second fallback configured) is untested.
+- No test for a non-`Error` thrown value, or a `SyntaxError` on the *second* attempt specifically.
+
+### recorder-service (5 source / 7 test files — thorough)
+- See 1.5 (auto-stop sweep untested).
+- `finishSession` is covered only through the manual `/stop` route — its use by the auto-stop
+  sweep, and the manual/auto-stop race, are untested.
+- `correlator.ts` — no test of a Gemini-provider fallback chain (analogous to the ai-service gap).
+
+### results-service (24 source / 19 test files — largest, mostly well-covered)
+- Migrations #15/#16 are included in the aggregate idempotency/sequential-count check
+  (`db.test.ts`), but neither has a test asserting its *specific* SQL effect (that the new
+  indexes actually exist and are used, or that the error-breakdown columns behave correctly under
+  a real query) — only generic idempotency is verified, not migration-by-migration correctness.
+- `externalMetrics.ts` has no dedicated test file — only indirect coverage via `consumer.test.ts`'s
+  mocked `fetch`. Not tested in isolation: `AbortSignal.timeout(5000)` actually firing, a malformed
+  `metrics_endpoint_template`, or the `projectId=null` ("all sources") branch.
+- `routes/system.ts` — `/system/live-metric-window` and `/system/health` (distinct from the
+  top-level `/health`) have no direct test assertions found.
+- `routes/resources.ts` (log-sources, presets, scripts, schedules, webhooks) has no dedicated test
+  file — only indirect coverage via `api.test.ts` URLs.
+- `helpers.ts` (591 lines, 24 exports) has no dedicated test file — edge cases in individual
+  helpers (malformed pagination params, boundary date ranges) aren't independently verified.
+- No WebSocket **client**-side reconnect test (server-side broadcast/Redis pub-sub in `ws.test.ts`
+  is excellent — one of the most thorough files in the suite — but nothing drives a simulated
+  client through a reconnect).
+- No DB-pool-under-concurrent-load test.
+
+### worker-backend (5 source / 4 test files)
+- `runner.ts` is strong — exit-code matrix, log batching, and SIGTERM→SIGKILL escalation timing
+  (fake-timer-based) are all covered.
+- `index.ts` — reconnect/backoff loop untested (see 1.2).
+
+### worker-client (5 source / 4 test files)
+- `runner.ts` is strong — multi-session averaging, Lighthouse fallback chain, navigation-error/
+  page-crash simulation are covered.
+- `index.ts` — same AMQP reconnect gap as worker-backend (see 1.2); this is the one gap common to
+  both worker services verbatim.
+
+### packages/shared (3 source / 3 test files)
+- `aiValidation.ts` (51 lines) has **no test file referencing it at all** — completely untested.
+- `createBatcher`/`drainInFlight` (this week's additions) are both well covered.
+
+### UI (51 source files: 15 components + 13 pages + 23 lib / 30 test files, ~57% with a dedicated test)
+- `app/settings/page.tsx` — **no test file at all.** Neither the admin nor non-admin branch of
+  `isAdmin = user?.role === 'admin'` (which gates the live-metric-window setting) is tested
+  anywhere, at unit or e2e level.
+- `lib/api/*.ts` submodules (13 files: `ai.ts`, `apiKeys.ts`, `auth.ts`, `core.ts`, `logSources.ts`,
+  `orgs.ts`, `presets.ts`, `recording.ts`, `schedules.ts`, `system.ts`, `teams.ts`, `tests.ts`,
+  `webhooks.ts`) have no dedicated unit tests — every consumer test mocks `@/lib/api` wholesale, so
+  the real fetch/serialization logic in these files never actually executes under test.
+- `app/components/TopBar.tsx` and `lib/useMediaQuery.ts`/`lib/useFetch.ts` are dead code (not
+  imported anywhere) — flag for removal rather than writing tests for them.
+- `FlowBuilder.tsx` (932-line test file, ~55 `it` blocks, otherwise excellent) — the "extract
+  variables from response" feature (add/edit/remove extraction rule, jsonpath vs regex source,
+  Gemini-suggested correlation) is never exercised; `ExtractRule`/`ExtractSource` only appear in
+  mock stubs.
+- `RealtimeChart.tsx` — the per-step `StepLegend` expand/collapse ("show more"/`hiddenCount`) has
+  no test; only the aggregate-view legend is checked.
+- `Sidebar.tsx` — `member`/`viewer` role-label rendering is untested (only `admin` is exercised).
+- No test of `useDarkMode.ts` itself, or that toggling it actually flips
+  `document.documentElement`'s class/CSS variables (existing test only clicks the button and
+  checks the callback fired).
+
+---
+
+## 3. E2E coverage (11 Playwright specs)
+
+Covered: auth, cancel, compare, flow-builder (client-side), happy-path (backend test + progress),
+navigation smoke, recorder session lifecycle, result-detail (baseline/PDF/script/re-run),
+schedules+webhooks CRUD, templates/presets.
+
+**Not covered by any e2e spec**, despite the page existing:
+- **Chat-based test creation** (`app/chat/page.tsx`) — the entire AI prompt→preview→run flow,
+  attachments, and flow-preview mode has zero e2e coverage.
+- **Settings page** (admin-only live-metric-window setting) — zero e2e coverage; no spec exercises
+  any admin-only UI path.
+- **Org management** (`app/org/page.tsx`) — add/remove member, change role, create org.
+- **Workspaces** (`app/workspaces/page.tsx`) — create/edit/delete, switch active workspace.
+- **Library / script-templates page** (`app/library/page.tsx`) — "use template" → prefilled form.
+- **Team page's audit log and quota panel** — schedules-webhooks.spec.ts covers schedules/webhooks
+  CRUD but not the rest of `/team`.
+- **CSV export** — only the PDF report link is checked anywhere in e2e.
+
+---
+
+## 4. Chaos / fault-injection suite
+
+All 8 claimed fault categories in `chaos/chaos.test.ts` are genuinely implemented as real
+assertions (verified line-by-line, not just asserted in the README). Gaps:
+- **Redis** has zero fault-injection coverage (not mentioned anywhere in the chaos suite).
+- **Disk-full during a k6 run** (worker-backend) — absent.
+- **Recorder-service crash mid-recording** — absent (only the happy-path lifecycle is e2e-tested).
+- **AI succeeding with a syntactically-broken or unsafe script** — the fallback-chain category
+  tests provider *failures*, not a "successful" call that returns garbage.
+- **Results-service DB pool exhaustion under concurrent load** — only a single query failure is
+  chaos-tested, not pool saturation/timeout.
+- **RabbitMQ connection loss itself** — the chaos README explicitly flags this as "not re-tested"
+  (G1/G2); only the retry/DLQ decision logic is covered, not actual reconnection behavior.
+
+---
+
+## 5. CI pipeline gaps
+
+- **E2E only runs on `main` branch pushes** (`if: github.ref == 'refs/heads/main'`) — PRs merge
+  without any e2e validation.
+- **Chaos tests have no dedicated CI step** — they only run because `chaos/**/*.test.ts` matches
+  the root `vitest.config.ts` include glob; a chaos failure is indistinguishable from a unit-test
+  failure in the CI log, and there's no separate reporting.
+- **No coverage threshold** (see 1.4).
+- **No scheduled/nightly job** — e2e and chaos only run on push/PR triggers; no cron for drift
+  detection between releases.
+
+---
+
+## 6. Test types entirely absent from the repo
+
+- **Visual regression / screenshot testing** — no Percy, Chromatic, Storybook, or
+  `toMatchSnapshot` image comparison anywhere.
+- **Automated accessibility auditing** — no axe-core/pa11y/jest-axe dependency or usage found.
+- **Keyboard-navigation testing** — no `userEvent.tab`/focus-order assertions anywhere in the UI
+  test suite.
+- **Responsive/mobile breakpoint testing** — no viewport-resize test anywhere.
+- **Bundle-size regression testing.**
+- **The platform load-testing its own APIs** — no k6 script or CI step targets api-service/
+  results-service/worker-backend under load; a notable gap for a load-testing product to have.
+- **Mutation testing** — no Stryker or equivalent.
+- **Cross-service security test suite** — SSRF checks exist as solid per-service unit tests
+  (recorder-service, results-service), but there's no auth-bypass or injection-attempt suite that
+  spans multiple services.
+- **Snapshot/golden-file testing of AI-generated k6/Puppeteer scripts** — no regression guard
+  against the script generator silently changing its output shape.
+
+## 7. Test infrastructure gaps
+
+- `test-support/globalSetup.ts`/`sharedPostgres.ts` provide a shared Postgres-only Testcontainers
+  setup. **No shared RabbitMQ container** — the chaos suite explicitly avoids a real broker via a
+  `FakeChannel`, so actual AMQP behavior (connection handling, exchange/queue bindings, prefetch)
+  is only ever exercised through full docker-compose e2e runs, never in the fast unit/integration
+  suite.
+- **No shared Redis container** for integration tests.
+- Each test file rolls its own `vi.doMock` setup for AI SDKs — no shared AI-provider-mocking
+  harness, risking drift/duplication across ~10+ files that each mock Gemini/OpenAI/Anthropic
+  slightly differently.
+
+---
+
+## Suggested priority (if picking this up)
+
+1. **1.1** (ai-service `index.ts` real-module coverage) and **1.2** (AMQP reconnect wiring,
+   3 services) — same root cause (untested connection-lifecycle code), highest blast radius.
+2. **UI: Settings page** — zero coverage on an admin-only, easy-to-regress branch.
+3. **CI: e2e-on-every-PR** — cheap process fix, closes a real "shipped a UI regression" risk.
+4. **1.3** (contract validation between services) — larger effort, but the AMQP message shape is
+   the one thing every service silently depends on.
+5. Everything else — pull into `TODO.md` opportunistically; none of it is currently causing
+   incidents, all of it was found by inspection, not by a failure.
