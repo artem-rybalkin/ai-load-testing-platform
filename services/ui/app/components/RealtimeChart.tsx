@@ -118,6 +118,8 @@ export default function RealtimeChart({ points, startedAt }: Props) {
       rps:             p.rps,
       avgResponseTime: p.avgResponseTime,
       errorRate:       p.errorRate,
+      clientErrorRate: p.clientErrorRate ?? 0,
+      serverErrorRate: p.serverErrorRate ?? 0,
     };
     p.stepMetrics?.forEach(s => {
       const k = toKey(s.name);
@@ -188,7 +190,7 @@ export default function RealtimeChart({ points, startedAt }: Props) {
               contentStyle={TOOLTIP_STYLE}
               formatter={(v, name) => {
                 if (hasSteps) return [`${v}%`, labelFor(stepNames, 'err', String(name))];
-                return name === 'VUs' ? [`${v}`, 'VUs'] : [`${v}%`, 'Error rate'];
+                return name === 'VUs' ? [`${v}`, 'VUs'] : [`${v}%`, String(name)];
               }}
             />
             {hasSteps ? stepNames.map((name, i) => (
@@ -200,7 +202,11 @@ export default function RealtimeChart({ points, startedAt }: Props) {
                 <Line yAxisId="vus" type="monotone" dataKey="vus"
                   stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />
                 <Line yAxisId="err" type="monotone" dataKey="errorRate"
-                  stroke="#dc2626" strokeWidth={1.5} dot={false} name="Error rate" />
+                  stroke="#dc2626" strokeWidth={1.5} dot={false} name="Error rate (total)" />
+                <Line yAxisId="err" type="monotone" dataKey="clientErrorRate"
+                  stroke="#ca8a04" strokeWidth={1.5} dot={false} name="Client error (4xx)" />
+                <Line yAxisId="err" type="monotone" dataKey="serverErrorRate"
+                  stroke="#991b1b" strokeWidth={1.5} dot={false} name="Server error (5xx)" />
               </>
             )}
           </LineChart>

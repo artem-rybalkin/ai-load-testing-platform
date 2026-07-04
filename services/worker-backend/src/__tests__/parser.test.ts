@@ -296,6 +296,43 @@ describe('aggregateWindow', () => {
     expect(result!.errorRate).toBe(0);
   });
 
+  const makeStatusPoint = (status: string): string =>
+    JSON.stringify({ type: 'Point', metric: 'http_reqs', data: { value: 1, time: new Date().toISOString(), tags: { status } } });
+
+  it('computes clientErrorRate/serverErrorRate from http_reqs status tags', () => {
+    const lines = [
+      makeJsonPoint('vus', 1),
+      makeStatusPoint('200'),
+      makeStatusPoint('200'),
+      makeStatusPoint('404'),
+      makeStatusPoint('500'),
+    ];
+
+    const result = aggregateWindow(lines);
+
+    expect(result).not.toBeNull();
+    expect(result!.clientErrorRate).toBeCloseTo(25, 1); // 1 of 4 requests was 4xx
+    expect(result!.serverErrorRate).toBeCloseTo(25, 1); // 1 of 4 requests was 5xx
+  });
+
+  it('returns zero clientErrorRate/serverErrorRate when all requests succeed', () => {
+    const lines = [makeJsonPoint('vus', 1), makeStatusPoint('200'), makeStatusPoint('201')];
+
+    const result = aggregateWindow(lines);
+
+    expect(result!.clientErrorRate).toBe(0);
+    expect(result!.serverErrorRate).toBe(0);
+  });
+
+  it('returns zero clientErrorRate/serverErrorRate when no http_reqs points at all', () => {
+    const lines = [makeJsonPoint('vus', 5), makeJsonPoint('http_req_duration', 100)];
+
+    const result = aggregateWindow(lines);
+
+    expect(result!.clientErrorRate).toBe(0);
+    expect(result!.serverErrorRate).toBe(0);
+  });
+
   it('returns zero rps when no http_reqs points', () => {
     const lines = [
       makeJsonPoint('vus', 5),

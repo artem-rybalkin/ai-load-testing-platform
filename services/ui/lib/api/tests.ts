@@ -86,6 +86,8 @@ export interface LiveMetricPoint {
   rps: number;
   avgResponseTime: number;
   errorRate: number;
+  clientErrorRate?: number;
+  serverErrorRate?: number;
   stepMetrics?: Array<{ name: string; avgResponseTime: number; rps: number; errorRate: number }>;
 }
 

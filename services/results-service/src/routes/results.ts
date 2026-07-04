@@ -303,18 +303,18 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
   // ── POST /results/:testId/live (internal) ─────────────────────────────────
   app.post<{
     Params: { testId: string };
-    Body: { timestamp: string; vus: number; rps: number; avgResponseTime: number; errorRate: number; stepMetrics?: Array<{ name: string; avgResponseTime: number; rps: number; errorRate: number }> };
+    Body: { timestamp: string; vus: number; rps: number; avgResponseTime: number; errorRate: number; clientErrorRate?: number; serverErrorRate?: number; stepMetrics?: Array<{ name: string; avgResponseTime: number; rps: number; errorRate: number }> };
   }>('/results/:testId/live', async (request, reply) => {
     const { testId } = request.params;
-    const { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } = request.body;
+    const { timestamp, vus, rps, avgResponseTime, errorRate, clientErrorRate, serverErrorRate, stepMetrics } = request.body;
     try {
       await pool.query(
-        `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate, step_metrics)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [testId, timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics ? JSON.stringify(stepMetrics) : null],
+        `INSERT INTO live_metrics (test_id, timestamp, vus, rps, avg_response_time, error_rate, client_error_rate, server_error_rate, step_metrics)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [testId, timestamp, vus, rps, avgResponseTime, errorRate, clientErrorRate ?? 0, serverErrorRate ?? 0, stepMetrics ? JSON.stringify(stepMetrics) : null],
       );
       reply.send({ success: true });
-      setImmediate(() => broadcast({ type: 'test:live', testId, point: { timestamp, vus, rps, avgResponseTime, errorRate, stepMetrics } }));
+      setImmediate(() => broadcast({ type: 'test:live', testId, point: { timestamp, vus, rps, avgResponseTime, errorRate, clientErrorRate: clientErrorRate ?? 0, serverErrorRate: serverErrorRate ?? 0, stepMetrics } }));
       return reply;
     } catch {
       return reply.code(500).send({ error: 'Failed to save live metric' });
@@ -329,7 +329,8 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
       const projectId = request.projectId ?? null;
       try {
         const { rows } = await rPool.query(
-          `SELECT lm.timestamp, lm.vus, lm.rps, lm.avg_response_time AS "avgResponseTime", lm.error_rate AS "errorRate", lm.step_metrics AS "stepMetrics"
+          `SELECT lm.timestamp, lm.vus, lm.rps, lm.avg_response_time AS "avgResponseTime", lm.error_rate AS "errorRate",
+                  lm.client_error_rate AS "clientErrorRate", lm.server_error_rate AS "serverErrorRate", lm.step_metrics AS "stepMetrics"
            FROM live_metrics lm
            LEFT JOIN test_results tr ON tr.test_id = lm.test_id
            WHERE lm.test_id = $1 AND ($2::uuid IS NULL OR tr.project_id = $2::uuid)

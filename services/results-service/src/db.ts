@@ -368,6 +368,14 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`ALTER TABLE webhooks      ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL`);
     },
   },
+  {
+    version: 15,
+    name: 'live_metrics_error_breakdown',
+    up: async (p): Promise<void> => {
+      await p.query(`ALTER TABLE live_metrics ADD COLUMN IF NOT EXISTS client_error_rate FLOAT NOT NULL DEFAULT 0`);
+      await p.query(`ALTER TABLE live_metrics ADD COLUMN IF NOT EXISTS server_error_rate FLOAT NOT NULL DEFAULT 0`);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────

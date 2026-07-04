@@ -157,6 +157,8 @@ export const aggregateWindow = (lines: string[], windowSec: number = LIVE_WINDOW
   const vusValues: number[] = [];
   const failedValues: number[] = [];
   let requestCount = 0;
+  let clientErrorCount = 0;
+  let serverErrorCount = 0;
 
   for (const line of lines) {
     try {
@@ -169,10 +171,15 @@ export const aggregateWindow = (lines: string[], windowSec: number = LIVE_WINDOW
           durations.push(obj.data.value);
           if (groupName) (durationsByGroup[groupName] ??= []).push(obj.data.value);
           break;
-        case 'http_reqs':
+        case 'http_reqs': {
           requestCount++;
           if (groupName) countByGroup[groupName] = (countByGroup[groupName] ?? 0) + 1;
+          const status = obj.data.tags?.status;
+          const code = status ? parseInt(status, 10) : NaN;
+          if (code >= 400 && code < 500) clientErrorCount++;
+          else if (code >= 500) serverErrorCount++;
           break;
+        }
         case 'http_req_failed':
           failedValues.push(obj.data.value);
           if (groupName) (failedByGroup[groupName] ??= []).push(obj.data.value);
@@ -203,6 +210,8 @@ export const aggregateWindow = (lines: string[], windowSec: number = LIVE_WINDOW
     rps:             parseFloat((requestCount / windowSec).toFixed(2)),
     avgResponseTime: durations.length    ? Math.round(avg(durations))                    : 0,
     errorRate:       failedValues.length ? parseFloat((avg(failedValues)*100).toFixed(2)): 0,
+    clientErrorRate: requestCount ? parseFloat((clientErrorCount / requestCount * 100).toFixed(2)) : 0,
+    serverErrorRate: requestCount ? parseFloat((serverErrorCount / requestCount * 100).toFixed(2)) : 0,
     ...(stepMetrics.length > 0 && { stepMetrics }),
   };
 };

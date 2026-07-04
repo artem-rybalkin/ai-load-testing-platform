@@ -1021,6 +1021,34 @@ describe('POST /results/:testId/live', () => {
     expect(rows[0].vus).toBe(10);
     expect(parseFloat(rows[0].rps)).toBeCloseTo(5.5, 1);
   });
+
+  it('saves and round-trips the 4xx/5xx error-rate breakdown', async () => {
+    const testId = '00000000-0000-0000-0000-000000000031';
+    const point = {
+      timestamp: new Date().toISOString(),
+      vus: 10, rps: 5.5, avgResponseTime: 120, errorRate: 30,
+      clientErrorRate: 20, serverErrorRate: 10,
+    };
+    const res = await app.inject({ method: 'POST', url: `/results/${testId}/live`, payload: point });
+    expect(res.statusCode).toBe(200);
+    const { rows } = await pool.query('SELECT client_error_rate, server_error_rate FROM live_metrics WHERE test_id = $1', [testId]);
+    expect(parseFloat(rows[0].client_error_rate)).toBeCloseTo(20, 1);
+    expect(parseFloat(rows[0].server_error_rate)).toBeCloseTo(10, 1);
+
+    const getRes = await app.inject({ method: 'GET', url: `/results/${testId}/live` });
+    const { points } = getRes.json();
+    expect(points[0].clientErrorRate).toBeCloseTo(20, 1);
+    expect(points[0].serverErrorRate).toBeCloseTo(10, 1);
+  });
+
+  it('defaults clientErrorRate/serverErrorRate to 0 when omitted', async () => {
+    const testId = '00000000-0000-0000-0000-000000000032';
+    const point = { timestamp: new Date().toISOString(), vus: 1, rps: 1, avgResponseTime: 1, errorRate: 0 };
+    await app.inject({ method: 'POST', url: `/results/${testId}/live`, payload: point });
+    const { rows } = await pool.query('SELECT client_error_rate, server_error_rate FROM live_metrics WHERE test_id = $1', [testId]);
+    expect(parseFloat(rows[0].client_error_rate)).toBe(0);
+    expect(parseFloat(rows[0].server_error_rate)).toBe(0);
+  });
 });
 
 // ─── GET /results/:testId/live ────────────────────────────────────────────────

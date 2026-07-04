@@ -330,6 +330,10 @@ export interface LiveMetricPoint {
   rps: number;
   avgResponseTime: number;
   errorRate: number;
+  /** % of requests in this window that returned an HTTP 4xx status */
+  clientErrorRate: number;
+  /** % of requests in this window that returned an HTTP 5xx status */
+  serverErrorRate: number;
   stepMetrics?: LiveStepMetric[];
 }
 
