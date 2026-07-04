@@ -38,6 +38,7 @@ const sendMessage = async (text: string) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 afterEach(() => cleanup());
@@ -241,6 +242,32 @@ describe('ChatPage', () => {
     });
 
     await waitFor(() => expect(screen.getByText(/running/i)).toBeInTheDocument());
+  });
+
+  it('re-syncs a stale pending/running status entry from a loaded history session', async () => {
+    // A session saved while a test was still "running" — no WS event will ever
+    // refire for a transition that already happened while this session wasn't loaded.
+    localStorage.setItem('chat_history', JSON.stringify([{
+      id: 'session-1',
+      title: 'Load test https://api.example.com',
+      mode: 'english',
+      entries: [
+        { role: 'user', kind: 'text', content: 'Load test https://api.example.com' },
+        { role: 'assistant', kind: 'status', testId: 'stale-test-1', status: 'running' },
+      ],
+      sessionContext: null,
+      savedAt: Date.now(),
+    }]));
+    mockGetResult.mockResolvedValue({ result: { status: 'completed' } } as Awaited<ReturnType<typeof getResult>>);
+
+    render(<ChatPage />);
+    fireEvent.click(screen.getByTitle('Chat history'));
+    await waitFor(() => expect(screen.getByText('Load test https://api.example.com')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Load test https://api.example.com'));
+
+    await waitFor(() => expect(mockGetResult).toHaveBeenCalledWith('stale-test-1'));
+    await waitFor(() => expect(screen.getByText(/completed/i)).toBeInTheDocument());
+    expect(screen.queryByText(/running/i)).not.toBeInTheDocument();
   });
 
   it('renders a flowReady card with step list and action buttons', async () => {

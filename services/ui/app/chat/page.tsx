@@ -360,6 +360,23 @@ export default function ChatPage() {
     setPendingAttachments([]);
     setShowSwaggerInput(false);
     setShowHistory(false);
+
+    // Status entries saved as pending/running will never update on their own —
+    // watchedTestIds starts empty on every mount, and no WS test:status event
+    // ever refires for a transition that already happened while this session
+    // wasn't loaded. Re-subscribe and re-sync those from the current DB state.
+    s.entries.forEach(e => {
+      if (e.kind === 'status' && (e.status === 'pending' || e.status === 'running')) {
+        watchedTestIds.current.add(e.testId);
+        getResult(e.testId).then(d => {
+          const status = d.result?.status;
+          if (!status) return;
+          setEntries(prev => prev.map(en =>
+            en.kind === 'status' && en.testId === e.testId ? { ...en, status } : en
+          ));
+        }).catch(() => {});
+      }
+    });
   };
 
   const removeSession = (id: string, e: React.MouseEvent) => {
