@@ -56,27 +56,27 @@ beforeEach(async () => {
 // ─── settings.ts — getLiveMetricWindowSetting / setLiveMetricWindowSetting ────
 
 describe('getLiveMetricWindowSetting', () => {
-  it('returns the default (10) when no row exists', async () => {
-    expect(await getLiveMetricWindowSetting(pool)).toBe(10);
+  it('returns the default (30) when no row exists', async () => {
+    expect(await getLiveMetricWindowSetting(pool)).toBe(30);
   });
 
   it('returns the stored value after set', async () => {
-    await setLiveMetricWindowSetting(pool, 30);
-    expect(await getLiveMetricWindowSetting(pool)).toBe(30);
+    await setLiveMetricWindowSetting(pool, 10);
+    expect(await getLiveMetricWindowSetting(pool)).toBe(10);
   });
 
   it('falls back to the default for a corrupted/invalid stored value', async () => {
     await pool.query(
       `INSERT INTO app_settings (key, value) VALUES ('live_metric_window_sec', 'not-a-number')`
     );
-    expect(await getLiveMetricWindowSetting(pool)).toBe(10);
+    expect(await getLiveMetricWindowSetting(pool)).toBe(30);
   });
 
   it('falls back to the default for a stored value outside the allowed set', async () => {
     await pool.query(
       `INSERT INTO app_settings (key, value) VALUES ('live_metric_window_sec', '45')`
     );
-    expect(await getLiveMetricWindowSetting(pool)).toBe(10);
+    expect(await getLiveMetricWindowSetting(pool)).toBe(30);
   });
 });
 
@@ -97,7 +97,7 @@ describe('GET /system/live-metric-window', () => {
   it('returns the default with no session and no prior setting', async () => {
     const res = await app.inject({ method: 'GET', url: '/system/live-metric-window' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ windowSec: 10 });
+    expect(res.json()).toEqual({ windowSec: 30 });
   });
 
   it('reflects a previously saved value', async () => {

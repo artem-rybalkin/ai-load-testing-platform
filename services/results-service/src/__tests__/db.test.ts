@@ -159,18 +159,18 @@ describe('createSchema — idempotency (M8)', () => {
     expect(after.length).toBe(countBefore);
   });
 
-  it('schema_migrations row count equals the number of migrations in MIGRATIONS array (14)', async () => {
+  it('schema_migrations row count equals the number of migrations in MIGRATIONS array (15)', async () => {
     const { rows } = await idempotPool.query<{ version: number }>(
       'SELECT version FROM schema_migrations ORDER BY version',
     );
-    expect(rows.length).toBe(14);
+    expect(rows.length).toBe(15);
   });
 
-  it('schema_migrations contains sequential versions 1..14', async () => {
+  it('schema_migrations contains sequential versions 1..15', async () => {
     const { rows } = await idempotPool.query<{ version: number }>(
       'SELECT version FROM schema_migrations ORDER BY version',
     );
     const versions = rows.map(r => r.version);
-    expect(versions).toEqual(Array.from({ length: 14 }, (_, i) => i + 1));
+    expect(versions).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
   });
 });
