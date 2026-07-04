@@ -281,6 +281,22 @@ describe('ResultDetailPage — running / pending state', () => {
     await waitFor(() => expect(screen.getByText(/Waiting in queue/i)).toBeInTheDocument());
   });
 
+  it('shows the Live Metrics card for a running backend test even before any live point has arrived', async () => {
+    mockGetResult.mockResolvedValue({ result: makeResult({ status: 'running', type: 'backend', metrics: null }) });
+    mockGetLiveMetrics.mockResolvedValue({ points: [] });
+    render(<ResultPage />);
+    await waitFor(() => expect(screen.getByText('Live Metrics')).toBeInTheDocument());
+    expect(screen.getByTestId('realtime-chart')).toBeInTheDocument();
+  });
+
+  it('does not show the Live Metrics card for a pending test with no live points yet', async () => {
+    mockGetResult.mockResolvedValue({ result: makeResult({ status: 'pending', type: 'backend', metrics: null }) });
+    mockGetLiveMetrics.mockResolvedValue({ points: [] });
+    render(<ResultPage />);
+    await waitFor(() => screen.getByText(/Waiting in queue/i));
+    expect(screen.queryByText('Live Metrics')).not.toBeInTheDocument();
+  });
+
   it('shows status_message when present on a pending test', async () => {
     mockGetResult.mockResolvedValue({
       result: makeResult({ status: 'pending', metrics: null, status_message: 'Generating test script with AI…' }),

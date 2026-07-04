@@ -43,9 +43,12 @@ function RootLayout() {
       )}
       <Sidebar open={menuOpen} onNavigate={() => setMenuOpen(false)} />
       <div className="flex-1 min-w-0 flex flex-col">
-        <TopBar onMenuClick={() => setMenuOpen(true)} />
-        <ActiveTests />
-        <WorkerHealth />
+        {/* Sticky so worker status / running-test info stays visible while scrolling long pages */}
+        <div className="sticky top-0 z-20 bg-bg">
+          <TopBar onMenuClick={() => setMenuOpen(true)} />
+          <ActiveTests />
+          <WorkerHealth />
+        </div>
         <AIStatus />
         <SystemHealth />
         <main className="flex-1">

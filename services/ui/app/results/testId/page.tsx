@@ -472,8 +472,11 @@ export default function ResultPage() {
           </div>
         )}
 
-        {/* Live chart — shown while running (before metrics arrive) and after completion */}
-        {isBackend && livePoints.length > 0 && (isPending || !m) && (
+        {/* Live chart — shown while running (before metrics arrive) and after completion.
+            While running, show even with zero points yet — RealtimeChart's own
+            "Waiting for first data point…" placeholder covers the gap until the
+            first aggregation window posts. */}
+        {isBackend && (isRunning || (livePoints.length > 0 && (isPending || !m))) && (
           <Card>
             <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
             <div className="p-5"><Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense></div>
