@@ -16,7 +16,7 @@ declare global {
 
 import puppeteer, { Browser } from 'puppeteer';
 import lighthouse from 'lighthouse';
-import { TestRequest, ClientMetrics, LighthouseScore, ResourceBreakdown, stripAnsi, internalHeaders } from '@alt/shared';
+import { TestRequest, ClientMetrics, LighthouseScore, ResourceBreakdown, stripAnsi, internalHeaders, createBatcher } from '@alt/shared';
 import { log } from './logger';
 
 // Web Vitals without the optional lighthouse field (for per-session accumulation)
@@ -48,7 +48,7 @@ export interface ClientRunnerContext {
   navTimeoutMs: number;
   resultsUrl: string;
   runningBrowsers: Map<string, Browser>;
-  postLogLine: (testId: string, level: string, line: string) => Promise<void>;
+  postLogLines: (testId: string, lines: Array<{ level: string; line: string }>) => Promise<void>;
   /** Override for testing — defaults to puppeteer.launch */
   launchBrowser?: typeof puppeteer.launch;
   /** Override for testing — defaults to lighthouse */
@@ -65,7 +65,7 @@ export const runClientTest = async (
   test: TestRequest,
   ctx: ClientRunnerContext,
 ): Promise<{ metrics: ClientMetrics; executionLog: string }> => {
-  const { maxDurationMs, navTimeoutMs, resultsUrl, runningBrowsers, postLogLine } = ctx;
+  const { maxDurationMs, navTimeoutMs, resultsUrl, runningBrowsers, postLogLines } = ctx;
   const launchBrowser = ctx.launchBrowser ?? puppeteer.launch.bind(puppeteer);
   const runLighthouse = ctx.runLighthouse ?? lighthouse;
 
@@ -81,12 +81,15 @@ export const runClientTest = async (
 
   const logLines: string[] = [];
   let logBytes = 0;
+  const logBatcher = createBatcher<{ level: string; line: string }>(
+    batch => { postLogLines(test.id, batch).catch(() => {}); },
+  );
   const addLog = (level: string, text: string): void => {
     const clean = stripAnsi(text).trimEnd();
     if (!clean || logLines.length >= MAX_LOG_LINES || logBytes >= MAX_LOG_BYTES) return;
     logLines.push(`[${level}] ${clean}`);
     logBytes += level.length + Buffer.byteLength(clean, 'utf8') + 3;
-    postLogLine(test.id, level, clean).catch(() => {});
+    logBatcher.push({ level, line: clean });
   };
 
   addLog('INFO', `Starting browser test: ${test.targetUrl}`);
@@ -322,6 +325,7 @@ export const runClientTest = async (
     (err as Error & { partialLog?: string }).partialLog = logLines.join('\n');
     throw err;
   } finally {
+    logBatcher.flush();
     clearTimeout(killTimer);
     runningBrowsers.delete(test.id);
     await browser.close().catch(() => {});

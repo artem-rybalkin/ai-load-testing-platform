@@ -113,16 +113,20 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
   );
 
   // ── POST /results/:testId/log-line (internal) ─────────────────────────────
-  app.post<{ Params: { testId: string }; Body: { level: string; line: string } }>(
+  // Body is a batch — workers buffer stdout/stderr lines client-side (createBatcher,
+  // @alt/shared) and flush periodically instead of one HTTP request per line.
+  app.post<{ Params: { testId: string }; Body: { lines: Array<{ level: string; line: string }> } }>(
     '/results/:testId/log-line',
     async (request, reply) => {
       const { testId } = request.params;
-      const { level, line } = request.body ?? {};
-      if (typeof level !== 'string' || typeof line !== 'string') {
-        return reply.code(400).send({ error: 'level and line must be strings' });
+      const { lines } = request.body ?? {};
+      if (!Array.isArray(lines) || lines.some(l => typeof l?.level !== 'string' || typeof l?.line !== 'string')) {
+        return reply.code(400).send({ error: 'lines must be an array of { level, line }' });
       }
       reply.send({ success: true });
-      broadcast({ type: 'test:log', testId, level, line });
+      for (const { level, line } of lines) {
+        broadcast({ type: 'test:log', testId, level, line });
+      }
       return reply;
     },
   );

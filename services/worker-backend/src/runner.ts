@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import amqplib from 'amqplib';
 
-import { BackendMetrics, LiveMetricPoint, stripAnsi } from '@alt/shared';
+import { BackendMetrics, LiveMetricPoint, stripAnsi, createBatcher } from '@alt/shared';
 import { parseK6Output, aggregateWindow, parseK6JsonOutput, LIVE_WINDOW_SEC } from './parser';
 import { log } from './logger';
 
@@ -58,7 +58,7 @@ export const validateScript = (scriptPath: string): Promise<void> =>
 export interface RunnerContext {
   runningTests: Map<string, ChildProcess>;
   notifyRunning:   (testId: string) => Promise<void>;
-  postLogLine:     (testId: string, level: string, line: string) => Promise<void>;
+  postLogLines:    (testId: string, lines: Array<{ level: string; line: string }>) => Promise<void>;
   postLiveMetric:  (testId: string, point: LiveMetricPoint) => Promise<void>;
   maxDurationMs:   number;
   gracePeriodMs:   number;
@@ -126,12 +126,15 @@ export const runK6Test = async (
 
     const logLines: string[] = [];
     let logBytes = 0;
+    const logBatcher = createBatcher<{ level: string; line: string }>(
+      batch => { ctx?.postLogLines(testId, batch).catch(() => {}); },
+    );
     const addLogLine = (level: string, raw: string): void => {
       const text = stripAnsi(raw).trimEnd();
       if (!text || logLines.length >= MAX_LOG_LINES || logBytes >= MAX_LOG_BYTES) return;
       logLines.push(`[${level}] ${text}`);
       logBytes += level.length + Buffer.byteLength(text, 'utf8') + 3;
-      ctx?.postLogLine(testId, level, text).catch(() => {});
+      logBatcher.push({ level, line: text });
     };
 
     const stdoutLineBuf = makeLineBuffer(line => addLogLine(k6Level(line), line));
@@ -176,6 +179,7 @@ export const runK6Test = async (
       clearInterval(liveInterval);
       clearTimeout(killTimer);
       ctx?.runningTests.delete(testId);
+      logBatcher.flush();
       await readAndPost();
 
       const jsonContent = await readFile(jsonPath, 'utf-8').catch(() => '');
@@ -208,6 +212,7 @@ export const runK6Test = async (
       clearInterval(liveInterval);
       clearTimeout(killTimer);
       ctx?.runningTests.delete(testId);
+      logBatcher.flush();
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
       (err as Error & { partialLog?: string }).partialLog = logLines.join('\n');
       reject(err);

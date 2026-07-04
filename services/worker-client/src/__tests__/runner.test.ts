@@ -150,7 +150,7 @@ function makeCtx(overrides: {
       navTimeoutMs:   overrides.navTimeoutMs ?? 60_000,
       resultsUrl:     'http://results-service:3004',
       runningBrowsers,
-      postLogLine:    vi.fn().mockResolvedValue(undefined),
+      postLogLines:   vi.fn().mockResolvedValue(undefined),
       launchBrowser:  vi.fn().mockResolvedValue(browser) as unknown as typeof import('puppeteer').default.launch,
       runLighthouse:  (overrides.lighthouse ?? makeLighthouseMock()) as unknown as typeof import('lighthouse').default,
     },
@@ -395,14 +395,17 @@ describe('runClientTest — custom headers', () => {
 describe('runClientTest — execution log', () => {
   beforeEach(() => { vi.unstubAllGlobals(); });
 
-  it('postLogLine is called for each log entry', async () => {
+  it('postLogLines is called with a batch of { level, line } entries', async () => {
     const { ctx } = makeCtx();
     await runClientTest(BASE_TEST, ctx);
-    expect(ctx.postLogLine).toHaveBeenCalled();
-    const firstCall = (ctx.postLogLine as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(ctx.postLogLines).toHaveBeenCalled();
+    const firstCall = (ctx.postLogLines as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(firstCall[0]).toBe(BASE_TEST.id); // testId
-    expect(typeof firstCall[1]).toBe('string'); // level
-    expect(typeof firstCall[2]).toBe('string'); // line
+    const batch = firstCall[1] as Array<{ level: string; line: string }>;
+    expect(Array.isArray(batch)).toBe(true);
+    expect(batch.length).toBeGreaterThan(0);
+    expect(typeof batch[0].level).toBe('string');
+    expect(typeof batch[0].line).toBe('string');
   });
 
   it('executionLog contains session completion message', async () => {

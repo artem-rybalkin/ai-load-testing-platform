@@ -99,12 +99,13 @@ const notifyCancelled = async (testId: string): Promise<void> => {
   catch { /* best-effort */ }
 };
 
-const postLogLine = async (testId: string, level: string, line: string): Promise<void> => {
+const postLogLines = async (testId: string, lines: Array<{ level: string; line: string }>): Promise<void> => {
+  if (lines.length === 0) return;
   try {
     await fetch(`${RESULTS_URL}/results/${testId}/log-line`, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ level, line }),
+      body: JSON.stringify({ lines }),
     });
   } catch { /* best-effort */ }
 };
@@ -249,7 +250,7 @@ const start = async (): Promise<void> => {
           {
             runningTests,
             notifyRunning,
-            postLogLine,
+            postLogLines,
             postLiveMetric,
             maxDurationMs:  MAX_TEST_DURATION_MS,
             gracePeriodMs:  GRACE_PERIOD_MS,

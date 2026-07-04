@@ -50,12 +50,13 @@ const cancelledTests   = new Set<string>();
 
 const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
 
-const postLogLine = async (testId: string, level: string, line: string): Promise<void> => {
+const postLogLines = async (testId: string, lines: Array<{ level: string; line: string }>): Promise<void> => {
+  if (lines.length === 0) return;
   try {
     await fetch(`${RESULTS_URL}/results/${testId}/log-line`, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ level, line }),
+      body: JSON.stringify({ lines }),
     });
   } catch { /* best-effort */ }
 };
@@ -143,7 +144,7 @@ const start = async (): Promise<void> => {
           navTimeoutMs:  NAV_TIMEOUT_MS,
           resultsUrl:    RESULTS_URL,
           runningBrowsers,
-          postLogLine,
+          postLogLines,
         });
 
         // r2: check if cancelled while running

@@ -67,7 +67,7 @@ function makeCtx(runningTests = new Map<string, ChildProcess>()) {
   return {
     runningTests,
     notifyRunning:  vi.fn().mockResolvedValue(undefined),
-    postLogLine:    vi.fn().mockResolvedValue(undefined),
+    postLogLines:   vi.fn().mockResolvedValue(undefined),
     postLiveMetric: vi.fn().mockResolvedValue(undefined),
     maxDurationMs:  600_000,
     gracePeriodMs:  30_000,
@@ -237,6 +237,36 @@ describe('runK6Test — exit code handling', () => {
 
     const result = await promise;
     expect(typeof result.executionLog).toBe('string');
+  });
+
+  it('batches stdout lines into a single postLogLines call instead of one call per line', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+    const ctx = makeCtx();
+
+    const promise = runK6Test('test-batch', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    run.stdout.emit('data', Buffer.from('first line\nsecond line\nthird line\n'));
+    run.emit('close', 0);
+    await promise;
+
+    // 3 lines pushed, none reaching the default 50-line batch threshold — the
+    // pending batch must be flushed as one call when the k6 process closes,
+    // not left stranded, and not sent as 3 separate HTTP calls.
+    expect(ctx.postLogLines).toHaveBeenCalledTimes(1);
+    expect(ctx.postLogLines).toHaveBeenCalledWith('test-batch', [
+      { level: 'INFO', line: 'first line' },
+      { level: 'INFO', line: 'second line' },
+      { level: 'INFO', line: 'third line' },
+    ]);
   });
 });
 

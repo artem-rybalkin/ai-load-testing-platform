@@ -281,7 +281,7 @@ All rows: P2 (except TEAM-10, which is P1 as the canonical/first-discovered case
 |----|-------|-----|-------|----------|-----|
 | ELOG-01 | View execution log after completion | Completed test | 1. Open result detail, expand the execution log panel | `GET /results/:testId/log` returns the ANSI-stripped worker output; `{ log: null }` for tests run before this feature existed | P2 |
 | ELOG-02 | Real-time streaming during a live run | Test currently running | 1. Watch the log panel while it runs | Lines append live via `test:log` WebSocket events as the worker posts each one internally | P1 |
-| ELOG-03 | Internal log-line endpoint requires the internal key | `INTERNAL_API_KEY` set | 1. Call `POST /results/:testId/log-line` without `X-Internal-Key` | `401`; with the correct key, `{ success: true }` and the line is broadcast | P2 |
+| ELOG-03 | Internal log-line endpoint requires the internal key | `INTERNAL_API_KEY` set | 1. Call `POST /results/:testId/log-line` with body `{ "lines": [{ "level": "INFO", "line": "test" }] }`, without `X-Internal-Key` | `401`; with the correct key, `{ success: true }` and each line in the batch is broadcast as a separate `test:log` event | P2 |
 | ELOG-04 | Log cap enforced | A script producing very verbose/looping output | 1. Run it to completion | Stored log is capped at 5000 lines / 100 KB, not unbounded | P3 |
 | ELOG-05 | Partial log retained on failure | A test that fails mid-run | 1. Open its detail | Whatever log was captured up to the failure point is present (not empty/discarded) | P2 |
 

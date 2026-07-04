@@ -192,8 +192,11 @@ no time-based loop; the duration field has no effect on execution.
 - **`POST /results/:testId/running`** is fired fire-and-forget immediately after receiving the
   message. A fetch failure is silently swallowed, meaning the test may remain in `pending` state
   from the UI perspective if the call fails.
-- **`POST /results/:testId/log-line`** called per log line during execution for real-time
-  streaming to the `ExecutionLogPanel` in the UI via WebSocket.
+- **`POST /results/:testId/log-line`** — lines are buffered client-side via `createBatcher()`
+  (`@alt/shared`, flushes every 300ms or every 50 lines, whichever comes first — was previously
+  one HTTP request per log line, an unordered fetch storm under concurrent verbose tests) and
+  sent as `{ lines: [{ level, line }, ...] }`; results-service broadcasts one `test:log` WS event
+  per line so the `ExecutionLogPanel`'s real-time streaming is unaffected by the batching.
 - **DLQ retry**: `handleRetry()` increments `x-retry-count` and republishes up to 3 times.
   On exhaustion: calls `POST /results/:testId/fail` with `{ executionLog: partialLog ?? null }`
   before routing to `client-tests.dlq` (mirrors ai-service behaviour, avoids the 30-minute

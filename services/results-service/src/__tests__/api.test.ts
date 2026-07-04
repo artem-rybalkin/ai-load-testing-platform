@@ -1052,6 +1052,50 @@ describe('POST /results/:testId/live', () => {
   });
 });
 
+// ─── POST /results/:testId/log-line ───────────────────────────────────────────
+
+describe('POST /results/:testId/log-line', () => {
+  const testId = '00000000-0000-0000-0000-000000000033';
+
+  it('accepts a batch of lines', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/log-line`,
+      payload: { lines: [{ level: 'INFO', line: 'first' }, { level: 'ERROR', line: 'second' }] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ success: true });
+  });
+
+  it('accepts an empty batch', async () => {
+    const res = await app.inject({ method: 'POST', url: `/results/${testId}/log-line`, payload: { lines: [] } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects a non-array lines field', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/log-line`,
+      payload: { lines: { level: 'INFO', line: 'oops' } },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a batch entry missing level/line', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/results/${testId}/log-line`,
+      payload: { lines: [{ level: 'INFO', line: 'ok' }, { level: 'INFO' }] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a missing lines field', async () => {
+    const res = await app.inject({ method: 'POST', url: `/results/${testId}/log-line`, payload: {} });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 // ─── GET /results/:testId/live ────────────────────────────────────────────────
 
 describe('GET /results/:testId/live', () => {
@@ -1435,6 +1479,27 @@ describe('INTERNAL_API_KEY gating', () => {
   it('does not gate GET /results/:testId/live (project-scoped UI read)', async () => {
     const testId = await insertResult({ status: 'running' });
     const res = await gatedApp.inject({ method: 'GET', url: `/results/${testId}/live` });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects POST /results/:testId/log-line without X-Internal-Key', async () => {
+    const testId = await insertResult({ status: 'running' });
+    const res = await gatedApp.inject({
+      method: 'POST',
+      url: `/results/${testId}/log-line`,
+      payload: { lines: [{ level: 'INFO', line: 'hi' }] },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('accepts POST /results/:testId/log-line with the correct X-Internal-Key', async () => {
+    const testId = await insertResult({ status: 'running' });
+    const res = await gatedApp.inject({
+      method: 'POST',
+      url: `/results/${testId}/log-line`,
+      headers: { 'x-internal-key': INTERNAL_KEY },
+      payload: { lines: [{ level: 'INFO', line: 'hi' }] },
+    });
     expect(res.statusCode).toBe(200);
   });
 

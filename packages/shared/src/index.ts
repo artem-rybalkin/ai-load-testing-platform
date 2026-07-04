@@ -634,6 +634,42 @@ export async function connectWithBackoff<T>(connect: () => Promise<T>, options: 
 }
 
 /**
+ * Buffers items pushed via the returned `push()` and flushes them through
+ * `send()` either once `maxBatchSize` is reached or after `flushIntervalMs`
+ * of inactivity since the first buffered item — whichever comes first. Used
+ * by worker-backend/worker-client to batch per-line execution-log POSTs
+ * instead of firing one HTTP request per stdout/stderr line.
+ */
+export function createBatcher<T>(
+  send: (batch: T[]) => void,
+  options: { maxBatchSize?: number; flushIntervalMs?: number } = {},
+): { push: (item: T) => void; flush: () => void } {
+  const maxBatchSize = options.maxBatchSize ?? 50;
+  const flushIntervalMs = options.flushIntervalMs ?? 300;
+  let pending: T[] = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const flush = (): void => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (pending.length === 0) return;
+    const batch = pending;
+    pending = [];
+    send(batch);
+  };
+
+  const push = (item: T): void => {
+    pending.push(item);
+    if (pending.length >= maxBatchSize) {
+      flush();
+    } else if (!timer) {
+      timer = setTimeout(flush, flushIntervalMs);
+    }
+  };
+
+  return { push, flush };
+}
+
+/**
  * Polls `getCount()` until it reaches 0 or `timeoutMs` elapses. Used by
  * worker-backend/worker-client's SIGTERM handlers to let in-flight test
  * executions finish before the process exits, instead of a scale-down
