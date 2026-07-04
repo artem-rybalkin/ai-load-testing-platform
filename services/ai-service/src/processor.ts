@@ -63,9 +63,11 @@ export const processAiRequest = async (
       }
     }
 
-    await postMessage(resultsUrl, test.id, 'Generating test script with AI…');
+    // Fire-and-forget — postMessage already swallows its own errors; awaiting it here
+    // would block script generation/dispatch on a non-essential status-notification round-trip.
+    void postMessage(resultsUrl, test.id, 'Generating test script with AI…');
     const script = await genScript(test);
-    await postMessage(resultsUrl, test.id, 'Script ready — starting test…');
+    void postMessage(resultsUrl, test.id, 'Script ready — starting test…');
 
     const enrichedTest: EnrichedTestRequest = { ...test, generatedScript: script };
     channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(enrichedTest)), { persistent: true });
