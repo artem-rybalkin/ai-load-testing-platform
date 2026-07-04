@@ -1,6 +1,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { createTest, getResult, getPresets, createPreset, getResults, getActiveTests, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint, BackendMetrics } from '@/lib/api';
+import { createTest, getResult, getPresets, createPreset, getResults, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint, BackendMetrics } from '@/lib/api';
+import { useHealth } from '@/lib/HealthContext';
 import FlowBuilder from '@/app/components/FlowBuilder';
 import AdvancedSettings from '@/app/components/AdvancedSettings';
 import ThresholdSection from '@/app/components/ThresholdSection';
@@ -152,6 +153,7 @@ function HomeContent() {
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
+  const { activeTests: active } = useHealth();
   const isViewer = user?.role === 'viewer';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -166,7 +168,6 @@ function HomeContent() {
   const [thresholdPreview, setThresholdPreview] = useState<ThresholdPreview | null>(null);
   const [thresholdPreviewError, setThresholdPreviewError] = useState<string | null>(null);
   const [recent, setRecent] = useState<TestResult[]>([]);
-  const [active, setActive] = useState<ActiveTest[]>([]);
   const [rerunFrom, setRerunFrom] = useState<string | null>(null);
   const [form, setForm] = useState<HomeFormState>({
     type: 'backend',
@@ -245,7 +246,6 @@ function HomeContent() {
 
   const refreshOverview = () => {
     getResults().then(d => setRecent(d.results?.slice(0, 10) ?? [])).catch(() => {});
-    getActiveTests().then(d => setActive(d.active ?? [])).catch(() => {});
   };
 
   useResultsSocket((event) => {

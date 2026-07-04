@@ -159,9 +159,10 @@ services/ui/
     └── FlowBuilder.tsx      # Multi-step flow editor + HAR import + Record button + per-step "Request headers" editor
 └── __tests__/
     ├── setup.ts                       # jest-dom matchers
-    ├── ActiveTests.test.tsx           # (6 tests)
+    ├── ActiveTests.test.tsx           # (5 tests)
     ├── AnalysisPanel.test.tsx         # (9 tests)
     ├── AuthContext.test.tsx           # AuthProvider + AuthGate (6 tests)
+    ├── HealthContext.test.tsx         # activeTests fetch/error/debounced WS re-fetch (6 tests)
     ├── FlowBuilder.test.tsx           # (new)
     ├── home.test.tsx                  # form validation, presets, INP/TBT SLOs (14 tests)
     ├── LoginPage.test.tsx             # login form + API calls (5 tests)

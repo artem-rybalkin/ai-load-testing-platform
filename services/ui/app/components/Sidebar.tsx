@@ -1,11 +1,8 @@
-import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useDarkMode } from '@/lib/useDarkMode';
 import { useAuth } from '@/lib/AuthContext';
 import { useHealth } from '@/lib/HealthContext';
 import { useWorkspace } from '@/lib/WorkspaceContext';
-import { getActiveTests, ActiveTest } from '@/lib/api';
-import { useResultsSocket } from '@/lib/useResultsSocket';
 
 const NAV = [
   { href: '/', label: 'New test', icon: (
@@ -63,17 +60,8 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
   const navigate = useNavigate();
   const { dark, toggle: toggleDark } = useDarkMode();
   const { user, logout, switchTeam } = useAuth();
-  const { services } = useHealth();
+  const { services, activeTests: active } = useHealth();
   const { workspaces, activeWorkspaceId, setActiveWorkspaceId } = useWorkspace();
-  const [active, setActive] = useState<ActiveTest[]>([]);
-
-  const refreshActive = async () => {
-    try { setActive((await getActiveTests()).active || []); } catch { /* non-fatal */ }
-  };
-  useEffect(() => { refreshActive(); }, []);
-  useResultsSocket((event) => {
-    if (event.type === 'tests:changed' || event.type === 'test:status' || event.type === 'reconnected') refreshActive();
-  });
 
   const workers = services.filter(s => s.metrics);
   const poolUsed = workers.reduce((sum, w) => sum + (w.metrics?.activeTests ?? 0), 0);

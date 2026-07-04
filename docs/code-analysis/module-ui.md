@@ -117,7 +117,7 @@ Both components poll `GET /system/health` every 15 seconds via independent `setI
 
 ### `app/components/ActiveTests.tsx`
 
-Uses `useResultsSocket` with a 50ms debounce on `tests:changed` and `test:status` events to coalesce the dual broadcast from consumer. This is a clean pattern. The component renders nothing (`return null`) when no tests are active, which is correct.
+No longer fetches or subscribes itself — the fetch + 50ms-debounced `useResultsSocket` subscription on `tests:changed`/`test:status`/`reconnected` (to coalesce the dual broadcast from consumer) now lives once in `HealthContext`, shared with `Sidebar` and the home page's `LiveCard`. `ActiveTests` is now a pure consumer of `useHealth().activeTests`; it still renders nothing (`return null`) when no tests are active.
 
 ---
 
@@ -144,7 +144,7 @@ Uses `useResultsSocket` with a 50ms debounce on `tests:changed` and `test:status
 
 The UI maintains no global state store. All state is local `useState` in individual components or pages. This is appropriate for the current scale but creates redundancy:
 
-- `active` tests are fetched independently by `HomeContent` (once on mount) and `ActiveTests` (WS-triggered). There is no shared cache.
+- `active` tests were previously fetched independently by `HomeContent`, `ActiveTests`, and `Sidebar` (one fetch + one WS subscription each, tripling the same request on every event). Now centralized in `HealthContext` — one shared fetch, one shared debounced WS subscription, all three consume `useHealth().activeTests`.
 - `getSystemHealth()` is called by both `SystemHealth` and `WorkerHealth` on independent 15s intervals.
 - `presets` are fetched in `HomeContent` and re-fetched after save (`page.tsx:317`) but are not available to other pages without a fresh fetch.
 

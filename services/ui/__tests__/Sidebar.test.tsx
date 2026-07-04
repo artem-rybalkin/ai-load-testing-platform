@@ -20,8 +20,8 @@ const mockToggleDark   = vi.hoisted(() => vi.fn());
 const mockUseDarkMode  = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/useDarkMode', () => ({ useDarkMode: mockUseDarkMode }));
 
-const mockGetActiveTests = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api', () => ({ getActiveTests: mockGetActiveTests }));
+const mockUseHealth = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/HealthContext', () => ({ useHealth: mockUseHealth }));
 
 const baseUser: SessionUser = {
   id: 'u1', email: 'alice@example.com', name: 'Alice',
@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockLogout.mockResolvedValue(undefined);
   mockUseDarkMode.mockReturnValue({ dark: false, toggle: mockToggleDark });
-  mockGetActiveTests.mockResolvedValue({ active: [] });
+  mockUseHealth.mockReturnValue({ services: [], activeTests: [] });
   mockUseAuth.mockReturnValue({ user: baseUser, logout: mockLogout, switchTeam: mockSwitchTeam });
 });
 afterEach(() => cleanup());
@@ -108,10 +108,10 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument();
   });
 
-  it('shows the live-run count from getActiveTests', async () => {
-    mockGetActiveTests.mockResolvedValue({ active: [{ test_id: 't1', type: 'backend', target_url: 'https://a.com' }] });
+  it('shows the live-run count from the shared HealthContext', () => {
+    mockUseHealth.mockReturnValue({ services: [], activeTests: [{ test_id: 't1', type: 'backend', target_url: 'https://a.com' }] });
     renderSidebar();
-    await waitFor(() => expect(screen.getByText('1 LIVE RUN')).toBeInTheDocument());
+    expect(screen.getByText('1 LIVE RUN')).toBeInTheDocument();
   });
 
   it('hides the drawer (mobile) when open is false', () => {
