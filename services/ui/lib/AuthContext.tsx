@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 import { SessionUser, getMe, logout as apiLogout, switchTeam as apiSwitchTeam } from '@/lib/api';
 
 interface AuthContextValue {
@@ -26,18 +26,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     await apiLogout();
     setUser(null);
-  };
+  }, []);
 
-  const switchTeam = async (teamId: string) => {
+  const switchTeam = useCallback(async (teamId: string) => {
     const updated = await apiSwitchTeam(teamId);
     setUser(updated);
-  };
+  }, []);
+
+  // Stable value identity so useAuth() consumers only re-render when user/loading
+  // actually change, not on every AuthProvider render.
+  const value = useMemo(
+    () => ({ user, loading, logout, setUser, switchTeam }),
+    [user, loading, logout, switchTeam],
+  );
 
   return (
-    <AuthContext.Provider value={{ user, loading, logout, setUser, switchTeam }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
