@@ -83,6 +83,26 @@ describe('FLOW_PROMPT — extraction rules', () => {
   });
 });
 
+describe('FLOW_PROMPT — thresholds', () => {
+  it('defaults to p(95)<1000 and rate<0.01 when no thresholds are set on the request', async () => {
+    await generateScript(baseFlow());
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('p(95) < 1000');
+    expect(prompt).toContain('rate < 0.01');
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] }");
+  });
+
+  it('reflects a custom SLOThresholds.errorRate/p95 in the generated prompt instead of the hardcoded default', async () => {
+    const test = baseFlow();
+    test.thresholds = { p95: 500, errorRate: 3 };
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('p(95) < 500');
+    expect(prompt).toContain('rate < 0.03');
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<500'], http_req_failed: ['rate<0.03'] }");
+  });
+});
+
 describe('FLOW_PROMPT — {{varName}} placeholder substitution', () => {
   it('includes placeholder instructions when a step header contains {{varName}}', async () => {
     const test = baseFlow();
@@ -284,6 +304,24 @@ describe('BACKEND_PROMPT — basic content', () => {
     const prompt = await getLastPrompt();
     const occurrences = prompt.match(/if \(res\.status === 0 \|\| res\.status >= 400\) console\.error\(`FAILED \$\{res\.status\} \$\{res\.request\.url\}`\);/g);
     expect(occurrences).toHaveLength(2);
+  });
+
+  it('defaults to p(95)<1000 and rate<0.01 when no thresholds are set on the request', async () => {
+    await generateScript(baseBackend());
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('p(95) < 1000');
+    expect(prompt).toContain('rate < 0.01');
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] }");
+  });
+
+  it('reflects a custom SLOThresholds.errorRate/p95 in the generated prompt instead of the hardcoded default', async () => {
+    const test = baseBackend();
+    test.thresholds = { p95: 2000, errorRate: 5 };
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('p(95) < 2000');
+    expect(prompt).toContain('rate < 0.05');
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.05'] }");
   });
 });
 
