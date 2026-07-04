@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 import { randomBytes } from 'crypto';
 import type { TeamRole, TeamQuota, OrgRole, AiProviderName } from '@alt/shared';
 import { AI_PROVIDER_NAMES } from '@alt/shared';
-import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, getTeamUsage } from '../quotas';
+import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, getTeamUsage, getTeamQuotasAndUsageBatch } from '../quotas';
 import {
   setTeamAiProviderSetting,
   clearTeamAiProviderSetting,
@@ -326,12 +326,13 @@ export async function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool
       'SELECT id, name FROM projects WHERE org_id = $1 ORDER BY created_at ASC',
       [request.params.id],
     );
-    const teams = await Promise.all(teamRows.map(async (t) => ({
+    const quotaUsageByTeam = await getTeamQuotasAndUsageBatch(pool, teamRows.map(t => t.id));
+    const teams = teamRows.map(t => ({
       id: t.id,
       name: t.name,
-      quota: await getTeamQuota(pool, t.id),
-      usage: await getTeamUsage(pool, t.id),
-    })));
+      quota: quotaUsageByTeam.get(t.id)!.quota,
+      usage: quotaUsageByTeam.get(t.id)!.usage,
+    }));
 
     return { org: orgRows[0], members, teams, role };
   });

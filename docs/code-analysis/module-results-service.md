@@ -111,8 +111,8 @@ Seven tables are managed by `createSchema`. Key observations:
 
 - `test_results.test_id UUID NOT NULL UNIQUE` (line 24 db.ts) — the natural identity from external callers. The `id` UUID surrogate key is redundant since `test_id` is already unique and indexed. Queries universally use `test_id`, not `id`.
 - `live_metrics` has no foreign key to `test_results.test_id` (line 94 db.ts). Orphaned live metric rows can accumulate when tests are deleted (no DELETE endpoint exists for test_results either).
-- No data retention or TTL strategy exists. `live_metrics` rows are written at a per-test configurable interval (admin-set via Settings — 10s/30s/1min, default 30s) and are never purged. With soak tests running for hours and multiple workers, this table will grow unbounded.
-- The `test_results` table stores `steps JSONB` and `test_data JSONB` (lines 111–112 db.ts) — both potentially large arrays — alongside all metrics and analysis. This means a `SELECT *` on `GET /results` (returning 50 rows) deserializes all JSONB including step data for every row, even when the caller only needs summary fields.
+- `runStaleCleanup` (`cleanup.ts`) purges `live_metrics` (`LIVE_METRICS_RETENTION_DAYS`, default 30), `sessions` (expired/revoked, unconditional), and `audit_log` (`AUDIT_LOG_RETENTION_DAYS`, default 180) on every cleanup cycle. `test_results` itself is the one table with retention disabled by default (`TEST_RESULTS_RETENTION_DAYS=0`) — an explicit GDPR-scoped opt-in, not an oversight, since erasure there needs to be deliberate.
+- The `test_results` table stores `steps JSONB` and `test_data JSONB` (lines 111–112 db.ts) — both potentially large arrays. `GET /results` (list view) now selects an explicit summary column list rather than `r.*`, so this large JSONB (plus `analysis`/`execution_log`) is no longer deserialized per row for a 50-200 row list response — only `GET /results/:testId` (single-result detail) still needs and returns the full row.
 
 ---
 

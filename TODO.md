@@ -4,6 +4,16 @@ Improvements, suggestions, and large future work items. Open items are listed fi
 
 ## Open
 
+- [ ] **`live_metrics` table has no retention/purge** — unlike `test_results` (which has `TEST_RESULTS_RETENTION_DAYS` cleanup via `runStaleCleanup`), `live_metrics` rows are written at the configurable aggregation interval and never purged; with soak tests and many workers this table grows unbounded (index bloat, backup size, write throughput). The live-metrics *read* path (`GET /results/:testId/live`) is already bounded via `downsampleLivePoints()`, but the underlying stored row count is not. Add retention alongside the existing `test_results`/`live_metrics` cascade (or purge `live_metrics` independently once its parent `test_results` row ages out).
+
+### Performance review (2026-07-04) — full findings from a scoped audit (UI, backend services, database, load-test execution path)
+
+- [ ] **Worker SIGTERM doesn't drain in-flight tests** — `worker-backend`/`worker-client` `shutdown()` closes the AMQP connection and `process.exit(0)` immediately on SIGTERM without waiting for `runningTests`/`runningBrowsers` to empty, contradicting `docs/how-to/production.md`'s claim that graceful SIGTERM drain makes KEDA scale-down safe; a scale-down mid-test kills it and RabbitMQ redelivers the message, duplicating work. Fix: stop consuming new messages, poll in-flight count down to 0 (bounded by max test duration + grace period), then close and exit.
+- [ ] **Per-log-line HTTP POST has no batching** — `worker-backend`/`worker-client`'s `addLogLine`/`addLog` fire one unawaited POST per stdout/stderr line (up to 5000/test), causing an unordered fetch storm under concurrent verbose tests; should buffer and flush in batches.
+- [ ] **Puppeteer launches a fresh browser per test — no pooling** — `worker-client/src/runner.ts` calls `puppeteer.launch()` fresh on every test and closes it after, paying the ~1-3s Chrome launch cost every dequeue instead of reusing a small pool sized to `WORKER_CONCURRENCY`.
+- [ ] **worker-backend: unbounded stdout/stderr buffers + synchronous regex parsing** — unlike the adjacent line-capped log buffer, raw `stdoutChunks`/`stderrChunks` accumulate for the whole test duration then get synchronously regex-parsed on the event loop in one shot, blocking health checks/live-metric posting during long verbose tests.
+- [ ] **UI memoization gaps (broader pass)** — home page stat aggregates, `LiveCard`'s sparkline, and the execution log panel all recompute derived data from full/large arrays on every render including unrelated 1s-timer ticks. Also: results-service refetches the AI provider setting twice per AI request (ai-service/analyser-service already cache this for 30s; results-service's own routes don't).
+
 - [ ] **Mobile application performance testing** — investigate approaches: Appium/WebDriverIO for native apps, cloud device farms (AWS Device Farm, BrowserStack), network throttling profiles, mobile-specific metrics (frame rate, battery, memory on device), Android/iOS instrumentation
 - [ ] **Enterprise version with local LLM model** — investigate self-hosted/on-prem LLM (e.g. Ollama, vLLM, local Llama/Mistral/Qwen) as a drop-in replacement for Gemini for enterprise customers who can't send code/data to external APIs; needs a pluggable model-provider abstraction (`GEMINI_MODEL` → generic `AI_PROVIDER`/`AI_MODEL`), evaluation of script-generation quality vs. Gemini, GPU/resource sizing guidance, and config docs for air-gapped deployments
 
@@ -12,6 +22,16 @@ Improvements, suggestions, and large future work items. Open items are listed fi
 ## Completed
 
 *(shipped — kept for history/context)*
+
+### Performance review (2026-07-04) — quick wins
+
+- [x] **Missing DB indexes on hot paths** — migration #16 (`perf_indexes`) adds `idx_team_members_user_id`/`idx_org_members_user_id` (login/switch-team/`/auth/me` previously forced a full scan), `idx_test_results_project_created`/`idx_test_results_workspace_created` composite indexes for `GET /results`'s filter+sort (superseding and dropping the old single-column `idx_test_results_project_id`), and `idx_test_results_url_type_status_created` for `consumer.ts`'s baseline-diff lookup (superseding and dropping the old 3-column `idx_test_results_url_type_status`, which covered the filter but forced a sort over every matching row).
+- [x] **`GET /orgs/:id` N+1 query** — added `getTeamQuotasAndUsageBatch()` (`quotas.ts`) doing 4 batched `WHERE team_id = ANY($1::uuid[])` queries total regardless of team count, replacing the `.map(async ...)` loop in `routes/teams.ts` that issued 4×N queries for N teams.
+- [x] **`GET /results` over-fetches with `SELECT *`** — now selects an explicit column list (id/test_id/type/target_url/status/perf_status/metrics/is_baseline/created_at/completed_at/started_at/duration_seconds/status_message/script_description) instead of `r.*`, excluding the large `script`/`execution_log`/`analysis`/`steps`/`test_data` columns that no list-view consumer (`app/page.tsx`, `app/results/page.tsx`) actually reads.
+- [x] **UI: duplicate active-tests polling** — `activeTests` moved into the existing `HealthContext` (one shared fetch + one debounced WS subscription); `Sidebar`, `ActiveTests`, and the home page now all read `useHealth().activeTests` instead of each independently polling `getActiveTests()` and subscribing to the same WS events.
+- [x] **`AuthContext` not memoized** — `logout`/`switchTeam` wrapped in `useCallback`, provider `value` wrapped in `useMemo`, so `useAuth()` consumers no longer re-render on every unrelated `AuthProvider` render.
+- [x] **ai-service blocks on non-essential notification POST** — the "Generating test script…"/"Script ready…" status POSTs in `processor.ts` are now fire-and-forget (`void postMessage(...)`, which already swallows its own errors) instead of `await`ed ahead of/after script generation.
+- [x] **`sessions`/`audit_log` tables have no retention/purge** — `runStaleCleanup` now also deletes expired/revoked `sessions` rows unconditionally (no grace period — an expired/revoked session has zero future purpose) and `audit_log` rows older than `AUDIT_LOG_RETENTION_DAYS` (default 180, mirroring the `TEST_RESULTS_RETENTION_DAYS` pattern) on every cleanup cycle.
 
 ### Manual Testing
 

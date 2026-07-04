@@ -37,7 +37,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets CASCADE');
+  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, sessions, audit_log, users CASCADE');
   mockBroadcast.mockClear();
 });
 
@@ -234,6 +234,82 @@ describe('runStaleCleanup — test_results retention (GDPR)', () => {
   });
 });
 
+describe('runStaleCleanup — sessions purge', () => {
+  it('deletes expired sessions but keeps valid ones', async () => {
+    const { rows: userRows } = await pool.query(
+      `INSERT INTO users (email, password_hash) VALUES ('stale-session@example.com', 'hash') RETURNING id`
+    );
+    const userId = userRows[0].id;
+    await pool.query(
+      `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, 'expired-token', NOW() - INTERVAL '1 hour')`,
+      [userId]
+    );
+    await pool.query(
+      `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, 'valid-token', NOW() + INTERVAL '1 hour')`,
+      [userId]
+    );
+
+    const result = await runStaleCleanup(pool, 15, 30);
+
+    expect(result.sessionsDeleted).toBe(1);
+    const { rows } = await pool.query('SELECT token_hash FROM sessions WHERE user_id = $1', [userId]);
+    expect(rows.map((r: { token_hash: string }) => r.token_hash)).toEqual(['valid-token']);
+  });
+
+  it('deletes revoked sessions regardless of expiry', async () => {
+    const { rows: userRows } = await pool.query(
+      `INSERT INTO users (email, password_hash) VALUES ('revoked-session@example.com', 'hash') RETURNING id`
+    );
+    const userId = userRows[0].id;
+    await pool.query(
+      `INSERT INTO sessions (user_id, token_hash, expires_at, revoked_at) VALUES ($1, 'revoked-token', NOW() + INTERVAL '1 hour', NOW())`,
+      [userId]
+    );
+
+    const result = await runStaleCleanup(pool, 15, 30);
+
+    expect(result.sessionsDeleted).toBe(1);
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM sessions WHERE user_id = $1', [userId]);
+    expect(rows[0].cnt).toBe(0);
+  });
+});
+
+describe('runStaleCleanup — audit_log retention', () => {
+  it('purges audit_log rows older than AUDIT_LOG_RETENTION_DAYS (default 180)', async () => {
+    await pool.query(
+      `INSERT INTO audit_log (action, resource_type, created_at) VALUES ('delete', 'script', NOW() - INTERVAL '200 days')`
+    );
+    await pool.query(
+      `INSERT INTO audit_log (action, resource_type, created_at) VALUES ('delete', 'script', NOW() - INTERVAL '1 day')`
+    );
+
+    const result = await runStaleCleanup(pool, 15, 30);
+
+    expect(result.auditLogDeleted).toBe(1);
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM audit_log');
+    expect(rows[0].cnt).toBe(1);
+  });
+
+  it('does not purge audit_log when AUDIT_LOG_RETENTION_DAYS is set to 0', async () => {
+    vi.stubEnv('AUDIT_LOG_RETENTION_DAYS', '0');
+    vi.resetModules();
+    const { runStaleCleanup: runStaleCleanupNoAuditRetention } = await import('../cleanup');
+
+    await pool.query(
+      `INSERT INTO audit_log (action, resource_type, created_at) VALUES ('delete', 'script', NOW() - INTERVAL '400 days')`
+    );
+
+    const result = await runStaleCleanupNoAuditRetention(pool, 15, 30);
+
+    expect(result.auditLogDeleted).toBe(0);
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM audit_log');
+    expect(rows[0].cnt).toBe(1);
+
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+});
+
 // ─── startStaleCleanup ────────────────────────────────────────────────────────
 // Uses fake timers + a mock pool so no PostgreSQL container is needed.
 
@@ -257,14 +333,15 @@ describe('startStaleCleanup', () => {
   it('calls runStaleCleanup after 60 seconds', async () => {
     startStaleCleanup(mockPool as unknown as Pool, 15, 30);
     await vi.advanceTimersByTimeAsync(60_000);
-    // runStaleCleanup issues 3 queries: running UPDATE, pending UPDATE, live_metrics DELETE
-    expect(mockPool.query).toHaveBeenCalledTimes(3);
+    // runStaleCleanup issues 5 queries: running UPDATE, pending UPDATE, live_metrics DELETE,
+    // sessions DELETE, audit_log DELETE (test_results DELETE is skipped — retention disabled by default)
+    expect(mockPool.query).toHaveBeenCalledTimes(5);
   });
 
   it('fires repeatedly on every subsequent 60-second tick', async () => {
     startStaleCleanup(mockPool as unknown as Pool, 15, 30);
     await vi.advanceTimersByTimeAsync(180_000); // 3 × 60 s
-    expect(mockPool.query).toHaveBeenCalledTimes(9); // 3 fires × 3 queries
+    expect(mockPool.query).toHaveBeenCalledTimes(15); // 3 fires × 5 queries
   });
 
   it('does not propagate errors when runStaleCleanup rejects', async () => {

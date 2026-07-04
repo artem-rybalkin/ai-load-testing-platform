@@ -138,9 +138,17 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
         const projectId = request.projectId ?? null;
         const workspaceId = request.query.workspaceId ?? null;
 
+        // List views only ever render summary fields — excluding the large columns
+        // (script, execution_log, analysis, steps, test_data) avoids shipping them
+        // for every row in what's often a 50-200 row response.
+        const LIST_COLUMNS = `
+          r.id, r.test_id, r.type, r.target_url, r.status, r.perf_status, r.metrics,
+          r.is_baseline, r.created_at, r.completed_at, r.started_at, r.duration_seconds,
+          r.status_message, s.description AS script_description`;
+
         const { rows } = before
           ? await rPool.query(
-              `SELECT r.*, s.description AS script_description
+              `SELECT ${LIST_COLUMNS}
                FROM test_results r
                LEFT JOIN test_scripts s ON r.script_id = s.id
                WHERE ($1::uuid IS NULL OR r.project_id = $1::uuid)
@@ -150,7 +158,7 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
               [projectId, workspaceId, before, limit],
             )
           : await rPool.query(
-              `SELECT r.*, s.description AS script_description
+              `SELECT ${LIST_COLUMNS}
                FROM test_results r
                LEFT JOIN test_scripts s ON r.script_id = s.id
                WHERE ($1::uuid IS NULL OR r.project_id = $1::uuid)

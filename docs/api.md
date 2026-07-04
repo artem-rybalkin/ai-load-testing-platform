@@ -581,13 +581,13 @@ Worker services include a `metrics` object with `cpuPercent`, `memoryMb`, `memor
 
 ### `GET /results`
 
-All test results, most recent first (last 50). Includes joined script text.
+All test results, most recent first (last 50). Includes the joined script description (not the full script text — see `GET /results/:testId` for that).
 
 ```bash
 curl http://localhost:3004/results | jq '.results[0]'
 ```
 
-**Response:** `{ "results": [ ...TestResult ] }`
+**Response:** `{ "results": [ ...summary fields ] }` — a projection (id/test_id/type/target_url/status/perf_status/metrics/is_baseline/created_at/completed_at/started_at/duration_seconds/status_message/script_description), not the full `TestResult` shape returned by `GET /results/:testId`; the large `script`/`analysis`/`steps`/`test_data`/`execution_log` columns are intentionally excluded from the list view.
 
 ---
 

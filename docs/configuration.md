@@ -107,6 +107,9 @@ Running in results-service — cleans up tests that got stuck.
 | `STALE_PENDING_MINUTES` | `30` | Tests with `status = 'pending'` older than this → marked `failed` |
 | `LIVE_METRICS_RETENTION_DAYS` | `30` | `live_metrics` rows older than this are purged |
 | `TEST_RESULTS_RETENTION_DAYS` | `0` (disabled) | GDPR auto-purge: `test_results` rows (+ their `live_metrics`) older than this are deleted |
+| `AUDIT_LOG_RETENTION_DAYS` | `180` | `audit_log` rows older than this are purged; set to `0` to disable |
+
+Expired/revoked `sessions` rows are also purged on every cleanup cycle, unconditionally (no env var — an expired or revoked session has no future purpose).
 
 ---
 

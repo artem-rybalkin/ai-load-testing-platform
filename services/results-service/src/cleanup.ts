@@ -6,12 +6,16 @@ const CLEANUP_INTERVAL_MS = 60_000;
 const LIVE_METRICS_RETENTION_DAYS = parseInt(process.env.LIVE_METRICS_RETENTION_DAYS ?? '30');
 // GDPR data retention: 0 (default) disables auto-purge of test_results
 const TEST_RESULTS_RETENTION_DAYS = parseInt(process.env.TEST_RESULTS_RETENTION_DAYS ?? '0');
+const AUDIT_LOG_RETENTION_DAYS = parseInt(process.env.AUDIT_LOG_RETENTION_DAYS ?? '180');
 
 export const runStaleCleanup = async (
   pool: Pool,
   runningMinutes: number,
   pendingMinutes: number
-): Promise<{ runningFixed: number; pendingFixed: number; liveMetricsDeleted: number; testResultsDeleted: number }> => {
+): Promise<{
+  runningFixed: number; pendingFixed: number; liveMetricsDeleted: number; testResultsDeleted: number;
+  sessionsDeleted: number; auditLogDeleted: number;
+}> => {
   const { rows: running } = await pool.query(
     `UPDATE test_results SET status = 'failed', status_message = 'Test timed out and was marked as failed'
      WHERE status = 'running'
@@ -65,7 +69,28 @@ export const runStaleCleanup = async (
   if (running.length > 0 || pending.length > 0) broadcast({ type: 'tests:changed' });
   if (liveMetricsDeleted > 0) log.info({ liveMetricsDeleted, retentionDays }, 'Deleted old live_metrics rows');
 
-  return { runningFixed: running.length, pendingFixed: pending.length, liveMetricsDeleted, testResultsDeleted };
+  // sessions is pure auth plumbing (not an audit trail) — an expired or revoked
+  // session row has zero future purpose, so purge unconditionally, no grace period.
+  const { rowCount: sessionsDeletedCount } = await pool.query(
+    `DELETE FROM sessions WHERE expires_at < NOW() OR revoked_at IS NOT NULL`
+  );
+  const sessionsDeleted = sessionsDeletedCount ?? 0;
+  if (sessionsDeleted > 0) log.info({ sessionsDeleted }, 'Deleted expired/revoked sessions rows');
+
+  let auditLogDeleted = 0;
+  if (Number.isFinite(AUDIT_LOG_RETENTION_DAYS) && AUDIT_LOG_RETENTION_DAYS > 0) {
+    const { rowCount } = await pool.query(
+      `DELETE FROM audit_log WHERE created_at < NOW() - ($1 || ' days')::INTERVAL`,
+      [AUDIT_LOG_RETENTION_DAYS]
+    );
+    auditLogDeleted = rowCount ?? 0;
+    if (auditLogDeleted > 0) log.info({ auditLogDeleted, retentionDays: AUDIT_LOG_RETENTION_DAYS }, 'Deleted expired audit_log rows');
+  }
+
+  return {
+    runningFixed: running.length, pendingFixed: pending.length, liveMetricsDeleted, testResultsDeleted,
+    sessionsDeleted, auditLogDeleted,
+  };
 };
 
 export const startStaleCleanup = (pool: Pool, runningMinutes: number, pendingMinutes: number): void => {

@@ -80,6 +80,61 @@ export const incrementGeminiUsage = async (pool: Pool, teamId: string | undefine
   );
 };
 
+/**
+ * Batched equivalent of calling getTeamQuota()+getTeamUsage() per team — used by
+ * GET /orgs/:id, which previously issued 4 queries per team (N+1) instead of the
+ * 4 total queries this does regardless of team count.
+ */
+export const getTeamQuotasAndUsageBatch = async (
+  pool: Pool,
+  teamIds: string[],
+): Promise<Map<string, { quota: TeamQuota; usage: TeamUsage }>> => {
+  if (teamIds.length === 0) return new Map();
+
+  const [quotaRes, concurrentRes, scheduledRes, geminiRes] = await Promise.all([
+    pool.query<{
+      team_id: string; max_concurrent_tests: number; max_vus_per_test: number;
+      max_test_duration_seconds: number; max_scheduled_tests: number; max_gemini_calls_per_day: number;
+    }>('SELECT * FROM team_quotas WHERE team_id = ANY($1::uuid[])', [teamIds]),
+    pool.query<{ project_id: string; count: string }>(
+      `SELECT project_id, COUNT(*) FROM test_results WHERE project_id = ANY($1::uuid[]) AND status IN ('pending','running') GROUP BY project_id`,
+      [teamIds],
+    ),
+    pool.query<{ project_id: string; count: string }>(
+      `SELECT project_id, COUNT(*) FROM schedules WHERE project_id = ANY($1::uuid[]) AND enabled = TRUE GROUP BY project_id`,
+      [teamIds],
+    ),
+    pool.query<{ team_id: string; call_count: number }>(
+      `SELECT team_id, call_count FROM gemini_usage WHERE team_id = ANY($1::uuid[]) AND usage_date = CURRENT_DATE`,
+      [teamIds],
+    ),
+  ]);
+
+  const quotaByTeam = new Map(quotaRes.rows.map(r => [r.team_id, {
+    maxConcurrentTests: r.max_concurrent_tests,
+    maxVusPerTest: r.max_vus_per_test,
+    maxTestDurationSeconds: r.max_test_duration_seconds,
+    maxScheduledTests: r.max_scheduled_tests,
+    maxGeminiCallsPerDay: r.max_gemini_calls_per_day,
+  } satisfies TeamQuota]));
+  const concurrentByTeam = new Map(concurrentRes.rows.map(r => [r.project_id, parseInt(r.count, 10)]));
+  const scheduledByTeam  = new Map(scheduledRes.rows.map(r => [r.project_id, parseInt(r.count, 10)]));
+  const geminiByTeam     = new Map(geminiRes.rows.map(r => [r.team_id, r.call_count]));
+
+  const result = new Map<string, { quota: TeamQuota; usage: TeamUsage }>();
+  for (const teamId of teamIds) {
+    result.set(teamId, {
+      quota: quotaByTeam.get(teamId) ?? { ...DEFAULT_TEAM_QUOTA },
+      usage: {
+        concurrentTests: concurrentByTeam.get(teamId) ?? 0,
+        scheduledTests: scheduledByTeam.get(teamId) ?? 0,
+        geminiCallsToday: geminiByTeam.get(teamId) ?? 0,
+      },
+    });
+  }
+  return result;
+};
+
 export const getTeamUsage = async (pool: Pool, teamId: string): Promise<TeamUsage> => {
   const [concurrentRes, scheduledRes, geminiRes] = await Promise.all([
     pool.query<{ count: string }>(

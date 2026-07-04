@@ -376,6 +376,28 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`ALTER TABLE live_metrics ADD COLUMN IF NOT EXISTS server_error_rate FLOAT NOT NULL DEFAULT 0`);
     },
   },
+  {
+    version: 16,
+    name: 'perf_indexes',
+    up: async (p): Promise<void> => {
+      // team_members/org_members only had a UNIQUE(team_id/org_id, user_id) composite —
+      // useless for a user_id-only lookup (login, switch-team, /auth/me), which forced a full scan.
+      await p.query(`CREATE INDEX IF NOT EXISTS idx_team_members_user_id ON team_members(user_id)`);
+      await p.query(`CREATE INDEX IF NOT EXISTS idx_org_members_user_id  ON org_members(user_id)`);
+
+      // GET /results filters on project_id/workspace_id and sorts by created_at DESC — the old
+      // single-column idx_test_results_project_id could satisfy the filter but not the sort.
+      await p.query(`CREATE INDEX IF NOT EXISTS idx_test_results_project_created   ON test_results(project_id, created_at DESC)`);
+      await p.query(`CREATE INDEX IF NOT EXISTS idx_test_results_workspace_created ON test_results(workspace_id, created_at DESC)`);
+      await p.query(`DROP INDEX IF EXISTS idx_test_results_project_id`); // superseded — same leading column
+
+      // consumer.ts's "find the previous completed result for this URL" query filters on
+      // (target_url, type, status) and sorts by (is_baseline DESC, created_at DESC); the old
+      // 3-column index covered the filter but forced a sort over every matching historical row.
+      await p.query(`CREATE INDEX IF NOT EXISTS idx_test_results_url_type_status_created ON test_results(target_url, type, status, is_baseline DESC, created_at DESC)`);
+      await p.query(`DROP INDEX IF EXISTS idx_test_results_url_type_status`); // superseded — same leading columns
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────
