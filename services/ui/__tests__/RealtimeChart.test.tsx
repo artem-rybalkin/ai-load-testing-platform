@@ -57,7 +57,7 @@ describe('RealtimeChart — chart titles with step metrics', () => {
     // just because values happen to be zero on a happy-path run.
     render(<RealtimeChart points={[basePoint({ stepMetrics: steps(150, 5, 0) })]} />);
     expect(screen.getByText('Error Rate per Step')).toBeInTheDocument();
-    expect(screen.queryByText('VUs & Error Rate')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Error Rate$/)).not.toBeInTheDocument();
   });
 
   it('shows "Throughput per Step" when steps have non-zero rps', () => {
@@ -73,22 +73,28 @@ describe('RealtimeChart — chart titles with step metrics', () => {
 
   // ── Aggregate titles shown when there are no step metrics ─────────────────
 
-  it('shows all aggregate titles when there are no step metrics', () => {
+  it('shows all aggregate titles when there are no step metrics, including the dedicated Virtual Users panel', () => {
     render(<RealtimeChart points={[basePoint()]} />);
     expect(screen.getByText('Response Time')).toBeInTheDocument();
-    expect(screen.getByText('VUs & Error Rate')).toBeInTheDocument();
+    expect(screen.getByText('Error Rate')).toBeInTheDocument();
+    expect(screen.getByText('Virtual Users')).toBeInTheDocument();
     expect(screen.getByText('Throughput')).toBeInTheDocument();
   });
 
-  // ── Aggregate error-rate legend (VUs, total/4xx/5xx are otherwise indistinguishable
+  // ── Aggregate error-rate legend (total/4xx/5xx are otherwise indistinguishable
   // when errors are all one status class, since the lines then overlap exactly) ──
 
-  it('shows a legend identifying VUs, total, 4xx and 5xx lines in the aggregate view', () => {
+  it('shows a legend identifying total, 4xx and 5xx error-rate lines in the aggregate view', () => {
     render(<RealtimeChart points={[basePoint({ errorRate: 20, clientErrorRate: 20, serverErrorRate: 0 })]} />);
-    expect(screen.getByText('VUs')).toBeInTheDocument();
     expect(screen.getByText('Client error (4xx)')).toBeInTheDocument();
     expect(screen.getByText('Server error (5xx)')).toBeInTheDocument();
     expect(screen.getByText('Error rate (total)')).toBeInTheDocument();
+  });
+
+  it('renders VUs on its own single-axis panel, separate from the error-rate lines', () => {
+    render(<RealtimeChart points={[basePoint({ errorRate: 20, clientErrorRate: 20, serverErrorRate: 0 })]} />);
+    expect(screen.getByText('Virtual Users')).toBeInTheDocument();
+    expect(screen.getByText('VUs')).toBeInTheDocument();
   });
 
   it('does not show the aggregate error-rate legend when steps are present', () => {

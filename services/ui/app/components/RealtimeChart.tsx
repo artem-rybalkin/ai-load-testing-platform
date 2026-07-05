@@ -31,7 +31,8 @@ const TOOLTIP_STYLE = {
   color: 'var(--tx)',
 };
 
-const TICK = { fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const TICK = { fill: 'var(--tx-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const GRID_STROKE = 'var(--border-2)';
 
 export const toKey = (name: string) => name.replace(/[^a-zA-Z0-9_]/g, '_');
 
@@ -144,7 +145,7 @@ function RealtimeChart({ points, startedAt }: Props) {
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
-            <CartesianGrid stroke="#f2ede2" vertical={false} />
+            <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit="ms" width={50} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
@@ -161,37 +162,24 @@ function RealtimeChart({ points, startedAt }: Props) {
             )}
           </LineChart>
         </ResponsiveContainer>
-        {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
       </div>
 
       {/* ── Error rate ────────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">
-            {hasSteps ? 'Error Rate per Step' : 'VUs & Error Rate'}
+            {hasSteps ? 'Error Rate per Step' : 'Error Rate'}
           </span>
-          <span className="text-[10px] font-mono text-tx-4">
-            {hasSteps ? 'error %' : 'VUs left · error % right'}
-          </span>
+          <span className="text-[10px] font-mono text-tx-4">error %</span>
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
-            <CartesianGrid stroke="#f2ede2" vertical={false} />
+            <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
-            {hasSteps ? (
-              <YAxis tick={TICK} unit="%" width={42} domain={[0, (max: number) => Math.max(max, 1)]} axisLine={false} tickLine={false} />
-            ) : (
-              <>
-                <YAxis yAxisId="vus" tick={TICK} width={34} axisLine={false} tickLine={false} />
-                <YAxis yAxisId="err" orientation="right" tick={TICK} unit="%" width={42} axisLine={false} tickLine={false} />
-              </>
-            )}
+            <YAxis tick={TICK} unit="%" width={42} domain={[0, (max: number) => Math.max(max, 1)]} axisLine={false} tickLine={false} />
             <Tooltip
               contentStyle={TOOLTIP_STYLE}
-              formatter={(v, name) => {
-                if (hasSteps) return [`${v}%`, labelFor(stepNames, 'err', String(name))];
-                return name === 'VUs' ? [`${v}`, 'VUs'] : [`${v}%`, String(name)];
-              }}
+              formatter={(v, name) => [`${v}%`, hasSteps ? labelFor(stepNames, 'err', String(name)) : String(name)]}
             />
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`err_${toKey(name)}`}
@@ -199,42 +187,54 @@ function RealtimeChart({ points, startedAt }: Props) {
                 dot={false} isAnimationActive={false} name={`err_${toKey(name)}`} connectNulls />
             )) : (
               <>
-                <Line yAxisId="vus" type="monotone" dataKey="vus"
-                  stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />
                 {/* Dashed + drawn last so "total" stays visible even when it exactly
                     overlaps a component line below (e.g. a run with only 4xx errors) */}
-                <Line yAxisId="err" type="monotone" dataKey="clientErrorRate"
+                <Line type="monotone" dataKey="clientErrorRate"
                   stroke="#ca8a04" strokeWidth={1.5} dot={false} name="Client error (4xx)" />
-                <Line yAxisId="err" type="monotone" dataKey="serverErrorRate"
+                <Line type="monotone" dataKey="serverErrorRate"
                   stroke="#991b1b" strokeWidth={1.5} dot={false} name="Server error (5xx)" />
-                <Line yAxisId="err" type="monotone" dataKey="errorRate"
+                <Line type="monotone" dataKey="errorRate"
                   stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 2" dot={false} name="Error rate (total)" />
               </>
             )}
           </LineChart>
         </ResponsiveContainer>
-        {hasSteps
-          ? <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />
-          : (
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
-              {[
-                { label: 'VUs', color: '#16a34a' },
-                { label: 'Client error (4xx)', color: '#ca8a04' },
-                { label: 'Server error (5xx)', color: '#991b1b' },
-                { label: 'Error rate (total)', color: '#dc2626', dashed: true },
-              ].map(item => (
-                <span key={item.label} className="inline-flex items-center gap-1 text-[11px] font-mono text-tx whitespace-nowrap">
-                  <span
-                    className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
-                    style={item.dashed
-                      ? { backgroundImage: `repeating-linear-gradient(to right, ${item.color} 0 4px, transparent 4px 6px)` }
-                      : { backgroundColor: item.color }}
-                  />
-                  {item.label}
-                </span>
-              ))}
-            </div>
-          )}
+        {!hasSteps && (
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
+            {[
+              { label: 'Client error (4xx)', color: '#ca8a04' },
+              { label: 'Server error (5xx)', color: '#991b1b' },
+              { label: 'Error rate (total)', color: '#dc2626', dashed: true },
+            ].map(item => (
+              <span key={item.label} className="inline-flex items-center gap-1 text-[11px] font-mono text-tx whitespace-nowrap">
+                <span
+                  className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
+                  style={item.dashed
+                    ? { backgroundImage: `repeating-linear-gradient(to right, ${item.color} 0 4px, transparent 4px 6px)` }
+                    : { backgroundColor: item.color }}
+                />
+                {item.label}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Virtual users ─────────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px] font-semibold text-tx-3 uppercase tracking-wide">Virtual Users</span>
+          <span className="text-[10px] font-mono text-tx-4">VUs</span>
+        </div>
+        <ResponsiveContainer width="100%" height={CHART_H}>
+          <LineChart data={data}>
+            <CartesianGrid stroke={GRID_STROKE} vertical={false} />
+            <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
+            <YAxis tick={TICK} width={34} domain={[0, 'auto']} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${v}`, 'VUs']} />
+            <Line type="monotone" dataKey="vus" stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
 
       {/* ── Throughput ────────────────────────────────────────────── */}
@@ -247,7 +247,7 @@ function RealtimeChart({ points, startedAt }: Props) {
         </div>
         <ResponsiveContainer width="100%" height={CHART_H}>
           <LineChart data={data}>
-            <CartesianGrid stroke="#f2ede2" vertical={false} />
+            <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit=" rps" width={52} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
@@ -264,8 +264,12 @@ function RealtimeChart({ points, startedAt }: Props) {
             )}
           </LineChart>
         </ResponsiveContainer>
-        {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
       </div>
+
+      {/* One shared legend for all three per-step panels above — they use the
+          same step names/colors, so repeating it under each panel was pure
+          duplication. */}
+      {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
     </div>
   );
 }
