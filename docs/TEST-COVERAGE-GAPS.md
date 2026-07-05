@@ -145,9 +145,11 @@ No interval- or event-driven background path has a fake-timer-based test anywher
 - `createBatcher`/`drainInFlight` (this week's additions) are both well covered.
 
 ### UI (51 source files: 15 components + 13 pages + 23 lib / 30 test files, ~57% with a dedicated test)
-- `app/settings/page.tsx` — **no test file at all.** Neither the admin nor non-admin branch of
-  `isAdmin = user?.role === 'admin'` (which gates the live-metric-window setting) is tested
-  anywhere, at unit or e2e level.
+- ~~`app/settings/page.tsx` — no test file at all~~ — RESOLVED (2026-07-05): `SettingsPage.test.tsx`
+  added, 15 tests covering both the non-admin branch (access-required message, setting never
+  fetched) and the admin branch (loading/error states, all three window options render, Save
+  disabled until a different option is picked, save success/in-flight/error states, error clearing
+  on a subsequent successful save). Still not covered at e2e level (see below).
 - `lib/api/*.ts` submodules (13 files: `ai.ts`, `apiKeys.ts`, `auth.ts`, `core.ts`, `logSources.ts`,
   `orgs.ts`, `presets.ts`, `recording.ts`, `schedules.ts`, `system.ts`, `teams.ts`, `tests.ts`,
   `webhooks.ts`) have no dedicated unit tests — every consumer test mocks `@/lib/api` wholesale, so
@@ -251,7 +253,7 @@ assertions (verified line-by-line, not just asserted in the README). Gaps:
 ## Suggested priority (if picking this up)
 
 1. ~~**1.1**/**1.2** (real-module + AMQP reconnect coverage)~~ — done (2026-07-05).
-2. **UI: Settings page** — zero coverage on an admin-only, easy-to-regress branch.
+2. ~~**UI: Settings page**~~ — done (2026-07-05); e2e coverage for it is still open (see below).
 3. **CI: e2e-on-every-PR** — cheap process fix, closes a real "shipped a UI regression" risk.
 4. **1.3** (contract validation between services) — larger effort, but the AMQP message shape is
    the one thing every service silently depends on.

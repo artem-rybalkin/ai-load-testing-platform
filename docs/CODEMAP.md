@@ -168,6 +168,7 @@ services/ui/
     ├── LoginPage.test.tsx             # login form + API calls (5 tests)
     ├── ResultsSocketContext.test.tsx  # (new)
     ├── results.test.tsx               # compare bar, checkboxes, Re-run button (9 tests)
+    ├── SettingsPage.test.tsx          # admin-gated live-metric-window setting (15 tests)
     ├── SystemHealth.test.tsx          # (new)
     ├── WorkerHealth.test.tsx          # (new)
     └── interpolateLogSourceUrl.test.tsx  # (new)
