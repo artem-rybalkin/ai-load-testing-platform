@@ -70,7 +70,10 @@ services/worker-backend/src/
 
 ```
 services/worker-client/src/
-└── index.ts   # Puppeteer sessions, Web Vitals, Lighthouse, DLQ retry, Fastify health
+├── index.ts       # RabbitMQ consumer, cancel handling, Fastify health
+├── runner.ts      # runClientTest(): Puppeteer sessions, Web Vitals, Lighthouse
+├── browserPool.ts # createBrowserPool(): reuses idle browser processes across tests (sized to WORKER_CONCURRENCY)
+└── retry.ts       # handleRetry(), DLQ routing
 ```
 
 ## services/analyser-service — Port 3008

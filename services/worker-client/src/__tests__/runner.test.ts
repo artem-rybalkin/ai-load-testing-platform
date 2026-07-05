@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Browser } from 'puppeteer';
 import type { TestRequest, ResourceBreakdown } from '@alt/shared';
 import { runClientTest } from '../runner';
+import { createBrowserPool } from '../browserPool';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,7 @@ function makeMockBrowser(opts: {
   initialPages?: ReturnType<typeof makeMockPage>[];
   newPageResult?: ReturnType<typeof makeMockPage> | (() => ReturnType<typeof makeMockPage>);
   wsEndpoint?: string;
+  connected?: boolean;
 } = {}) {
   const initialPages = opts.initialPages ?? [];
   const wsEndpoint = opts.wsEndpoint ?? 'ws://127.0.0.1:9222/devtools/browser/test-uuid';
@@ -94,10 +96,12 @@ function makeMockBrowser(opts: {
   const newPageMock = vi.fn().mockImplementation(makeNewPage);
 
   return {
-    wsEndpoint: vi.fn().mockReturnValue(wsEndpoint),
-    pages:      vi.fn().mockResolvedValue(initialPages),
-    close:      vi.fn().mockResolvedValue(undefined),
-    on:         vi.fn(),
+    wsEndpoint:         vi.fn().mockReturnValue(wsEndpoint),
+    pages:              vi.fn().mockResolvedValue(initialPages),
+    close:              vi.fn().mockResolvedValue(undefined),
+    removeAllListeners: vi.fn(),
+    connected:          opts.connected ?? true,
+    on:                 vi.fn(),
     newPage:    newPageMock,
   };
 }
@@ -204,10 +208,41 @@ describe('runClientTest — basic session flow', () => {
     expect(page.close).toHaveBeenCalled();
   });
 
-  it('always closes the browser in the finally block', async () => {
+  it('does not close a still-connected browser — returns it to the pool for reuse', async () => {
     const { ctx, browser } = makeCtx();
     await runClientTest(BASE_TEST, ctx);
-    expect(browser.close).toHaveBeenCalled();
+    expect(browser.close).not.toHaveBeenCalled();
+    expect(browser.removeAllListeners).toHaveBeenCalledWith('targetcreated');
+  });
+
+  it('reuses the same browser instance across two runClientTest calls sharing a pool', async () => {
+    const browser = makeMockBrowser({ newPageResult: () => makeMockPage() });
+    const launchBrowser = vi.fn().mockResolvedValue(browser);
+    const browserPool = createBrowserPool(launchBrowser as unknown as typeof import('puppeteer').default.launch);
+    const { ctx: ctx1 } = makeCtx({ browser });
+    const { ctx: ctx2 } = makeCtx({ browser });
+
+    await runClientTest(BASE_TEST, { ...ctx1, browserPool });
+    await runClientTest({ ...BASE_TEST, id: 'test-id-2' }, { ...ctx2, browserPool });
+
+    expect(launchBrowser).toHaveBeenCalledOnce();
+    expect(browser.close).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt to re-pool a browser that disconnected during the test (e.g. killed by cancel/timeout)', async () => {
+    const browser = makeMockBrowser({ newPageResult: makeMockPage() });
+    const launchBrowser = vi.fn().mockResolvedValue(browser);
+    const browserPool = createBrowserPool(launchBrowser as unknown as typeof import('puppeteer').default.launch);
+    const { ctx } = makeCtx({ browser });
+
+    // Simulate the browser dying partway through (cancel/max-duration kill it directly).
+    (browser as unknown as { connected: boolean }).connected = false;
+
+    await runClientTest(BASE_TEST, { ...ctx, browserPool });
+
+    // A disconnected browser is never re-pooled: the next acquire() must launch fresh.
+    await browserPool.acquire();
+    expect(launchBrowser).toHaveBeenCalledTimes(2);
   });
 
   it('defaults sessions to 1 when options.sessions is not set', async () => {
@@ -358,13 +393,16 @@ describe('runClientTest — error handling', () => {
     expect(runningBrowsers.has(BASE_TEST.id)).toBe(false);
   });
 
-  it('still closes the browser on error', async () => {
+  it('still releases the browser (back to the pool, not closed) on a page-level error', async () => {
     const page = makeMockPage({ gotoError: new Error('page crash') });
     const browser = makeMockBrowser({ newPageResult: page });
     const { ctx } = makeCtx({ browser });
 
     await runClientTest(BASE_TEST, ctx).catch(() => {});
-    expect(browser.close).toHaveBeenCalled();
+    // A page-level failure (nav timeout, target crash) doesn't mean the whole
+    // browser process is unhealthy — release() still reclaims it for reuse.
+    expect(browser.close).not.toHaveBeenCalled();
+    expect(browser.removeAllListeners).toHaveBeenCalledWith('targetcreated');
   });
 });
 

@@ -18,6 +18,7 @@ import puppeteer, { Browser } from 'puppeteer';
 import lighthouse from 'lighthouse';
 import { TestRequest, ClientMetrics, LighthouseScore, ResourceBreakdown, stripAnsi, internalHeaders, createBatcher } from '@alt/shared';
 import { log } from './logger';
+import { createBrowserPool, BrowserPool } from './browserPool';
 
 // Web Vitals without the optional lighthouse field (for per-session accumulation)
 type WebVitalsSnapshot = Omit<ClientMetrics, 'type' | 'lighthouseScore'>;
@@ -53,6 +54,11 @@ export interface ClientRunnerContext {
   launchBrowser?: typeof puppeteer.launch;
   /** Override for testing — defaults to lighthouse */
   runLighthouse?: typeof lighthouse;
+  /** Shared across invocations in the same worker process so idle browsers get
+   *  reused instead of relaunched — pass the same pool instance for every
+   *  runClientTest call in a worker. Defaults to a fresh single-use pool
+   *  (no reuse) when not provided, e.g. in tests that don't care about it. */
+  browserPool?: BrowserPool;
 }
 
 const MAX_LOG_LINES = 5000;
@@ -68,9 +74,10 @@ export const runClientTest = async (
   const { maxDurationMs, navTimeoutMs, resultsUrl, runningBrowsers, postLogLines } = ctx;
   const launchBrowser = ctx.launchBrowser ?? puppeteer.launch.bind(puppeteer);
   const runLighthouse = ctx.runLighthouse ?? lighthouse;
+  const browserPool = ctx.browserPool ?? createBrowserPool(launchBrowser);
 
   const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
-  testLog.info('Launching browser');
+  testLog.info('Acquiring browser');
 
   const postMessage = (message: string): Promise<Response | void> =>
     fetch(`${resultsUrl}/results/${test.id}/message`, {
@@ -96,15 +103,7 @@ export const runClientTest = async (
 
   let pageLoadCount = 0;
 
-  const browser = await launchBrowser({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
-  });
+  const browser = await browserPool.acquire();
 
   runningBrowsers.set(test.id, browser);
   const killTimer = setTimeout(async () => {
@@ -328,6 +327,6 @@ export const runClientTest = async (
     logBatcher.flush();
     clearTimeout(killTimer);
     runningBrowsers.delete(test.id);
-    await browser.close().catch(() => {});
+    await browserPool.release(browser);
   }
 };

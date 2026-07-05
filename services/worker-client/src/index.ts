@@ -8,6 +8,7 @@ import { TestRequest, TestResult, connectWithBackoff, drainInFlight, internalHea
 import { log } from './logger';
 import { handleRetry, MAX_RETRIES } from './retry';
 import { runClientTest, avgNum, avgResourceBreakdown } from './runner';
+import { createBrowserPool } from './browserPool';
 
 // Re-export for backwards compatibility (metrics.test.ts imports from ../index)
 export { avgNum, avgResourceBreakdown };
@@ -42,6 +43,11 @@ const DLQ                = `${QUEUE}.dlq`;
 const MAX_TEST_DURATION_MS = parseInt(process.env.PUPPETEER_MAX_DURATION_MS ?? '300000'); // 5 min
 const NAV_TIMEOUT_MS = parseInt(process.env.PUPPETEER_NAV_TIMEOUT_MS ?? '60000'); // 1 min
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '2');
+
+// Never more idle browsers than this worker can run tests concurrently — there's
+// no benefit pooling more than that, since it's the most that could ever be
+// checked out at once.
+const browserPool = createBrowserPool(undefined, WORKER_CONCURRENCY);
 
 const runningBrowsers  = new Map<string, Browser>();
 const cancelledTests   = new Set<string>();
@@ -160,6 +166,7 @@ export const start = async (): Promise<void> => {
           resultsUrl:    RESULTS_URL,
           runningBrowsers,
           postLogLines,
+          browserPool,
         });
 
         // r2: check if cancelled while running
