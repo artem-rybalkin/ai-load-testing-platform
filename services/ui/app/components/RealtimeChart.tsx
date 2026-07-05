@@ -19,7 +19,18 @@ export const fmtElapsed = (iso: string, startedAt?: string | null): string => {
   return `${Math.floor(secs / 60)}m${secs % 60 > 0 ? String(secs % 60).padStart(2, '0') + 's' : ''}`;
 };
 
-const STEP_COLORS = ['#ff5a2c', '#16a34a', '#ca8a04', '#7c3aed', '#dc2626', '#0891b2', '#c2410c'];
+// Orange/amber get a dedicated dark-mode step (--chart-orange/--chart-amber in
+// globals.css) — their light-mode hex sits just above the dark OKLCH lightness
+// band [0.48, 0.67], validated via the dataviz skill's validate_palette.js.
+const STEP_COLORS = ['var(--chart-orange)', '#16a34a', 'var(--chart-amber)', '#7c3aed', '#dc2626', '#0891b2', '#c2410c'];
+
+// The worst adjacent pair (step 0 orange <-> step 1 green) sits in the CVD
+// floor band (ΔE 10, validate_palette.js) — legal only with secondary
+// encoding. Alternating solid/dashed strokes by index means any two adjacent
+// steps differ in pattern as well as hue, so they stay distinguishable even
+// under color-vision deficiency or in grayscale.
+const STEP_DASH = '4 2';
+const isDashedStep = (i: number): boolean => i % 2 === 1;
 
 const TOOLTIP_STYLE = {
   background: 'var(--surface)',
@@ -56,15 +67,21 @@ function StepLegend({ stepNames, expanded, onToggle }: LegendProps) {
   return (
     <div className="mt-1.5">
       <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {visible.map((name, i) => (
-          <span key={name} className="inline-flex items-center gap-1 text-[11px] font-mono text-tx whitespace-nowrap">
-            <span
-              className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
-              style={{ backgroundColor: STEP_COLORS[i % STEP_COLORS.length] }}
-            />
-            {name}
-          </span>
-        ))}
+        {visible.map((name, i) => {
+          const color = STEP_COLORS[i % STEP_COLORS.length];
+          const dashed = isDashedStep(i % STEP_COLORS.length);
+          return (
+            <span key={name} className="inline-flex items-center gap-1 text-[11px] font-mono text-tx whitespace-nowrap">
+              <span
+                className="inline-block w-4 h-0.5 rounded-full flex-shrink-0"
+                style={dashed
+                  ? { backgroundImage: `repeating-linear-gradient(to right, ${color} 0 4px, transparent 4px 6px)` }
+                  : { backgroundColor: color }}
+              />
+              {name}
+            </span>
+          );
+        })}
         {stepNames.length > LEGEND_SHOW && (
           <button
             type="button"
@@ -79,8 +96,71 @@ function StepLegend({ stepNames, expanded, onToggle }: LegendProps) {
   );
 }
 
+interface TableRow {
+  t: string;
+  vus: number;
+  rps: number;
+  avgResponseTime: number;
+  errorRate: number;
+  clientErrorRate: number;
+  serverErrorRate: number;
+  [key: string]: number | string;
+}
+
+/**
+ * Accessible table twin of the charts above — color-only encoding on a
+ * continuous scale (the per-step line colors, the amber client-4xx line
+ * sitting below the 3:1 contrast floor) needs a non-color-dependent
+ * alternative per the dataviz skill's accessibility pass.
+ */
+function TableView({ data, stepNames, hasSteps }: { data: TableRow[]; stepNames: string[]; hasSteps: boolean }) {
+  return (
+    <div className="overflow-x-auto border border-border rounded-card">
+      <table className="w-full">
+        <thead>
+          <tr className="bg-surface-2 border-b border-border">
+            {(hasSteps
+              ? ['Time', ...stepNames.flatMap(n => [`${n} avg ms`, `${n} err %`, `${n} rps`])]
+              : ['Time', 'Avg ms', 'Error % (total)', 'Client 4xx %', 'Server 5xx %', 'VUs', 'RPS']
+            ).map(h => (
+              <th key={h} className="py-2.5 px-4 font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase text-right first:text-left whitespace-nowrap">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-3">
+          {data.map((row, i) => (
+            <tr key={i} className="hover:bg-hover">
+              <td className="py-2 px-4 font-mono text-[12.5px] text-tx-3">{row.t}</td>
+              {hasSteps
+                ? stepNames.flatMap(n => {
+                    const k = toKey(n);
+                    return [
+                      <td key={`${n}-avg`} className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{Math.round(Number(row[`avg_${k}`] ?? 0))}</td>,
+                      <td key={`${n}-err`} className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{Number(row[`err_${k}`] ?? 0).toFixed(1)}</td>,
+                      <td key={`${n}-rps`} className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{Number(row[`rps_${k}`] ?? 0).toFixed(1)}</td>,
+                    ];
+                  })
+                : (
+                  <>
+                    <td className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{Math.round(row.avgResponseTime)}</td>
+                    <td className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{row.errorRate.toFixed(1)}</td>
+                    <td className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{row.clientErrorRate.toFixed(1)}</td>
+                    <td className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{row.serverErrorRate.toFixed(1)}</td>
+                    <td className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{row.vus}</td>
+                    <td className="py-2 px-4 text-right font-mono text-[12.5px] text-tx-3">{row.rps.toFixed(1)}</td>
+                  </>
+                )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function RealtimeChart({ points, startedAt }: Props) {
   const [legendExpanded, setLegendExpanded] = useState(false);
+  const [tableView, setTableView] = useState(false);
 
   if (points.length === 0) {
     return (
@@ -135,6 +215,20 @@ function RealtimeChart({ points, startedAt }: Props) {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setTableView(v => !v)}
+          className="text-[11px] font-mono text-accent hover:underline"
+        >
+          {tableView ? '📈 Chart view' : '📋 Table view'}
+        </button>
+      </div>
+
+      {tableView && <TableView data={data as TableRow[]} stepNames={stepNames} hasSteps={hasSteps} />}
+
+      {!tableView && (
+      <>
       {/* ── Response time ─────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1">
@@ -155,10 +249,11 @@ function RealtimeChart({ points, startedAt }: Props) {
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`avg_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
+                strokeDasharray={isDashedStep(i % STEP_COLORS.length) ? STEP_DASH : undefined}
                 dot={false} isAnimationActive={false} name={`avg_${toKey(name)}`} connectNulls />
             )) : (
               <Line type="monotone" dataKey="avgResponseTime"
-                stroke="#ff5a2c" strokeWidth={1.5} dot={false} name="Avg response" />
+                stroke="var(--chart-orange)" strokeWidth={1.5} dot={false} name="Avg response" />
             )}
           </LineChart>
         </ResponsiveContainer>
@@ -184,15 +279,16 @@ function RealtimeChart({ points, startedAt }: Props) {
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`err_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
+                strokeDasharray={isDashedStep(i % STEP_COLORS.length) ? STEP_DASH : undefined}
                 dot={false} isAnimationActive={false} name={`err_${toKey(name)}`} connectNulls />
             )) : (
               <>
                 {/* Dashed + drawn last so "total" stays visible even when it exactly
                     overlaps a component line below (e.g. a run with only 4xx errors) */}
                 <Line type="monotone" dataKey="clientErrorRate"
-                  stroke="#ca8a04" strokeWidth={1.5} dot={false} name="Client error (4xx)" />
+                  stroke="var(--chart-amber)" strokeWidth={1.5} dot={false} name="Client error (4xx)" />
                 <Line type="monotone" dataKey="serverErrorRate"
-                  stroke="#991b1b" strokeWidth={1.5} dot={false} name="Server error (5xx)" />
+                  stroke="var(--chart-red-dark)" strokeWidth={1.5} dot={false} name="Server error (5xx)" />
                 <Line type="monotone" dataKey="errorRate"
                   stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 2" dot={false} name="Error rate (total)" />
               </>
@@ -202,8 +298,8 @@ function RealtimeChart({ points, startedAt }: Props) {
         {!hasSteps && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
             {[
-              { label: 'Client error (4xx)', color: '#ca8a04' },
-              { label: 'Server error (5xx)', color: '#991b1b' },
+              { label: 'Client error (4xx)', color: 'var(--chart-amber)' },
+              { label: 'Server error (5xx)', color: 'var(--chart-red-dark)' },
               { label: 'Error rate (total)', color: '#dc2626', dashed: true },
             ].map(item => (
               <span key={item.label} className="inline-flex items-center gap-1 text-[11px] font-mono text-tx whitespace-nowrap">
@@ -257,6 +353,7 @@ function RealtimeChart({ points, startedAt }: Props) {
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`rps_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
+                strokeDasharray={isDashedStep(i % STEP_COLORS.length) ? STEP_DASH : undefined}
                 dot={false} isAnimationActive={false} name={`rps_${toKey(name)}`} connectNulls />
             )) : (
               <Line type="monotone" dataKey="rps"
@@ -270,6 +367,8 @@ function RealtimeChart({ points, startedAt }: Props) {
           same step names/colors, so repeating it under each panel was pure
           duplication. */}
       {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
+      </>
+      )}
     </div>
   );
 }

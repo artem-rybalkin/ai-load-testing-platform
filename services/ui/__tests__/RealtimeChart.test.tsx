@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 afterEach(() => cleanup());
 
 // Recharts uses ResizeObserver and SVG which are unavailable in jsdom.
@@ -100,6 +100,57 @@ describe('RealtimeChart — chart titles with step metrics', () => {
   it('does not show the aggregate error-rate legend when steps are present', () => {
     render(<RealtimeChart points={[basePoint({ stepMetrics: steps(150, 5, 3.5) })]} />);
     expect(screen.queryByText('Error rate (total)')).not.toBeInTheDocument();
+  });
+});
+
+describe('RealtimeChart — table view (accessibility twin of the charts)', () => {
+  it('shows the chart panels and no table by default', () => {
+    render(<RealtimeChart points={[basePoint()]} />);
+    expect(screen.getByText('Response Time')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByText('📋 Table view')).toBeInTheDocument();
+  });
+
+  it('switches to a table and hides the chart panels when toggled', () => {
+    render(<RealtimeChart points={[basePoint()]} />);
+    fireEvent.click(screen.getByText('📋 Table view'));
+
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.queryByText('Response Time')).not.toBeInTheDocument();
+    expect(screen.getByText('📈 Chart view')).toBeInTheDocument();
+  });
+
+  it('renders aggregate columns and a row per data point', () => {
+    render(<RealtimeChart points={[
+      basePoint({ timestamp: '2024-01-01T00:00:05.000Z', avgResponseTime: 120, errorRate: 2, clientErrorRate: 1, serverErrorRate: 1, vus: 10, rps: 5 }),
+      basePoint({ timestamp: '2024-01-01T00:00:10.000Z', avgResponseTime: 140, errorRate: 0, vus: 12, rps: 6 }),
+    ]} />);
+    fireEvent.click(screen.getByText('📋 Table view'));
+
+    expect(screen.getByText('Avg ms')).toBeInTheDocument();
+    expect(screen.getByText('Error % (total)')).toBeInTheDocument();
+    expect(screen.getByText('Client 4xx %')).toBeInTheDocument();
+    expect(screen.getByText('Server 5xx %')).toBeInTheDocument();
+    expect(screen.getAllByRole('row')).toHaveLength(3); // header + 2 data rows
+  });
+
+  it('renders per-step columns when step metrics are present', () => {
+    render(<RealtimeChart points={[basePoint({ stepMetrics: steps(150, 5, 3.5) })]} />);
+    fireEvent.click(screen.getByText('📋 Table view'));
+
+    expect(screen.getByText('Step 1: Login avg ms')).toBeInTheDocument();
+    expect(screen.getByText('Step 1: Login err %')).toBeInTheDocument();
+    expect(screen.getByText('Step 1: Login rps')).toBeInTheDocument();
+    expect(screen.getByText('Step 2: Browse avg ms')).toBeInTheDocument();
+  });
+
+  it('toggles back to the chart view', () => {
+    render(<RealtimeChart points={[basePoint()]} />);
+    fireEvent.click(screen.getByText('📋 Table view'));
+    fireEvent.click(screen.getByText('📈 Chart view'));
+
+    expect(screen.getByText('Response Time')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 });
 

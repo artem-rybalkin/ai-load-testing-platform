@@ -34,6 +34,16 @@
   --purple-fg: #7c3aed;
   --indigo-fg: #4338ca;
 
+  /* RealtimeChart line colors — validated per-theme via the dataviz skill's
+     validate_palette.js against this app's actual chart surface (--surface),
+     not reused from --*-fg (those are tuned for text/badge contrast, a
+     lighter band than a thin chart stroke needs). Only the 3 that failed the
+     dark-mode OKLCH lightness band [0.48, 0.67] get a distinct dark step;
+     the rest of RealtimeChart's palette already passes in both modes. */
+  --chart-orange: #ff5a2c;
+  --chart-amber: #ca8a04;
+  --chart-red-dark: #991b1b;
+
   --orange-bg: #fff0eb;
   --orange-bd: #ffd9cc;
   --green-bg: #e9f7ee;
@@ -98,6 +108,11 @@
   --amber-badge-fg: #fbbf24;
   --purple-fg: #a78bfa;
   --indigo-fg: #818cf8;
+
+  /* Dark-mode steps for RealtimeChart — see :root for how these were derived. */
+  --chart-orange: #f55020;
+  --chart-amber: #c28200;
+  --chart-red-dark: #ab2f2a;
 
   --orange-bg: #2c1a10;
   --orange-bd: #4a2a1c;

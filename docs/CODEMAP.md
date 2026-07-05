@@ -164,7 +164,7 @@ services/ui/
     ├── ClientChart.tsx      # Radar + VitalCards (Core Web Vitals incl. INP/TBT) + Page Health + Resource Breakdown
     ├── FlowStepChart.tsx    # Grouped bar: avg+p95 per step
     ├── AnalysisPanel.tsx    # Perf badge + threshold violations + AI insights
-    ├── RealtimeChart.tsx    # 3-panel live metrics (response time, error rate, throughput)
+    ├── RealtimeChart.tsx    # 4-panel live metrics (response time, error rate, virtual users, throughput) + table-view toggle
     ├── TrendChart.tsx       # p95/LCP trend line across runs for same URL
     └── FlowBuilder.tsx      # Multi-step flow editor + HAR import + Record button + per-step "Request headers" editor
 └── __tests__/
