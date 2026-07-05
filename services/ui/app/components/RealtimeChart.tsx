@@ -40,7 +40,68 @@ const TOOLTIP_STYLE = {
   fontFamily: "'JetBrains Mono', monospace",
   boxShadow: 'none',
   color: 'var(--tx)',
+  padding: '8px 10px',
 };
+
+interface TooltipPayloadItem {
+  name?: string;
+  value?: number | string;
+  color?: string;
+  stroke?: string;
+}
+
+/**
+ * Custom tooltip content — Recharts' default renders "name: value" with a
+ * filled box swatch. The dataviz skill's spec: values lead (the reader has
+ * the series already and wants the number), names follow, and a series is
+ * keyed with a short line stroke rather than a box (a filled box is
+ * data-weight ink doing a label's job at tooltip density).
+ */
+// Recharts' own TooltipContentProps carries generic ValueType/NameType (which
+// can be arrays), so the boundary is intentionally loose here — normalized
+// into the clean TooltipPayloadItem shape below before use.
+interface RawTooltipPayloadItem {
+  name?: unknown;
+  value?: unknown;
+  color?: string;
+  stroke?: string;
+}
+
+export function ChartTooltip({
+  active, label, payload, unit, resolveLabel, isDashed,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: readonly RawTooltipPayloadItem[];
+  unit: string;
+  resolveLabel: (item: TooltipPayloadItem) => string;
+  isDashed?: (item: TooltipPayloadItem) => boolean;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const items: TooltipPayloadItem[] = payload.map((p) => ({
+    name:   p.name != null ? String(p.name) : undefined,
+    value:  typeof p.value === 'number' ? p.value : p.value != null ? String(p.value) : undefined,
+    color:  p.color,
+    stroke: p.stroke,
+  }));
+  return (
+    <div style={TOOLTIP_STYLE}>
+      {label !== undefined && <div className="text-tx-4 mb-1">{label}</div>}
+      <div className="space-y-1">
+        {items.map((item, i) => (
+          <div key={i} className="flex items-center gap-1.5 whitespace-nowrap">
+            <span
+              className="inline-block w-3 flex-shrink-0"
+              style={{ height: 2, backgroundColor: item.stroke ?? item.color, ...(isDashed?.(item) ? { backgroundImage: `repeating-linear-gradient(to right, ${item.stroke ?? item.color} 0 3px, transparent 3px 4.5px)`, backgroundColor: 'transparent' } : {}) }}
+            />
+            <span className="font-semibold text-tx">{item.value}{unit}</span>
+            <span className="text-tx-4">{resolveLabel(item)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const TICK = { fill: 'var(--tx-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
 const GRID_STROKE = 'var(--border-2)';
@@ -243,8 +304,14 @@ function RealtimeChart({ points, startedAt }: Props) {
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit="ms" width={50} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
-              contentStyle={TOOLTIP_STYLE}
-              formatter={(v, name) => [`${v}ms`, hasSteps ? labelFor(stepNames, 'avg', String(name)) : 'Avg response']}
+              content={(props) => (
+                <ChartTooltip
+                  {...props}
+                  unit="ms"
+                  resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'avg', item.name ?? '')) : 'Avg response'}
+                  isDashed={(item) => hasSteps && isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'avg', item.name ?? ''))) % STEP_COLORS.length)}
+                />
+              )}
             />
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`avg_${toKey(name)}`}
@@ -273,8 +340,16 @@ function RealtimeChart({ points, startedAt }: Props) {
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit="%" width={42} domain={[0, (max: number) => Math.max(max, 1)]} axisLine={false} tickLine={false} />
             <Tooltip
-              contentStyle={TOOLTIP_STYLE}
-              formatter={(v, name) => [`${v}%`, hasSteps ? labelFor(stepNames, 'err', String(name)) : String(name)]}
+              content={(props) => (
+                <ChartTooltip
+                  {...props}
+                  unit="%"
+                  resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'err', item.name ?? '')) : (item.name ?? '')}
+                  isDashed={(item) => hasSteps
+                    ? isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'err', item.name ?? ''))) % STEP_COLORS.length)
+                    : item.name === 'Error rate (total)'}
+                />
+              )}
             />
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`err_${toKey(name)}`}
@@ -327,7 +402,7 @@ function RealtimeChart({ points, startedAt }: Props) {
             <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} width={34} domain={[0, 'auto']} axisLine={false} tickLine={false} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${v}`, 'VUs']} />
+            <Tooltip content={(props) => <ChartTooltip {...props} unit="" resolveLabel={() => 'VUs'} />} />
             <Line type="monotone" dataKey="vus" stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />
           </LineChart>
         </ResponsiveContainer>
@@ -347,8 +422,14 @@ function RealtimeChart({ points, startedAt }: Props) {
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit=" rps" width={52} domain={[0, 'auto']} axisLine={false} tickLine={false} />
             <Tooltip
-              contentStyle={TOOLTIP_STYLE}
-              formatter={(v, name) => [`${v} rps`, hasSteps ? labelFor(stepNames, 'rps', String(name)) : 'RPS']}
+              content={(props) => (
+                <ChartTooltip
+                  {...props}
+                  unit=" rps"
+                  resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'rps', item.name ?? '')) : 'RPS'}
+                  isDashed={(item) => hasSteps && isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'rps', item.name ?? ''))) % STEP_COLORS.length)}
+                />
+              )}
             />
             {hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`rps_${toKey(name)}`}

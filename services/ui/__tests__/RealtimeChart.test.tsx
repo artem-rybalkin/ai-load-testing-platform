@@ -16,7 +16,7 @@ vi.mock('recharts', () => ({
   ResponsiveContainer: () => null,
 }));
 
-import RealtimeChart, { toKey, labelFor, fmtElapsed } from '../app/components/RealtimeChart';
+import RealtimeChart, { toKey, labelFor, fmtElapsed, ChartTooltip } from '../app/components/RealtimeChart';
 import type { LiveMetricPoint } from '@/lib/api';
 
 const basePoint = (overrides?: Partial<LiveMetricPoint>): LiveMetricPoint => ({
@@ -230,6 +230,91 @@ describe('fmtElapsed', () => {
     const iso = '2024-01-01T12:34:56.000Z';
     const expected = new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     expect(fmtElapsed(iso, null)).toBe(expected);
+  });
+});
+
+// ─── ChartTooltip ───────────────────────────────────────────────────────────────
+//
+// The parent RealtimeChart tests above mock recharts' <Tooltip> to a null
+// renderer, so its `content` render-prop function (and therefore
+// ChartTooltip) is never actually invoked there — tested directly here
+// instead.
+
+describe('ChartTooltip', () => {
+  it('renders nothing when inactive', () => {
+    const { container } = render(
+      <ChartTooltip active={false} label="5s" payload={[{ name: 'RPS', value: 10 }]} unit=" rps" resolveLabel={(i) => i.name ?? ''} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders nothing with an empty payload', () => {
+    const { container } = render(
+      <ChartTooltip active={true} label="5s" payload={[]} unit=" rps" resolveLabel={(i) => i.name ?? ''} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('shows the value leading and the label following, per row', () => {
+    render(
+      <ChartTooltip
+        active={true}
+        label="12s"
+        payload={[{ name: 'RPS', value: 42, stroke: '#7c3aed' }]}
+        unit=" rps"
+        resolveLabel={(item) => item.name ?? ''}
+      />,
+    );
+    expect(screen.getByText('12s')).toBeInTheDocument();
+    expect(screen.getByText('42 rps')).toBeInTheDocument();
+    expect(screen.getByText('RPS')).toBeInTheDocument();
+  });
+
+  it('renders one row per payload entry', () => {
+    render(
+      <ChartTooltip
+        active={true}
+        label="0s"
+        payload={[
+          { name: 'Client error (4xx)', value: 3, stroke: 'var(--chart-amber)' },
+          { name: 'Server error (5xx)', value: 1, stroke: 'var(--chart-red-dark)' },
+        ]}
+        unit="%"
+        resolveLabel={(item) => item.name ?? ''}
+      />,
+    );
+    expect(screen.getByText('3%')).toBeInTheDocument();
+    expect(screen.getByText('1%')).toBeInTheDocument();
+    expect(screen.getByText('Client error (4xx)')).toBeInTheDocument();
+    expect(screen.getByText('Server error (5xx)')).toBeInTheDocument();
+  });
+
+  it('resolveLabel controls the displayed name independently of the raw payload name', () => {
+    render(
+      <ChartTooltip
+        active={true}
+        label="8s"
+        payload={[{ name: 'avg_Step_1_Login', value: 150 }]}
+        unit="ms"
+        resolveLabel={() => 'Step 1: Login'}
+      />,
+    );
+    expect(screen.getByText('Step 1: Login')).toBeInTheDocument();
+    expect(screen.queryByText('avg_Step_1_Login')).not.toBeInTheDocument();
+  });
+
+  it('normalizes a numeric payload name/value without throwing', () => {
+    render(
+      <ChartTooltip
+        active={true}
+        label={5}
+        payload={[{ name: 200, value: 12 }]}
+        unit=""
+        resolveLabel={(item) => item.name ?? ''}
+      />,
+    );
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('200')).toBeInTheDocument();
   });
 });
 
