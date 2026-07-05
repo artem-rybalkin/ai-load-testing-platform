@@ -6,16 +6,16 @@ import { EnrichedTestRequest, connectWithBackoff } from '@alt/shared';
 import { log } from './logger';
 import { processAiRequest } from './processor';
 
-const CONSUME_QUEUE      = 'ai-requests';
-const BACKEND_QUEUE      = 'backend-tests';
-const CLIENT_QUEUE       = 'client-tests';
-const DLQ                = `${CONSUME_QUEUE}.dlq`;
-const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '3');
+export const CONSUME_QUEUE = 'ai-requests';
+export const BACKEND_QUEUE = 'backend-tests';
+export const CLIENT_QUEUE  = 'client-tests';
+export const DLQ           = `${CONSUME_QUEUE}.dlq`;
+const WORKER_CONCURRENCY   = parseInt(process.env.WORKER_CONCURRENCY ?? '3');
 
 let queueConnected = false;
 let reconnecting = false;
 
-const app = Fastify({ logger: true });
+export const app = Fastify({ logger: true });
 
 app.get('/health', async (_request, reply) => {
   const healthy = queueConnected;
@@ -39,7 +39,7 @@ const scheduleReconnect = (): void => {
   });
 };
 
-const startConsumer = async (): Promise<void> => {
+export const startConsumer = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
 
@@ -103,4 +103,6 @@ const start = async (): Promise<void> => {
   }
 };
 
-start();
+if (!process.env.VITEST) {
+  start();
+}

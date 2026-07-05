@@ -1,547 +1,454 @@
 /**
- * Unit tests for worker-backend/src/index.ts
+ * Unit tests for worker-backend/src/index.ts — its own responsibilities:
+ * connection/channel lifecycle (reconnect on close/error), queue setup,
+ * saveScript/notify* REST helpers, and the Stop-button cancel orchestration
+ * in the real queue consumer. k6 execution itself (runK6Test) is mocked —
+ * that's runner.test.ts's job (exit codes, SIGTERM/SIGKILL escalation, log
+ * batching are all covered there against the real function).
  *
- * saveScript() and handleRetry() are tested by extracting them from the
- * module. Because index.ts throws at module-load time when DATABASE_URL is
- * absent, we set the env var before importing (vitest.config.ts already does
- * this for integration tests; we replicate it here for unit isolation).
- *
- * pg.Pool and amqplib.Channel are mocked so no real DB or broker is needed.
+ * amqplib is mocked with EventEmitter-based fake connection/channel objects
+ * so the real start()/scheduleReconnect() code runs against them, instead of
+ * hand-reimplementing the logic as a parallel function that can silently
+ * drift from src/index.ts without failing (the previous version of this
+ * file did that for handleRetry/validateScript/the stop branch — both
+ * handleRetry and validateScript already have real-module coverage in
+ * runner.test.ts, so those duplicates were dead weight, not just untested).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import type { EnrichedTestRequest, BackendMetrics } from '@alt/shared';
 
-// ── pg mock ────────────────────────────────────────────────────────────────
-const mockQuery = vi.fn();
-vi.mock('pg', () => ({
-  Pool: vi.fn().mockImplementation(() => ({ query: mockQuery })),
-}));
-
-// ── amqplib mock ──────────────────────────────────────────────────────────
-vi.mock('amqplib', () => ({ default: { connect: vi.fn() } }));
-
-// ── child_process mock (prevents k6 spawn) ────────────────────────────────
-const mockSpawn = vi.fn();
-vi.mock('child_process', () => ({ spawn: mockSpawn }));
-
-// ── fastify mock (prevents health server from binding) ────────────────────
-vi.mock('fastify', () => ({
-  default: vi.fn(() => ({
-    get:    vi.fn(),
-    listen: vi.fn().mockResolvedValue(undefined),
-  })),
-}));
-
-// ── Helpers ───────────────────────────────────────────────────────────────
+process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://placeholder:placeholder@localhost:5432/placeholder';
+process.env.RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://placeholder:placeholder@localhost:5672';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
 
-const makeChannel = (): { publish: MockFn; sendToQueue: MockFn; ack: MockFn } => ({
-  publish:     vi.fn(),
-  sendToQueue: vi.fn(),
-  ack:         vi.fn(),
+// ── pg mock ──────────────────────────────────────────────────────────────
+// A real class, not vi.fn().mockImplementation(() => ({...})) — an arrow
+// function has no [[Construct]], so `new Pool(...)` would throw "is not a
+// constructor" the moment a test actually imports the real module.
+const mockQuery = vi.hoisted(() => vi.fn());
+vi.mock('pg', () => ({
+  Pool: class { query = mockQuery; },
+}));
+
+// ── amqplib mock ─────────────────────────────────────────────────────────
+const mockConnect = vi.hoisted(() => vi.fn());
+vi.mock('amqplib', () => ({ default: { connect: mockConnect } }));
+
+// ── runner mock — keep the real handleRetry/GRACE_PERIOD_MS, fake runK6Test ─
+const mockRunK6Test = vi.hoisted(() => vi.fn());
+vi.mock('../runner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../runner')>();
+  return { ...actual, runK6Test: mockRunK6Test };
 });
 
-const makeMessage = (retryCount?: number): { content: Buffer; properties: { headers: Record<string, number> } } => ({
-  content: Buffer.from('{}'),
-  properties: {
-    headers: retryCount !== undefined ? { 'x-retry-count': retryCount } : {},
-  },
-});
+vi.mock('../logger', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
 
-// ── saveScript (re-implemented inline to test the two branches) ───────────
-//
-// We test the exact logic in worker-backend/src/index.ts saveScript():
-//   • scriptId present  → UPDATE used_count only (no INSERT)
-//   • scriptId absent   → INSERT / ON CONFLICT UPDATE with description
+vi.mock('@opentelemetry/api', () => ({ trace: { getActiveSpan: vi.fn().mockReturnValue(null) } }));
 
-const saveScriptFn = async (
-  pool: { query: typeof mockQuery },
-  targetUrl: string,
-  script: string,
-  scriptId?: string,
-  description?: string,
-  projectId?: string,
-): Promise<string> => {
-  if (scriptId) {
-    await pool.query(
-      'UPDATE test_scripts SET used_count = used_count + 1, updated_at = NOW() WHERE id = $1',
-      [scriptId],
-    );
-    return scriptId;
-  }
-  const { rows } = await pool.query(
-    `INSERT INTO test_scripts (target_url, test_type, script, description, project_id)
-     VALUES ($1, 'backend', $2, $3, $4)
-     ON CONFLICT (target_url, test_type) DO UPDATE
-     SET script = EXCLUDED.script, description = EXCLUDED.description, updated_at = NOW(),
-         project_id = COALESCE(test_scripts.project_id, EXCLUDED.project_id)
-     RETURNING id`,
-    [targetUrl, script, description ?? null, projectId ?? null],
-  );
-  return rows[0].id;
+// initTracing() (@alt/tracing) registers its own process signal handlers for
+// graceful span-flush-on-shutdown; across 20+ vi.resetModules() re-imports in
+// this file that trips Node's MaxListenersExceededWarning. Side-effect-only
+// import (no exports used), safe to no-op in tests.
+vi.mock('../tracing', () => ({}));
+
+// ── Fakes ────────────────────────────────────────────────────────────────
+
+type FakeChannel = EventEmitter & {
+  assertQueue: MockFn; assertExchange: MockFn; bindQueue: MockFn; consume: MockFn;
+  ack: MockFn; sendToQueue: MockFn; publish: MockFn; prefetch: MockFn; cancel: MockFn;
 };
 
-// ── handleRetry (re-implemented inline matching worker-backend/src/index.ts) ─
+function makeFakeChannel(): FakeChannel {
+  const ch = new EventEmitter() as FakeChannel;
+  ch.assertQueue    = vi.fn().mockResolvedValue({ queue: 'cancel-queue-name' });
+  ch.assertExchange = vi.fn().mockResolvedValue(undefined);
+  ch.bindQueue      = vi.fn().mockResolvedValue(undefined);
+  ch.consume        = vi.fn().mockResolvedValue({ consumerTag: 'tag-1' });
+  ch.ack            = vi.fn();
+  ch.sendToQueue    = vi.fn();
+  ch.publish        = vi.fn();
+  ch.prefetch       = vi.fn();
+  ch.cancel         = vi.fn().mockResolvedValue(undefined);
+  return ch;
+}
 
-const MAX_RETRIES = 3;
+type FakeConnection = EventEmitter & { createChannel: MockFn; close: MockFn };
 
-const handleRetryFn = (
-  channel: ReturnType<typeof makeChannel>,
-  msg: ReturnType<typeof makeMessage>,
-  queue: string,
-  dlq: string,
-  _testId: string,
-): void => {
-  const retryCount = ((msg.properties.headers?.['x-retry-count'] as number) ?? 0);
-  if (retryCount < MAX_RETRIES) {
-    channel.publish('', queue, msg.content, {
-      persistent: true,
-      headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 },
-    });
-  } else {
-    channel.sendToQueue(dlq, msg.content, { persistent: true });
-  }
-  channel.ack(msg as never);
-};
+function makeFakeConnection(channel: FakeChannel): FakeConnection {
+  const conn = new EventEmitter() as FakeConnection;
+  conn.createChannel = vi.fn().mockResolvedValue(channel);
+  conn.close = vi.fn().mockResolvedValue(undefined);
+  return conn;
+}
 
-// ── validateScript (re-implemented inline matching worker-backend/src/index.ts) ─
-//
-// Spawns `k6 inspect <path>`, capturing stderr so a non-zero exit (script
-// load/syntax error — k6 inspect makes no network calls) is diagnosable.
-
-const validateScriptFn = (scriptPath: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const k6 = mockSpawn('k6', ['inspect', scriptPath]);
-    const stderrChunks: Buffer[] = [];
-    k6.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
-    k6.on('close', (code: number) => {
-      if (code === 0) { resolve(); return; }
-      const detail = Buffer.concat(stderrChunks).toString('utf8').trim().slice(0, 2000);
-      reject(new Error(`k6 script validation failed (exit ${code})${detail ? `: ${detail}` : ''}`));
-    });
-    k6.on('error', reject);
-  });
-
-const makeFakeK6Process = (): EventEmitter & { stderr: EventEmitter } => {
-  const proc = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
-  proc.stderr = new EventEmitter();
-  return proc;
-};
-
-// ── notify* REST helpers (re-implemented inline matching src/index.ts) ────
-//
-// worker-backend now reports status transitions via results-service's REST
-// endpoints (instead of direct pool.query writes) so that broadcast() fires
-// and connected UI clients receive WebSocket pushes. Errors are swallowed —
-// these are best-effort notifications, not the source of truth (DB write
-// happens inside results-service).
-
-const RESULTS_URL = 'http://results-service:3004';
-
-const notifyRunningFn = async (testId: string): Promise<void> => {
-  try { await fetch(`${RESULTS_URL}/results/${testId}/running`, { method: 'POST' }); }
-  catch { /* best-effort */ }
-};
-
-const notifyFailedFn = async (testId: string): Promise<void> => {
-  try { await fetch(`${RESULTS_URL}/results/${testId}/fail`, { method: 'POST' }); }
-  catch { /* best-effort */ }
-};
-
-const notifyCancelledFn = async (testId: string): Promise<void> => {
-  try { await fetch(`${RESULTS_URL}/results/${testId}/cancel`, { method: 'POST' }); }
-  catch { /* best-effort */ }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-const pool = { query: mockQuery };
-
-beforeEach(() => { vi.clearAllMocks(); });
-
-// ── saveScript ────────────────────────────────────────────────────────────
-
-describe('saveScript — scriptId present (REUSE path)', () => {
-  it('increments used_count and returns the same scriptId', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [] });
-
-    const result = await saveScriptFn(pool, 'http://x.com', 'k6script', 'existing-id');
-
-    expect(result).toBe('existing-id');
-    expect(mockQuery).toHaveBeenCalledOnce();
-    expect(mockQuery.mock.calls[0][0]).toMatch(/UPDATE test_scripts SET used_count/);
-    expect(mockQuery.mock.calls[0][1]).toEqual(['existing-id']);
-  });
-
-  it('does NOT run an INSERT when scriptId is provided', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [] });
-
-    await saveScriptFn(pool, 'http://x.com', 'k6script', 'existing-id');
-
-    expect(mockQuery.mock.calls[0][0]).not.toMatch(/INSERT/);
-  });
+const makeTest = (overrides: Partial<EnrichedTestRequest> = {}): EnrichedTestRequest => ({
+  id:              'test-id',
+  type:            'backend',
+  targetUrl:       'https://example.com',
+  description:     'load test',
+  options:         { vus: 10, duration: '1m' },
+  createdAt:       '2025-01-01T00:00:00Z',
+  generatedScript: 'export default function() {}',
+  ...overrides,
 });
 
-describe('saveScript — no scriptId (new script path)', () => {
-  it('inserts a new script and returns the generated id', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
-
-    const result = await saveScriptFn(pool, 'http://x.com', 'k6script');
-
-    expect(result).toBe('new-uuid');
-    expect(mockQuery.mock.calls[0][0]).toMatch(/INSERT INTO test_scripts/);
-  });
-
-  it('stores the description when provided', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
-
-    await saveScriptFn(pool, 'http://x.com', 'k6script', undefined, 'my description');
-
-    expect(mockQuery.mock.calls[0][1]).toContain('my description');
-  });
-
-  it('stores null description when none provided', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
-
-    await saveScriptFn(pool, 'http://x.com', 'k6script');
-
-    expect(mockQuery.mock.calls[0][1]).toContain(null);
-  });
-
-  it('stores projectId when provided', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
-
-    await saveScriptFn(pool, 'http://x.com', 'k6script', undefined, undefined, 'project-123');
-
-    expect(mockQuery.mock.calls[0][1]).toContain('project-123');
-  });
-
-  it('stores null projectId when none provided', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
-
-    await saveScriptFn(pool, 'http://x.com', 'k6script');
-
-    expect(mockQuery.mock.calls[0][1]).toEqual(['http://x.com', 'k6script', null, null]);
-  });
-
-  it('preserves an existing project_id on conflict via COALESCE', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'existing-uuid' }] });
-
-    await saveScriptFn(pool, 'http://x.com', 'k6script', undefined, undefined, 'project-123');
-
-    expect(mockQuery.mock.calls[0][0]).toMatch(/project_id = COALESCE\(test_scripts\.project_id, EXCLUDED\.project_id\)/);
-  });
+const makeMetrics = (overrides: Partial<BackendMetrics> = {}): BackendMetrics => ({
+  type: 'backend',
+  requestsTotal: 10,
+  requestsFailed: 0,
+  avgResponseTime: 100,
+  p50ResponseTime: 90,
+  p95ResponseTime: 150,
+  p99ResponseTime: 200,
+  rps: 5,
+  ...overrides,
 });
 
-// ── handleRetry ───────────────────────────────────────────────────────────
-
-describe('handleRetry — within retry budget', () => {
-  it('republishes to the work queue with incremented retry count', () => {
-    const ch  = makeChannel();
-    const msg = makeMessage(0);
-
-    handleRetryFn(ch, msg, 'backend-tests', 'backend-tests.dlq', 'tid');
-
-    expect(ch.publish).toHaveBeenCalledOnce();
-    expect(ch.publish.mock.calls[0][1]).toBe('backend-tests');
-    expect(ch.publish.mock.calls[0][3].headers['x-retry-count']).toBe(1);
-    expect(ch.sendToQueue).not.toHaveBeenCalled();
-    expect(ch.ack).toHaveBeenCalledOnce();
-  });
-
-  it('increments retry count on the second retry', () => {
-    const ch  = makeChannel();
-    const msg = makeMessage(1);
-
-    handleRetryFn(ch, msg, 'backend-tests', 'backend-tests.dlq', 'tid');
-
-    expect(ch.publish.mock.calls[0][3].headers['x-retry-count']).toBe(2);
-  });
-
-  it('treats missing x-retry-count header as 0', () => {
-    const ch  = makeChannel();
-    const msg = makeMessage(); // no header
-
-    handleRetryFn(ch, msg, 'backend-tests', 'backend-tests.dlq', 'tid');
-
-    expect(ch.publish.mock.calls[0][3].headers['x-retry-count']).toBe(1);
-  });
+const makeMsg = (body: unknown): { content: Buffer; properties: { headers: Record<string, unknown> } } => ({
+  content: Buffer.from(JSON.stringify(body)),
+  properties: { headers: {} },
 });
 
-describe('handleRetry — DLQ path (MAX_RETRIES exhausted)', () => {
-  it('routes to DLQ when retryCount equals MAX_RETRIES', () => {
-    const ch  = makeChannel();
-    const msg = makeMessage(3);
-
-    handleRetryFn(ch, msg, 'backend-tests', 'backend-tests.dlq', 'tid');
-
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-    expect(ch.sendToQueue.mock.calls[0][0]).toBe('backend-tests.dlq');
-    expect(ch.publish).not.toHaveBeenCalled();
-    expect(ch.ack).toHaveBeenCalledOnce();
-  });
-
-  it('routes to DLQ when retryCount exceeds MAX_RETRIES', () => {
-    const ch  = makeChannel();
-    const msg = makeMessage(5);
-
-    handleRetryFn(ch, msg, 'backend-tests', 'backend-tests.dlq', 'tid');
-
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-  });
-});
-
-// ── validateScript ────────────────────────────────────────────────────────
-
-describe('validateScript — k6 inspect stderr capture', () => {
-  it('resolves when k6 inspect exits 0', async () => {
-    const proc = makeFakeK6Process();
-    mockSpawn.mockReturnValueOnce(proc);
-
-    const promise = validateScriptFn('/run/dir/script.js');
-    proc.emit('close', 0);
-
-    await expect(promise).resolves.toBeUndefined();
-    expect(mockSpawn).toHaveBeenCalledWith('k6', ['inspect', '/run/dir/script.js']);
-  });
-
-  it('rejects with the captured stderr text when k6 inspect exits non-zero', async () => {
-    const proc = makeFakeK6Process();
-    mockSpawn.mockReturnValueOnce(proc);
-
-    const promise = validateScriptFn('/run/dir/script.js');
-    proc.stderr.emit('data', Buffer.from('SyntaxError: '));
-    proc.stderr.emit('data', Buffer.from('Unexpected token at line 12'));
-    proc.emit('close', 255);
-
-    await expect(promise).rejects.toThrow(
-      'k6 script validation failed (exit 255): SyntaxError: Unexpected token at line 12',
-    );
-  });
-
-  it('omits the trailing colon-detail when stderr produced no output', async () => {
-    const proc = makeFakeK6Process();
-    mockSpawn.mockReturnValueOnce(proc);
-
-    const promise = validateScriptFn('/run/dir/script.js');
-    proc.emit('close', 1);
-
-    await expect(promise).rejects.toThrow('k6 script validation failed (exit 1)');
-    await expect(promise).rejects.not.toThrow(/:\s*$/);
-  });
-
-  it('truncates stderr detail to 2000 characters', async () => {
-    const proc = makeFakeK6Process();
-    mockSpawn.mockReturnValueOnce(proc);
-
-    const promise = validateScriptFn('/run/dir/script.js');
-    proc.stderr.emit('data', Buffer.from('x'.repeat(3000)));
-    proc.emit('close', 255);
-
-    await promise.catch((err: Error) => {
-      const detail = err.message.split(': ')[1];
-      expect(detail.length).toBe(2000);
-    });
-  });
-
-  it('rejects when the spawned process itself errors (e.g. k6 binary missing)', async () => {
-    const proc = makeFakeK6Process();
-    mockSpawn.mockReturnValueOnce(proc);
-
-    const promise = validateScriptFn('/run/dir/script.js');
-    const spawnError = new Error('spawn k6 ENOENT');
-    proc.emit('error', spawnError);
-
-    await expect(promise).rejects.toBe(spawnError);
-  });
-});
-
-// ── notifyRunning / notifyFailed / notifyCancelled ────────────────────────
-
-describe('notify* REST helpers — status transitions reported via results-service', () => {
-  const originalFetch = global.fetch;
-  let mockFetch: ReturnType<typeof vi.fn>;
+describe('worker-backend index.ts', () => {
+  let channel: FakeChannel;
+  let connection: FakeConnection;
 
   beforeEach(() => {
-    mockFetch = vi.fn().mockResolvedValue({ ok: true });
-    global.fetch = mockFetch as unknown as typeof fetch;
+    vi.clearAllMocks();
+    vi.resetModules();
+    channel = makeFakeChannel();
+    connection = makeFakeConnection(channel);
+    mockConnect.mockResolvedValue(connection);
+    mockQuery.mockResolvedValue({ rows: [] });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network disabled in test')));
   });
 
-  afterEach(() => { global.fetch = originalFetch; });
-
-  it('notifyRunning POSTs to /results/:testId/running', async () => {
-    await notifyRunningFn('tid-1');
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://results-service:3004/results/tid-1/running',
-      { method: 'POST' },
-    );
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    const { app } = await import('../index');
+    await app.close();
   });
 
-  it('notifyFailed POSTs to /results/:testId/fail', async () => {
-    await notifyFailedFn('tid-2');
+  // ── Queue setup ──────────────────────────────────────────────────────────
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://results-service:3004/results/tid-2/fail',
-      { method: 'POST' },
-    );
+  it('asserts the work/DLQ/results queues as durable and sets prefetch', async () => {
+    process.env.WORKER_CONCURRENCY = '4';
+    const { start } = await import('../index');
+    await start();
+
+    expect(channel.assertQueue).toHaveBeenCalledWith('backend-tests', { durable: true });
+    expect(channel.assertQueue).toHaveBeenCalledWith('backend-tests.dlq', { durable: true });
+    expect(channel.assertQueue).toHaveBeenCalledWith('test-results', { durable: true });
+    expect(channel.prefetch).toHaveBeenCalledWith(4);
+    delete process.env.WORKER_CONCURRENCY;
   });
 
-  it('notifyCancelled POSTs to /results/:testId/cancel', async () => {
-    await notifyCancelledFn('tid-3');
+  it('binds an exclusive auto-delete queue to the cancel-fanout exchange', async () => {
+    const { start } = await import('../index');
+    await start();
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://results-service:3004/results/tid-3/cancel',
-      { method: 'POST' },
-    );
+    expect(channel.assertExchange).toHaveBeenCalledWith('cancel-fanout', 'fanout', { durable: true });
+    expect(channel.assertQueue).toHaveBeenCalledWith('', { exclusive: true, autoDelete: true });
+    expect(channel.bindQueue).toHaveBeenCalledWith('cancel-queue-name', 'cancel-fanout', '');
   });
 
-  it('swallows fetch errors (best-effort — DB write happens server-side)', async () => {
-    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
-
-    await expect(notifyRunningFn('tid-4')).resolves.toBeUndefined();
+  it('registers a consumer on the cancel queue and the work queue', async () => {
+    const { start } = await import('../index');
+    await start();
+    expect(channel.consume).toHaveBeenCalledTimes(2);
+    expect(channel.consume.mock.calls[1][0]).toBe('backend-tests');
   });
 
-  it('swallows network errors for notifyFailed and notifyCancelled too', async () => {
-    mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+  // ── Connection/channel lifecycle ─────────────────────────────────────────
 
-    await expect(notifyFailedFn('tid-5')).resolves.toBeUndefined();
-    await expect(notifyCancelledFn('tid-6')).resolves.toBeUndefined();
-  });
-});
+  it('reconnects when the connection closes', async () => {
+    const { start } = await import('../index');
+    await start();
+    expect(mockConnect).toHaveBeenCalledTimes(1);
 
-// ── Stop-with-metrics (cancel-during-run) ────────────────────────────────────
-//
-// Inline re-implementation of the cancel branch in the queue consumer body.
-// When a test is stopped via the Stop button:
-//   • requestsTotal > 0  → publish to test-results queue as 'completed' (save partial metrics)
-//   • requestsTotal === 0 → notifyCancelled (no data to save)
-//   • Error thrown from runK6Test while cancelled → notifyCancelled, no retry
+    const secondChannel = makeFakeChannel();
+    mockConnect.mockResolvedValue(makeFakeConnection(secondChannel));
 
-type StopResult = 'completed' | 'cancelled';
-
-const stopBranchFn = async (
-  cancelledTests: Set<string>,
-  ch: ReturnType<typeof makeChannel>,
-  testId: string,
-  metrics: { requestsTotal: number },
-  notifyCancelled: (id: string) => Promise<void>,
-): Promise<StopResult> => {
-  const wasStopped = cancelledTests.has(testId);
-  if (wasStopped) cancelledTests.delete(testId);
-
-  if (wasStopped && metrics.requestsTotal === 0) {
-    await notifyCancelled(testId);
-    ch.ack({} as never);
-    return 'cancelled';
-  }
-
-  ch.sendToQueue('test-results', Buffer.from(JSON.stringify({ testId, status: 'completed', metrics })));
-  ch.ack({} as never);
-  return 'completed';
-};
-
-const stopErrorBranchFn = async (
-  cancelledTests: Set<string>,
-  ch: ReturnType<typeof makeChannel>,
-  testId: string,
-  notifyCancelled: (id: string) => Promise<void>,
-  handleRetry: () => void,
-): Promise<StopResult | 'failed'> => {
-  if (cancelledTests.has(testId)) {
-    cancelledTests.delete(testId);
-    await notifyCancelled(testId);
-    ch.ack({} as never);
-    return 'cancelled';
-  }
-  handleRetry();
-  return 'failed';
-};
-
-describe('Stop button — cancel branch with partial metrics (success path)', () => {
-  it('publishes to test-results as completed when requestsTotal > 0', async () => {
-    const cancelled = new Set(['test-1']);
-    const ch = makeChannel();
-    const notifyCancelled = vi.fn().mockResolvedValue(undefined);
-
-    const result = await stopBranchFn(cancelled, ch, 'test-1', { requestsTotal: 42 }, notifyCancelled);
-
-    expect(result).toBe('completed');
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-    const payload = JSON.parse(ch.sendToQueue.mock.calls[0][1].toString());
-    expect(payload.status).toBe('completed');
-    expect(payload.metrics.requestsTotal).toBe(42);
-    expect(notifyCancelled).not.toHaveBeenCalled();
-    expect(ch.ack).toHaveBeenCalledOnce();
+    connection.emit('close');
+    await vi.waitFor(() => expect(mockConnect).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(secondChannel.consume).toHaveBeenCalledTimes(2));
   });
 
-  it('removes the testId from cancelledTests after handling', async () => {
-    const cancelled = new Set(['test-2']);
-    const ch = makeChannel();
+  it('does not start a second reconnect loop if one is already in flight', async () => {
+    const { start } = await import('../index');
+    await start();
+    expect(mockConnect).toHaveBeenCalledTimes(1);
 
-    await stopBranchFn(cancelled, ch, 'test-2', { requestsTotal: 10 }, vi.fn());
+    mockConnect.mockReturnValue(new Promise(() => {})); // RabbitMQ still down
+    connection.emit('close');
+    connection.emit('close');
+    await new Promise(resolve => setTimeout(resolve, 20));
 
-    expect(cancelled.has('test-2')).toBe(false);
+    expect(mockConnect).toHaveBeenCalledTimes(2);
   });
 
-  it('calls notifyCancelled and does NOT publish metrics when requestsTotal === 0', async () => {
-    const cancelled = new Set(['test-3']);
-    const ch = makeChannel();
-    const notifyCancelled = vi.fn().mockResolvedValue(undefined);
+  it('/health reports disconnected after the connection closes', async () => {
+    const { start, app } = await import('../index');
+    await start();
 
-    const result = await stopBranchFn(cancelled, ch, 'test-3', { requestsTotal: 0 }, notifyCancelled);
+    const before = await app.inject({ method: 'GET', url: '/health' });
+    expect(before.json().checks.queue).toBe('ok');
 
-    expect(result).toBe('cancelled');
-    expect(notifyCancelled).toHaveBeenCalledWith('test-3');
-    expect(ch.sendToQueue).not.toHaveBeenCalled();
-    expect(ch.ack).toHaveBeenCalledOnce();
+    mockConnect.mockReturnValue(new Promise(() => {}));
+    connection.emit('close');
+
+    const after = await app.inject({ method: 'GET', url: '/health' });
+    expect(after.statusCode).toBe(503);
+    expect(after.json().checks.queue).toBe('disconnected');
   });
 
-  it('does not treat a non-cancelled test differently — publishes as completed', async () => {
-    const cancelled = new Set<string>(); // test-4 is NOT cancelled
-    const ch = makeChannel();
+  it('/health reports disconnected on a channel error', async () => {
+    const { start, app } = await import('../index');
+    await start();
 
-    const result = await stopBranchFn(cancelled, ch, 'test-4', { requestsTotal: 100 }, vi.fn());
+    channel.emit('error', new Error('channel died'));
 
-    expect(result).toBe('completed');
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-  });
-});
-
-describe('Stop button — cancel branch in error path (k6 failed with no metrics)', () => {
-  it('calls notifyCancelled and acks without retrying when test was stopped', async () => {
-    const cancelled = new Set(['test-5']);
-    const ch = makeChannel();
-    const notifyCancelled = vi.fn().mockResolvedValue(undefined);
-    const handleRetry = vi.fn();
-
-    const result = await stopErrorBranchFn(cancelled, ch, 'test-5', notifyCancelled, handleRetry);
-
-    expect(result).toBe('cancelled');
-    expect(notifyCancelled).toHaveBeenCalledWith('test-5');
-    expect(ch.ack).toHaveBeenCalledOnce();
-    expect(handleRetry).not.toHaveBeenCalled();
+    const res = await app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(503);
   });
 
-  it('calls handleRetry normally when the test was NOT stopped', async () => {
-    const cancelled = new Set<string>(); // test-6 not in set
-    const ch = makeChannel();
-    const notifyCancelled = vi.fn();
-    const handleRetry = vi.fn();
+  // ── saveScript (real function) ───────────────────────────────────────────
 
-    const result = await stopErrorBranchFn(cancelled, ch, 'test-6', notifyCancelled, handleRetry);
+  describe('saveScript', () => {
+    it('increments used_count and returns the same scriptId when one is provided', async () => {
+      const { saveScript } = await import('../index');
+      mockQuery.mockResolvedValueOnce({ rows: [] });
 
-    expect(result).toBe('failed');
-    expect(handleRetry).toHaveBeenCalledOnce();
-    expect(notifyCancelled).not.toHaveBeenCalled();
-    expect(ch.ack).not.toHaveBeenCalled();
+      const result = await saveScript('http://x.com', 'k6script', 'existing-id');
+
+      expect(result).toBe('existing-id');
+      expect(mockQuery.mock.calls[0][0]).toMatch(/UPDATE test_scripts SET used_count/);
+      expect(mockQuery.mock.calls[0][1]).toEqual(['existing-id']);
+    });
+
+    it('inserts a new script row and returns the generated id when no scriptId is given', async () => {
+      const { saveScript } = await import('../index');
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'new-uuid' }] });
+
+      const result = await saveScript('http://x.com', 'k6script', undefined, 'desc', 'proj-1', 'ws-1');
+
+      expect(result).toBe('new-uuid');
+      expect(mockQuery.mock.calls[0][0]).toMatch(/INSERT INTO test_scripts/);
+      expect(mockQuery.mock.calls[0][1]).toEqual(['http://x.com', 'k6script', 'desc', 'proj-1', 'ws-1']);
+    });
+
+    it('preserves an existing project_id/workspace_id on conflict via COALESCE', async () => {
+      const { saveScript } = await import('../index');
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'id' }] });
+
+      await saveScript('http://x.com', 'k6script');
+
+      expect(mockQuery.mock.calls[0][0]).toMatch(/project_id = COALESCE/);
+      expect(mockQuery.mock.calls[0][0]).toMatch(/workspace_id = COALESCE/);
+    });
   });
 
-  it('removes the testId from cancelledTests after handling in error path', async () => {
-    const cancelled = new Set(['test-7']);
-    await stopErrorBranchFn(cancelled, makeChannel(), 'test-7', vi.fn(), vi.fn());
-    expect(cancelled.has('test-7')).toBe(false);
+  // ── notify* (real functions) ──────────────────────────────────────────────
+
+  describe('notify* REST helpers', () => {
+    it('notifyRunning POSTs to /results/:testId/running', async () => {
+      const { notifyRunning } = await import('../index');
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('fetch', mockFetch);
+
+      await notifyRunning('tid-1');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://results-service:3004/results/tid-1/running',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('notifyFailed POSTs the execution log to /results/:testId/fail', async () => {
+      const { notifyFailed } = await import('../index');
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('fetch', mockFetch);
+
+      await notifyFailed('tid-2', 'partial log');
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('http://results-service:3004/results/tid-2/fail');
+      expect(JSON.parse(opts.body)).toEqual({ executionLog: 'partial log' });
+    });
+
+    it('notifyCancelled POSTs to /results/:testId/cancel', async () => {
+      const { notifyCancelled } = await import('../index');
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('fetch', mockFetch);
+
+      await notifyCancelled('tid-3');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://results-service:3004/results/tid-3/cancel',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('swallows network errors from all three (best-effort)', async () => {
+      const { notifyRunning, notifyFailed, notifyCancelled } = await import('../index');
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+
+      await expect(notifyRunning('t')).resolves.toBeUndefined();
+      await expect(notifyFailed('t')).resolves.toBeUndefined();
+      await expect(notifyCancelled('t')).resolves.toBeUndefined();
+    });
+  });
+
+  // ── Work-queue consumer — real message handler ───────────────────────────
+
+  describe('work queue consumer', () => {
+    it('completes normally: saves the script, sends to test-results, and acks', async () => {
+      mockRunK6Test.mockResolvedValue({ metrics: makeMetrics(), executionLog: 'log' });
+      mockQuery.mockImplementation((sql: string) =>
+        sql.includes('SELECT status') ? Promise.resolve({ rows: [] }) : Promise.resolve({ rows: [{ id: 'script-1' }] }),
+      );
+      const { start } = await import('../index');
+      await start();
+      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      const test = makeTest();
+      await queueHandler(makeMsg(test));
+
+      expect(mockRunK6Test).toHaveBeenCalledOnce();
+      const sent = channel.sendToQueue.mock.calls.find(c => c[0] === 'test-results');
+      expect(sent).toBeDefined();
+      const payload = JSON.parse((sent![1] as Buffer).toString());
+      expect(payload.status).toBe('completed');
+      expect(payload.scriptId).toBe('script-1');
+      expect(channel.ack).toHaveBeenCalledOnce();
+    });
+
+    it('skips execution when the DB already marked the test cancelled before dequeue', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'cancelled' }] });
+      const { start } = await import('../index');
+      await start();
+      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      await queueHandler(makeMsg(makeTest()));
+
+      expect(mockRunK6Test).not.toHaveBeenCalled();
+      expect(channel.ack).toHaveBeenCalledOnce();
+    });
+
+    it('retries via handleRetry when runK6Test throws and the test was not stopped', async () => {
+      mockRunK6Test.mockRejectedValue(Object.assign(new Error('k6 crashed'), { partialLog: 'boom' }));
+      const { start } = await import('../index');
+      await start();
+      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      await queueHandler(makeMsg(makeTest({ id: 'retry-test' })));
+
+      // handleRetry (real, imported from runner.ts) republishes with an incremented retry count.
+      expect(channel.publish).toHaveBeenCalledOnce();
+      expect(channel.publish.mock.calls[0][1]).toBe('backend-tests');
+      expect(channel.sendToQueue).not.toHaveBeenCalledWith('test-results', expect.anything(), expect.anything());
+    });
+
+    it('Stop button: a stopped test with zero requests is marked cancelled, not completed', async () => {
+      mockQuery.mockResolvedValue({ rows: [] });
+      let resolveRun!: (v: { metrics: BackendMetrics; executionLog: string }) => void;
+      mockRunK6Test.mockImplementation((testId: string, ..._rest: unknown[]) => {
+        const ctx = _rest[_rest.length - 1] as { runningTests: Map<string, { kill: MockFn }> };
+        ctx.runningTests.set(testId, { kill: vi.fn() });
+        return new Promise(resolve => { resolveRun = resolve; });
+      });
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { start } = await import('../index');
+      await start();
+      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      const test = makeTest({ id: 'stop-test-1' });
+      const queuePromise = queueHandler(makeMsg(test));
+      await vi.waitFor(() => expect(mockRunK6Test).toHaveBeenCalled());
+
+      // The Stop button sends a cancel-fanout message for this testId.
+      await cancelHandler(makeMsg({ testId: test.id }));
+
+      // k6 is killed and exits having captured nothing.
+      resolveRun({ metrics: makeMetrics({ requestsTotal: 0 }), executionLog: '' });
+      await queuePromise;
+
+      const cancelCall = mockFetch.mock.calls.find(c => (c[0] as string).endsWith('/cancel'));
+      expect(cancelCall).toBeDefined();
+      expect(channel.sendToQueue).not.toHaveBeenCalledWith('test-results', expect.anything(), expect.anything());
+      expect(channel.ack).toHaveBeenCalled();
+    });
+
+    it('Stop button: a stopped test with partial requests is saved as completed, not discarded', async () => {
+      mockQuery.mockImplementation((sql: string) =>
+        sql.includes('SELECT status') ? Promise.resolve({ rows: [] }) : Promise.resolve({ rows: [{ id: 'script-2' }] }),
+      );
+      let resolveRun!: (v: { metrics: BackendMetrics; executionLog: string }) => void;
+      mockRunK6Test.mockImplementation((testId: string, ..._rest: unknown[]) => {
+        const ctx = _rest[_rest.length - 1] as { runningTests: Map<string, { kill: MockFn }> };
+        ctx.runningTests.set(testId, { kill: vi.fn() });
+        return new Promise(resolve => { resolveRun = resolve; });
+      });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+
+      const { start } = await import('../index');
+      await start();
+      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      const test = makeTest({ id: 'stop-test-2' });
+      const queuePromise = queueHandler(makeMsg(test));
+      await vi.waitFor(() => expect(mockRunK6Test).toHaveBeenCalled());
+      await cancelHandler(makeMsg({ testId: test.id }));
+
+      resolveRun({ metrics: makeMetrics({ requestsTotal: 7 }), executionLog: 'partial log' });
+      await queuePromise;
+
+      const sent = channel.sendToQueue.mock.calls.find(c => c[0] === 'test-results');
+      expect(sent).toBeDefined();
+      const payload = JSON.parse((sent![1] as Buffer).toString());
+      expect(payload.status).toBe('completed');
+      expect(payload.metrics.requestsTotal).toBe(7);
+    });
+
+    it('cancel-queue consumer kills the tracked process and acks', async () => {
+      const { start } = await import('../index');
+      await start();
+      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      const fakeProc = { kill: vi.fn() };
+      mockRunK6Test.mockImplementation((testId: string, ..._rest: unknown[]) => {
+        const ctx = _rest[_rest.length - 1] as { runningTests: Map<string, { kill: MockFn }> };
+        ctx.runningTests.set(testId, fakeProc);
+        return new Promise(() => {}); // never resolves — process is "running"
+      });
+      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      void queueHandler(makeMsg(makeTest({ id: 'kill-me' })));
+      await vi.waitFor(() => expect(mockRunK6Test).toHaveBeenCalled());
+
+      await cancelHandler(makeMsg({ testId: 'kill-me' }));
+
+      expect(fakeProc.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(channel.ack).toHaveBeenCalled();
+    });
+
+    it('cancel-queue consumer is a no-op (but still acks) for an unknown testId', async () => {
+      const { start } = await import('../index');
+      await start();
+      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      await expect(
+        cancelHandler(makeMsg({ testId: 'never-started' })),
+      ).resolves.toBeUndefined();
+      expect(channel.ack).toHaveBeenCalled();
+    });
   });
 });

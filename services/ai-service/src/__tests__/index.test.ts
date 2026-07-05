@@ -1,121 +1,59 @@
 /**
- * Unit tests for ai-service consumer routing logic (src/index.ts).
+ * Unit tests for ai-service's own responsibilities in src/index.ts —
+ * connection/channel lifecycle, queue setup, the malformed-message guard,
+ * and the /health route. The REUSE/REGENERATE/retry/DLQ decision tree lives
+ * in processor.ts (processAiRequest) and is exhaustively covered by
+ * processor.test.ts — it is mocked here, not re-tested.
  *
- * The routing logic inside the amqplib consume callback is tested by
- * re-implementing the decision tree as a pure function, mirroring the
- * exact branching in src/index.ts:
- *
- *   1. cachedScript + description + cachedScriptDescription !== null
- *      → compareDescriptions() → REUSE or REGENERATE
- *   2. cachedScript + description + cachedScriptDescription === null
- *      → clear scriptId, fall through to generateScript
- *   3. No cachedScript
- *      → generateScript()
- *   4. generateScript throws after MAX_RETRIES
- *      → postMessage failure + sendToQueue DLQ + call fail endpoint
+ * amqplib is mocked with EventEmitter-based fake connection/channel objects
+ * so the real startConsumer()/scheduleReconnect() code runs against them,
+ * instead of hand-reimplementing the routing logic as a parallel function
+ * (the previous version of this file did that, and could silently drift
+ * from src/index.ts without failing).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import type { EnrichedTestRequest } from '@alt/shared';
 
-// ── Mock generator module ─────────────────────────────────────────────────
-const mockCompareDescriptions = vi.fn();
-const mockGenerateScript       = vi.fn();
-
-vi.mock('../generator', () => ({
-  compareDescriptions: mockCompareDescriptions,
-  generateScript:      mockGenerateScript,
-}));
-
-// ── Channel mock ──────────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
 
-const makeChannel = (): { sendToQueue: MockFn; ack: MockFn; publish: MockFn } => ({
-  sendToQueue: vi.fn(),
-  ack:         vi.fn(),
-  publish:     vi.fn(),
-});
+const mockConnect = vi.hoisted(() => vi.fn());
+vi.mock('amqplib', () => ({ default: { connect: mockConnect } }));
 
-// ── postMessage mock ──────────────────────────────────────────────────────
-const postMessage = vi.fn().mockResolvedValue(undefined);
+const mockProcessAiRequest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../processor', () => ({ processAiRequest: mockProcessAiRequest }));
 
-// ── Routing logic (mirrors src/index.ts consumer callback) ───────────────
+vi.mock('../logger', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
-const BACKEND_QUEUE = 'backend-tests';
-const CLIENT_QUEUE  = 'client-tests';
-const DLQ           = 'ai-requests.dlq';
-const MAX_RETRIES   = 3;
+// ── Fakes ──────────────────────────────────────────────────────────────────
 
-type Channel = ReturnType<typeof makeChannel>;
-
-const processMessage = async (
-  channel: Channel,
-  test: EnrichedTestRequest,
-  retryCount = 0,
-): Promise<void> => {
-  const targetQueue =
-    test.type === 'backend' || test.type === 'flow' ? BACKEND_QUEUE : CLIENT_QUEUE;
-
-  try {
-    let mutableTest = { ...test };
-
-    if (mutableTest.cachedScript && mutableTest.description) {
-      if (mutableTest.cachedScriptDescription == null) {
-        mutableTest = { ...mutableTest, scriptId: undefined };
-      } else {
-        const same =
-          mutableTest.description.trim().toLowerCase() ===
-          mutableTest.cachedScriptDescription.trim().toLowerCase();
-        const verdict = same
-          ? 'REUSE'
-          : await mockCompareDescriptions(
-              mutableTest.description,
-              mutableTest.cachedScriptDescription,
-            );
-
-        if (verdict === 'REUSE') {
-          const reused: EnrichedTestRequest = {
-            ...mutableTest,
-            generatedScript: mutableTest.cachedScript,
-            reusedScript: true,
-          };
-          channel.sendToQueue(targetQueue, Buffer.from(JSON.stringify(reused)), {
-            persistent: true,
-          });
-          channel.ack({} as never);
-          return;
-        }
-        mutableTest = { ...mutableTest, scriptId: undefined };
-      }
-    }
-
-    await postMessage('Generating test script with AI…');
-    const script = await mockGenerateScript(mutableTest);
-    await postMessage('Script ready — starting test…');
-
-    channel.sendToQueue(
-      targetQueue,
-      Buffer.from(JSON.stringify({ ...mutableTest, generatedScript: script })),
-      { persistent: true },
-    );
-    channel.ack({} as never);
-  } catch {
-    if (retryCount < MAX_RETRIES) {
-      await postMessage(`Gemini unavailable — retrying… (${MAX_RETRIES - retryCount} attempts left)`);
-      channel.publish('', 'ai-requests', Buffer.from('{}'), {
-        persistent: true,
-        headers: { 'x-retry-count': retryCount + 1 },
-      });
-    } else {
-      await postMessage('Script generation failed after 3 attempts — test could not start');
-      channel.sendToQueue(DLQ, Buffer.from('{}'), { persistent: true });
-      // marks test as failed in results-service (fire-and-forget)
-    }
-    channel.ack({} as never);
-  }
+type FakeChannel = EventEmitter & {
+  assertQueue: MockFn; consume: MockFn; ack: MockFn; sendToQueue: MockFn;
+  publish: MockFn; prefetch: MockFn;
 };
 
-// ── Fixtures ──────────────────────────────────────────────────────────────
+function makeFakeChannel(): FakeChannel {
+  const ch = new EventEmitter() as FakeChannel;
+  ch.assertQueue = vi.fn().mockResolvedValue(undefined);
+  ch.consume     = vi.fn();
+  ch.ack         = vi.fn();
+  ch.sendToQueue = vi.fn();
+  ch.publish     = vi.fn();
+  ch.prefetch    = vi.fn();
+  return ch;
+}
+
+type FakeConnection = EventEmitter & { createChannel: MockFn; close: MockFn };
+
+function makeFakeConnection(channel: FakeChannel): FakeConnection {
+  const conn = new EventEmitter() as FakeConnection;
+  conn.createChannel = vi.fn().mockResolvedValue(channel);
+  conn.close = vi.fn().mockResolvedValue(undefined);
+  return conn;
+}
 
 const makeTest = (overrides: Partial<EnrichedTestRequest> = {}): EnrichedTestRequest => ({
   id:          'test-id',
@@ -127,225 +65,146 @@ const makeTest = (overrides: Partial<EnrichedTestRequest> = {}): EnrichedTestReq
   ...overrides,
 });
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  mockGenerateScript.mockResolvedValue('export default function() {}');
-  mockCompareDescriptions.mockResolvedValue('REGENERATE');
-});
+describe('ai-service index.ts', () => {
+  let channel: FakeChannel;
+  let connection: FakeConnection;
 
-// ── Path 1: REUSE verdict ─────────────────────────────────────────────────
-
-describe('consumer routing — REUSE path', () => {
-  it('sends reused script to backend queue and acks on REUSE verdict', async () => {
-    mockCompareDescriptions.mockResolvedValueOnce('REUSE');
-    const ch   = makeChannel();
-    const test = makeTest({
-      cachedScript:            'cached_script_body',
-      cachedScriptDescription: 'old description',
-      scriptId:                'script-uuid',
-    });
-
-    await processMessage(ch, test);
-
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-    const [queue, buf] = ch.sendToQueue.mock.calls[0];
-    expect(queue).toBe(BACKEND_QUEUE);
-    const payload = JSON.parse(buf.toString());
-    expect(payload.reusedScript).toBe(true);
-    expect(payload.generatedScript).toBe('cached_script_body');
-    expect(mockGenerateScript).not.toHaveBeenCalled();
-    expect(ch.ack).toHaveBeenCalledOnce();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    channel = makeFakeChannel();
+    connection = makeFakeConnection(channel);
+    mockConnect.mockResolvedValue(connection);
   });
 
-  it('skips compareDescriptions and REUSEs directly when descriptions are identical', async () => {
-    const ch   = makeChannel();
-    const test = makeTest({
-      description:             'same description',
-      cachedScript:            'cached_script_body',
-      cachedScriptDescription: 'same description',
-      scriptId:                'script-uuid',
-    });
-
-    await processMessage(ch, test);
-
-    expect(mockCompareDescriptions).not.toHaveBeenCalled();
-    const payload = JSON.parse(ch.sendToQueue.mock.calls[0][1].toString());
-    expect(payload.reusedScript).toBe(true);
+  afterEach(async () => {
+    const { app } = await import('../index');
+    await app.close();
   });
 
-  it('routes client-side test to client queue on REUSE', async () => {
-    mockCompareDescriptions.mockResolvedValueOnce('REUSE');
-    const ch   = makeChannel();
-    const test = makeTest({
-      type:                    'client-side',
-      cachedScript:            'puppeteer_script',
-      cachedScriptDescription: 'browser test',
-    });
+  // ── Queue setup ────────────────────────────────────────────────────────
 
-    await processMessage(ch, test);
+  it('asserts all four queues as durable and sets prefetch to WORKER_CONCURRENCY', async () => {
+    process.env.WORKER_CONCURRENCY = '5';
+    const { startConsumer, CONSUME_QUEUE, DLQ, BACKEND_QUEUE, CLIENT_QUEUE } = await import('../index');
 
-    expect(ch.sendToQueue.mock.calls[0][0]).toBe(CLIENT_QUEUE);
-  });
-});
+    await startConsumer();
 
-// ── Path 2: REGENERATE verdict ────────────────────────────────────────────
-
-describe('consumer routing — REGENERATE path', () => {
-  it('calls generateScript and sends to queue on REGENERATE', async () => {
-    mockCompareDescriptions.mockResolvedValueOnce('REGENERATE');
-    const ch   = makeChannel();
-    const test = makeTest({
-      cachedScript:            'old_script',
-      cachedScriptDescription: 'old description',
-      scriptId:                'old-uuid',
-    });
-
-    await processMessage(ch, test);
-
-    expect(mockGenerateScript).toHaveBeenCalledOnce();
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-    const payload = JSON.parse(ch.sendToQueue.mock.calls[0][1].toString());
-    expect(payload.generatedScript).toBe('export default function() {}');
+    expect(channel.assertQueue).toHaveBeenCalledWith(CONSUME_QUEUE, { durable: true });
+    expect(channel.assertQueue).toHaveBeenCalledWith(DLQ, { durable: true });
+    expect(channel.assertQueue).toHaveBeenCalledWith(BACKEND_QUEUE, { durable: true });
+    expect(channel.assertQueue).toHaveBeenCalledWith(CLIENT_QUEUE, { durable: true });
+    expect(channel.prefetch).toHaveBeenCalledWith(5);
+    delete process.env.WORKER_CONCURRENCY;
   });
 
-  it('clears scriptId before regenerating so worker inserts a fresh row', async () => {
-    mockCompareDescriptions.mockResolvedValueOnce('REGENERATE');
-    const ch   = makeChannel();
-    const test = makeTest({
-      cachedScript:            'old_script',
-      cachedScriptDescription: 'old description',
-      scriptId:                'old-uuid',
-    });
-
-    await processMessage(ch, test);
-
-    const payload = JSON.parse(ch.sendToQueue.mock.calls[0][1].toString());
-    expect(payload.scriptId).toBeUndefined();
+  it('registers a consumer on CONSUME_QUEUE', async () => {
+    const { startConsumer, CONSUME_QUEUE } = await import('../index');
+    await startConsumer();
+    expect(channel.consume).toHaveBeenCalledWith(CONSUME_QUEUE, expect.any(Function));
   });
-});
 
-// ── Path 3: null cachedScriptDescription (legacy row) ─────────────────────
+  // ── Connection/channel lifecycle ────────────────────────────────────────
 
-describe('consumer routing — null cachedScriptDescription', () => {
-  it('always regenerates when cachedScriptDescription is null', async () => {
-    const ch   = makeChannel();
-    const test = makeTest({
-      cachedScript:            'old_script',
-      cachedScriptDescription: null,
-      scriptId:                'old-uuid',
-    });
+  it('reconnects (calls amqplib.connect again) when the connection closes', async () => {
+    const { startConsumer } = await import('../index');
+    await startConsumer();
+    expect(mockConnect).toHaveBeenCalledTimes(1);
 
-    await processMessage(ch, test);
+    const secondChannel = makeFakeChannel();
+    const secondConnection = makeFakeConnection(secondChannel);
+    mockConnect.mockResolvedValue(secondConnection);
 
-    expect(mockCompareDescriptions).not.toHaveBeenCalled();
-    expect(mockGenerateScript).toHaveBeenCalledOnce();
+    connection.emit('close');
+    await vi.waitFor(() => expect(mockConnect).toHaveBeenCalledTimes(2));
+    // The reconnect fully re-initializes the consumer on the new channel.
+    await vi.waitFor(() => expect(secondChannel.consume).toHaveBeenCalled());
   });
-});
 
-// ── Path 4: no cachedScript (fresh generation) ────────────────────────────
+  it('does not start a second reconnect loop if one is already in flight', async () => {
+    const { startConsumer } = await import('../index');
+    await startConsumer();
+    expect(mockConnect).toHaveBeenCalledTimes(1);
 
-describe('consumer routing — no cachedScript', () => {
-  it('calls generateScript directly when there is no cached script', async () => {
-    const ch   = makeChannel();
+    // Never resolves — simulates RabbitMQ still being down while we fire
+    // 'close' twice in a row (connection + channel error can both land).
+    mockConnect.mockReturnValue(new Promise(() => {}));
+
+    connection.emit('close');
+    connection.emit('close');
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    // Exactly one extra reconnect attempt was started, not two.
+    expect(mockConnect).toHaveBeenCalledTimes(2);
+  });
+
+  it('/health reports 503/disconnected after the connection closes', async () => {
+    const { startConsumer, app } = await import('../index');
+    await startConsumer();
+
+    const before = await app.inject({ method: 'GET', url: '/health' });
+    expect(before.statusCode).toBe(200);
+    expect(before.json().checks.queue).toBe('ok');
+
+    mockConnect.mockReturnValue(new Promise(() => {})); // stall the reconnect
+    connection.emit('close');
+
+    const after = await app.inject({ method: 'GET', url: '/health' });
+    expect(after.statusCode).toBe(503);
+    expect(after.json().checks.queue).toBe('disconnected');
+  });
+
+  it('/health reports disconnected on a channel error', async () => {
+    const { startConsumer, app } = await import('../index');
+    await startConsumer();
+
+    channel.emit('error', new Error('channel died'));
+
+    const res = await app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(503);
+  });
+
+  // ── Malformed message guard ──────────────────────────────────────────────
+
+  it('routes a non-JSON message to the DLQ, acks it, and never calls processAiRequest', async () => {
+    const { startConsumer, DLQ } = await import('../index');
+    await startConsumer();
+    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+
+    await handler({ content: Buffer.from('not valid json {{{') });
+
+    expect(channel.sendToQueue).toHaveBeenCalledWith(DLQ, expect.any(Buffer), { persistent: true });
+    expect(channel.ack).toHaveBeenCalledOnce();
+    expect(mockProcessAiRequest).not.toHaveBeenCalled();
+  });
+
+  it('ignores a null message (consumer cancellation notice)', async () => {
+    const { startConsumer } = await import('../index');
+    await startConsumer();
+    const handler = channel.consume.mock.calls[0][1] as (msg: null) => Promise<void>;
+
+    await expect(handler(null)).resolves.toBeUndefined();
+    expect(mockProcessAiRequest).not.toHaveBeenCalled();
+  });
+
+  // ── Valid message delegates to processor.ts ─────────────────────────────
+
+  it('parses a valid message and delegates to processAiRequest with the channel/msg/resultsUrl', async () => {
+    process.env.RESULTS_URL = 'http://results-service:3004';
+    const { startConsumer } = await import('../index');
+    await startConsumer();
+    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
     const test = makeTest();
+    const msg = { content: Buffer.from(JSON.stringify(test)) };
 
-    await processMessage(ch, test);
+    await handler(msg);
 
-    expect(mockCompareDescriptions).not.toHaveBeenCalled();
-    expect(mockGenerateScript).toHaveBeenCalledOnce();
-    expect(ch.ack).toHaveBeenCalledOnce();
-  });
-});
-
-// ── DLQ path ──────────────────────────────────────────────────────────────
-
-describe('consumer routing — DLQ exhaustion', () => {
-  it('retries by republishing when retryCount < MAX_RETRIES', async () => {
-    mockGenerateScript.mockRejectedValueOnce(new Error('503'));
-    const ch   = makeChannel();
-    const test = makeTest();
-
-    await processMessage(ch, test, 1);
-
-    expect(ch.publish).toHaveBeenCalledOnce();
-    expect(ch.publish.mock.calls[0][3].headers['x-retry-count']).toBe(2);
-    expect(ch.sendToQueue).not.toHaveBeenCalled();
-  });
-
-  it('routes to DLQ when retryCount equals MAX_RETRIES', async () => {
-    mockGenerateScript.mockRejectedValueOnce(new Error('503'));
-    const ch   = makeChannel();
-    const test = makeTest();
-
-    await processMessage(ch, test, MAX_RETRIES);
-
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-    expect(ch.sendToQueue.mock.calls[0][0]).toBe(DLQ);
-    expect(ch.publish).not.toHaveBeenCalled();
-  });
-
-  it('posts failure status message on DLQ', async () => {
-    mockGenerateScript.mockRejectedValueOnce(new Error('503'));
-    const ch = makeChannel();
-
-    await processMessage(ch, makeTest(), MAX_RETRIES);
-
-    const calls = postMessage.mock.calls.map(c => c[0] as string);
-    expect(calls.some(m => /failed after 3 attempts/.test(m))).toBe(true);
-  });
-
-  it('posts retry status message when retrying', async () => {
-    mockGenerateScript.mockRejectedValueOnce(new Error('429'));
-    const ch = makeChannel();
-
-    await processMessage(ch, makeTest(), 0);
-
-    const calls = postMessage.mock.calls.map(c => c[0] as string);
-    expect(calls.some(m => /retrying/i.test(m))).toBe(true);
-  });
-});
-
-// ─── Malformed message handling ──────────────────────────────────────────
-//
-// Mirrors the JSON.parse guard at the top of the channel.consume callback
-// in src/index.ts: a non-JSON message body must be routed to the DLQ and
-// acked, without throwing (which would otherwise crash the consumer or
-// leave the message unacked/redelivered indefinitely).
-
-const handleIncomingMessage = (channel: Channel, rawContent: Buffer): void => {
-  try {
-    JSON.parse(rawContent.toString());
-  } catch {
-    channel.sendToQueue(DLQ, rawContent, { persistent: true });
-    channel.ack({} as never);
-    return;
-  }
-  // valid JSON — normal processing would continue (not exercised here)
-  channel.ack({} as never);
-};
-
-describe('consumer — malformed message handling', () => {
-  it('routes a non-JSON message to the DLQ and acks it without throwing', () => {
-    const ch = makeChannel();
-    const rawContent = Buffer.from('not valid json {{{');
-
-    expect(() => handleIncomingMessage(ch, rawContent)).not.toThrow();
-
-    expect(ch.sendToQueue).toHaveBeenCalledOnce();
-    expect(ch.sendToQueue.mock.calls[0][0]).toBe(DLQ);
-    expect(ch.sendToQueue.mock.calls[0][1]).toBe(rawContent);
-    expect(ch.ack).toHaveBeenCalledOnce();
-    expect(mockGenerateScript).not.toHaveBeenCalled();
-    expect(mockCompareDescriptions).not.toHaveBeenCalled();
-  });
-
-  it('does not route valid JSON to the DLQ', () => {
-    const ch = makeChannel();
-    const rawContent = Buffer.from(JSON.stringify(makeTest()));
-
-    handleIncomingMessage(ch, rawContent);
-
-    expect(ch.sendToQueue).not.toHaveBeenCalled();
-    expect(ch.ack).toHaveBeenCalledOnce();
+    expect(mockProcessAiRequest).toHaveBeenCalledOnce();
+    const [passedTest, deps] = mockProcessAiRequest.mock.calls[0];
+    expect(passedTest.id).toBe(test.id);
+    expect(deps.channel).toBe(channel);
+    expect(deps.msg).toBe(msg);
+    expect(deps.resultsUrl).toBe('http://results-service:3004');
+    delete process.env.RESULTS_URL;
   });
 });

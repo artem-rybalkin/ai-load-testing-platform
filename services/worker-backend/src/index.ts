@@ -47,7 +47,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const runningTests   = new Map<string, ChildProcess>();
 const cancelledTests = new Set<string>();
 
-const saveScript = async (
+export const saveScript = async (
   targetUrl: string,
   script: string,
   scriptId?: string,
@@ -78,12 +78,12 @@ const saveScript = async (
 // Status transitions go through results-service's REST endpoints rather than
 // writing test_results directly: those endpoints both clear the stale
 // status_message AND broadcast the test:status WebSocket event.
-const notifyRunning = async (testId: string): Promise<void> => {
+export const notifyRunning = async (testId: string): Promise<void> => {
   try { await fetch(`${RESULTS_URL}/results/${testId}/running`, { method: 'POST', headers: internalHeaders() }); }
   catch { /* best-effort */ }
 };
 
-const notifyFailed = async (testId: string, executionLog?: string): Promise<void> => {
+export const notifyFailed = async (testId: string, executionLog?: string): Promise<void> => {
   try {
     await fetch(`${RESULTS_URL}/results/${testId}/fail`, {
       method: 'POST',
@@ -94,7 +94,7 @@ const notifyFailed = async (testId: string, executionLog?: string): Promise<void
   catch { /* best-effort */ }
 };
 
-const notifyCancelled = async (testId: string): Promise<void> => {
+export const notifyCancelled = async (testId: string): Promise<void> => {
   try { await fetch(`${RESULTS_URL}/results/${testId}/cancel`, { method: 'POST', headers: internalHeaders() }); }
   catch { /* best-effort */ }
 };
@@ -158,7 +158,7 @@ const scheduleReconnect = (): void => {
   });
 };
 
-const start = async (): Promise<void> => {
+export const start = async (): Promise<void> => {
   const url        = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
 
@@ -318,32 +318,33 @@ const start = async (): Promise<void> => {
   queueConsumerTag = consumerTag;
 };
 
-const startHealthServer = async (): Promise<void> => {
-  const app = Fastify({ logger: false });
-  app.get('/health', async (_req, reply) => {
-    const checks: Record<string, string> = {};
-    let healthy = true;
-    try { await pool.query('SELECT 1'); checks.database = 'ok'; }
-    catch { checks.database = 'error'; healthy = false; }
-    checks.queue = queueConnected ? 'ok' : 'disconnected';
-    if (!queueConnected) healthy = false;
+export const app = Fastify({ logger: false });
+app.get('/health', async (_req, reply) => {
+  const checks: Record<string, string> = {};
+  let healthy = true;
+  try { await pool.query('SELECT 1'); checks.database = 'ok'; }
+  catch { checks.database = 'error'; healthy = false; }
+  checks.queue = queueConnected ? 'ok' : 'disconnected';
+  if (!queueConnected) healthy = false;
 
-    const mem = process.memoryUsage();
-    const memoryMb = Math.round(mem.rss / 1024 / 1024);
-    const memoryPercent = Math.round(mem.rss / os.totalmem() * 100);
-    const activeTests = runningTests.size;
-    const saturated = activeTests >= WORKER_CONCURRENCY && WORKER_CONCURRENCY > 0;
-    if (saturated) checks.capacity = 'saturated';
+  const mem = process.memoryUsage();
+  const memoryMb = Math.round(mem.rss / 1024 / 1024);
+  const memoryPercent = Math.round(mem.rss / os.totalmem() * 100);
+  const activeTests = runningTests.size;
+  const saturated = activeTests >= WORKER_CONCURRENCY && WORKER_CONCURRENCY > 0;
+  if (saturated) checks.capacity = 'saturated';
 
-    const status = !healthy ? 'degraded' : saturated ? 'saturated' : 'ok';
-    return reply.code(healthy ? 200 : 503).send({
-      status,
-      service: 'worker-backend',
-      checks,
-      metrics: { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: WORKER_CONCURRENCY },
-      timestamp: new Date().toISOString(),
-    });
+  const status = !healthy ? 'degraded' : saturated ? 'saturated' : 'ok';
+  return reply.code(healthy ? 200 : 503).send({
+    status,
+    service: 'worker-backend',
+    checks,
+    metrics: { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: WORKER_CONCURRENCY },
+    timestamp: new Date().toISOString(),
   });
+});
+
+const startHealthServer = async (): Promise<void> => {
   const port = Number(process.env.PORT) || 3002;
   await app.listen({ port, host: '0.0.0.0' });
   log.info({ port }, 'Worker-backend health server listening');
@@ -353,8 +354,10 @@ const startWithQueue = async (): Promise<void> => {
   await start();
 };
 
-startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
-startWithQueue().catch(err => log.error({ err: (err as Error).message }, 'Worker-backend startup failed'));
+if (!process.env.VITEST) {
+  startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
+  startWithQueue().catch(err => log.error({ err: (err as Error).message }, 'Worker-backend startup failed'));
+}
 
 // Worst-case a single in-flight message can still take: k6's own max-duration
 // enforcement (SIGTERM then SIGKILL after a grace period) plus a buffer for the
@@ -381,5 +384,7 @@ async function shutdown(signal: string) {
   process.exit(0);
 }
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('SIGINT',  () => void shutdown('SIGINT'));
+if (!process.env.VITEST) {
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT',  () => void shutdown('SIGINT'));
+}

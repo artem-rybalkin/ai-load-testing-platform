@@ -73,7 +73,7 @@ const scheduleReconnect = (): void => {
   });
 };
 
-const start = async (): Promise<void> => {
+export const start = async (): Promise<void> => {
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
 
@@ -187,35 +187,38 @@ const start = async (): Promise<void> => {
   queueConsumerTag = consumerTag;
 };
 
-const startHealthServer = async (): Promise<void> => {
-  const app = Fastify({ logger: false });
-  app.get('/health', async (_req, reply) => {
-    const checks: Record<string, string> = {};
-    checks.queue = queueConnected ? 'ok' : 'disconnected';
+export const app = Fastify({ logger: false });
+app.get('/health', async (_req, reply) => {
+  const checks: Record<string, string> = {};
+  checks.queue = queueConnected ? 'ok' : 'disconnected';
 
-    const mem = process.memoryUsage();
-    const memoryMb = Math.round(mem.rss / 1024 / 1024);
-    const memoryPercent = Math.round(mem.rss / os.totalmem() * 100);
-    const activeTests = runningBrowsers.size;
-    const saturated = activeTests >= WORKER_CONCURRENCY && WORKER_CONCURRENCY > 0;
-    if (saturated) checks.capacity = 'saturated';
+  const mem = process.memoryUsage();
+  const memoryMb = Math.round(mem.rss / 1024 / 1024);
+  const memoryPercent = Math.round(mem.rss / os.totalmem() * 100);
+  const activeTests = runningBrowsers.size;
+  const saturated = activeTests >= WORKER_CONCURRENCY && WORKER_CONCURRENCY > 0;
+  if (saturated) checks.capacity = 'saturated';
 
-    const status = !queueConnected ? 'degraded' : saturated ? 'saturated' : 'ok';
-    return reply.code(queueConnected ? 200 : 503).send({
-      status,
-      service: 'worker-client',
-      checks,
-      metrics: { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: WORKER_CONCURRENCY },
-      timestamp: new Date().toISOString(),
-    });
+  const status = !queueConnected ? 'degraded' : saturated ? 'saturated' : 'ok';
+  return reply.code(queueConnected ? 200 : 503).send({
+    status,
+    service: 'worker-client',
+    checks,
+    metrics: { cpuPercent, memoryMb, memoryPercent, activeTests, maxTests: WORKER_CONCURRENCY },
+    timestamp: new Date().toISOString(),
   });
+});
+
+const startHealthServer = async (): Promise<void> => {
   const port = Number(process.env.PORT) || 3003;
   await app.listen({ port, host: '0.0.0.0' });
   log.info({ port }, 'Worker-client health server listening');
 };
 
-startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
-start().catch(err => log.error({ err: (err as Error).message }, 'Worker-client startup failed'));
+if (!process.env.VITEST) {
+  startHealthServer().catch(err => log.error({ err: (err as Error).message }, 'Health server failed'));
+  start().catch(err => log.error({ err: (err as Error).message }, 'Worker-client startup failed'));
+}
 
 // Worst-case a single in-flight message can still take: Puppeteer's own
 // max-duration enforcement (closes the browser) plus a buffer for the
@@ -242,5 +245,7 @@ async function shutdown(signal: string) {
   process.exit(0);
 }
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('SIGINT',  () => void shutdown('SIGINT'));
+if (!process.env.VITEST) {
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT',  () => void shutdown('SIGINT'));
+}

@@ -7,39 +7,54 @@
  * logic can be tested in complete isolation.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import type * as QueueTypes from '../queue';
 
 // ── Test suite ────────────────────────────────────────────────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
+
+type MockChannel = EventEmitter & {
+  assertQueue:    MockFn;
+  assertExchange: MockFn;
+  sendToQueue:    MockFn;
+  publish:        MockFn;
+  checkQueue:     MockFn;
+};
+
+/** Real EventEmitters (not bare vi.fn() spies) so tests can actually
+ *  connection.emit('close')/channel.emit('error') and exercise the real
+ *  reconnect wiring in queue.ts, not just record that .on() was called. */
+const makeMockChannel = (): MockChannel => {
+  const ch = new EventEmitter() as MockChannel;
+  ch.assertQueue    = vi.fn().mockResolvedValue(undefined);
+  ch.assertExchange = vi.fn().mockResolvedValue(undefined);
+  ch.sendToQueue    = vi.fn();
+  ch.publish        = vi.fn();
+  ch.checkQueue     = vi.fn().mockResolvedValue({ consumerCount: 2 });
+  return ch;
+};
+
+const makeMockConnection = (channel: MockChannel): EventEmitter & { createChannel: MockFn } => {
+  const conn = new EventEmitter() as EventEmitter & { createChannel: MockFn };
+  conn.createChannel = vi.fn().mockResolvedValue(channel);
+  return conn;
+};
+
 describe('queue module', () => {
   let queueMod: typeof QueueTypes;
-  let mockChannel: {
-    assertQueue:    ReturnType<typeof vi.fn>;
-    assertExchange: ReturnType<typeof vi.fn>;
-    sendToQueue:    ReturnType<typeof vi.fn>;
-    publish:        ReturnType<typeof vi.fn>;
-    checkQueue:     ReturnType<typeof vi.fn>;
-    on:             ReturnType<typeof vi.fn>;
-  };
+  let mockChannel: MockChannel;
+  let mockConnection: EventEmitter & { createChannel: MockFn };
   let mockConnect: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     // Fresh module registry every test → fresh null `channel`
     vi.resetModules();
 
-    mockChannel = {
-      assertQueue:    vi.fn().mockResolvedValue(undefined),
-      assertExchange: vi.fn().mockResolvedValue(undefined),
-      sendToQueue:    vi.fn(),
-      publish:        vi.fn(),
-      checkQueue:     vi.fn().mockResolvedValue({ consumerCount: 2 }),
-      on:             vi.fn(),
-    };
-
-    mockConnect = vi.fn().mockResolvedValue({
-      createChannel: vi.fn().mockResolvedValue(mockChannel),
-      on: vi.fn(),
-    });
+    mockChannel = makeMockChannel();
+    mockConnection = makeMockConnection(mockChannel);
+    mockConnect = vi.fn().mockResolvedValue(mockConnection);
 
     vi.doMock('amqplib', () => ({ default: { connect: mockConnect } }));
 
@@ -137,6 +152,52 @@ describe('queue module', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  // ── Connection/channel lifecycle (close/error → reconnect) ─────────────────
+  //
+  // The mocks above are real EventEmitters specifically so these can drive
+  // connection.emit('close')/channel.emit('error') and exercise the actual
+  // scheduleReconnect() wiring in queue.ts, not just confirm .on() was called.
+
+  describe('connection lifecycle', () => {
+    it('marks the queue disconnected and reconnects when the connection closes', async () => {
+      await connect();
+      expect(queueMod.isQueueConnected()).toBe(true);
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+
+      const secondChannel = makeMockChannel();
+      mockConnect.mockResolvedValue(makeMockConnection(secondChannel));
+
+      mockConnection.emit('close');
+
+      // isQueueConnected briefly reads false the instant 'close' fires...
+      await vi.waitFor(() => expect(mockConnect).toHaveBeenCalledTimes(2));
+      // ...and true again once the reconnect completes against the new channel.
+      await vi.waitFor(() => expect(queueMod.isQueueConnected()).toBe(true));
+      expect(secondChannel.assertQueue).toHaveBeenCalledWith('ai-requests', { durable: true });
+    });
+
+    it('marks the queue disconnected on a channel error (without necessarily reconnecting)', async () => {
+      await connect();
+      expect(queueMod.isQueueConnected()).toBe(true);
+
+      mockChannel.emit('error', new Error('channel died'));
+
+      expect(queueMod.isQueueConnected()).toBe(false);
+    });
+
+    it('does not start a second reconnect loop if one is already in flight', async () => {
+      await connect();
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+
+      mockConnect.mockReturnValue(new Promise(() => {})); // RabbitMQ still down
+      mockConnection.emit('close');
+      mockConnection.emit('close');
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(mockConnect).toHaveBeenCalledTimes(2);
     });
   });
 

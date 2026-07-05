@@ -24,27 +24,40 @@ tracker — pull items into `TODO.md` if/when someone picks them up.
 
 ## 1. Structural gaps (highest impact — apply broadly)
 
-### 1.1 `ai-service/src/index.ts` has zero direct test coverage
-Unlike `api-service`, `analyser-service`, and `recorder-service` — each of which extracts a
-`buildApp()` guarded by a `VITEST`/env check so the real HTTP entrypoint is exercised via
-`app.inject` — `ai-service/src/index.ts` calls `start()` unconditionally at module scope, so it
-can't be imported by a test without opening a real AMQP connection. `index.test.ts`'s own header
-comment admits the routing logic is tested by **re-implementing the decision tree as a pure
-function** that mirrors `index.ts`'s branching by hand. That hand-copy can silently drift from the
-real file — someone edits the routing in `index.ts`, forgets to mirror the change, and CI stays
-green. None of the following in the real module are ever executed by a test: `startConsumer`,
-`scheduleReconnect`, `connection.on('error'/'close')`/`channel.on('error')` handlers, queue/DLQ
-assertion, `channel.prefetch`, the `/health` route, or the malformed-JSON→DLQ handler
-(`index.ts:80-88`).
+### 1.1 ~~`ai-service/src/index.ts` has zero direct test coverage~~ — RESOLVED (2026-07-05)
+`index.ts` now exports `app`/`startConsumer`/the queue-name constants and guards its
+module-scope `start()` call with `if (!process.env.VITEST)`, matching `api-service`/
+`analyser-service`/`recorder-service`'s `buildApp()` pattern. `index.test.ts` was rewritten to
+drive the real module against an EventEmitter-based mocked `amqplib` connection/channel instead
+of a hand-copied decision tree — the old 250-line reimplementation (which duplicated
+`processor.test.ts`'s coverage of `processAiRequest` and could silently drift from the real file)
+was deleted. New tests cover: queue/DLQ assertion + prefetch, reconnect-on-close,
+reconnect-dedupe, `/health` reflecting connection state, the malformed-JSON→DLQ guard, and
+delegation to `processAiRequest` with the right args. 9 tests, all real-module.
 
-### 1.2 Neither worker's AMQP connect/reconnect/backoff wiring is tested
-`worker-backend/src/index.ts` and `worker-client/src/index.ts` both extract their message-handler
-logic into testable functions (`runK6Test`/`runClientTest`, `handleRetry`, `saveScript`), and those
-are well covered — but the surrounding `amqplib.connect()` → `scheduleReconnect()` → reconnect-with-
-backoff loop, and the `connection.on('close')`/`channel.on('error')` handlers, have no dedicated
-test in either service. Same pattern as `api-service/src/queue.ts:23-55` (connection error/close/
-reconnect-dedupe untested there too) — this is a recurring gap across every service that owns an
-AMQP connection, not a one-off.
+### 1.2 ~~Neither worker's (nor api-service's) AMQP reconnect wiring is tested~~ — RESOLVED (2026-07-05)
+All three fixed the same way: export `app`/`start`, guard the module-scope `start()`/
+`startHealthServer()` calls and the `SIGTERM`/`SIGINT` registration with
+`if (!process.env.VITEST)`, and test the real connection/channel event handlers via
+EventEmitter-based amqplib mocks (reconnect-on-close, reconnect-dedupe, `/health` reflecting
+state).
+- `worker-backend`: also replaced the confirmed-redundant `handleRetryFn`/`validateScriptFn`
+  hand-copies (both already had real-module coverage in `runner.test.ts`) with real tests of the
+  work-queue consumer's Stop-button cancel branch (zero-requests → cancelled, partial-requests →
+  completed-with-partial-metrics) and the cancel-queue consumer (kill tracked process, no-op for
+  unknown testId), driving the actual registered `channel.consume` callbacks. 21 tests, all
+  real-module (was 13 hand-copied tests, net removed 139 lines of duplicate logic).
+- `worker-client`: same fix. Also discovered `index.ts` had **no `VITEST` guard at all** — every
+  test run was silently trying to bind a real port (3003) and connect real AMQP, which explains
+  the recurring `EADDRINUSE` warnings seen throughout the session. `health.test.ts` (a
+  hand-reimplemented parallel Fastify app testing a copy of the `/health` handler) was deleted and
+  superseded by real `app.inject` tests in the new `index.test.ts`. 13 tests, all real-module.
+- `api-service/src/queue.ts` was already well-tested (25 tests) but its connection/channel mocks
+  were bare objects with a no-op `on: vi.fn()` spy, so `.on('close', cb)` calls were recorded but
+  never actually triggered. Upgraded the mocks to real `EventEmitter`s and added 3 tests for
+  reconnect-on-close, reconnect-dedupe, and disconnect-on-channel-error.
+- Total: 4 services fixed, 405 tests passing across them (was ~35 fewer, several of which were
+  dead-weight duplicates).
 
 ### 1.3 No contract/schema validation between services
 RabbitMQ messages are consumed via raw `JSON.parse` with no schema validation (e.g.
@@ -237,8 +250,7 @@ assertions (verified line-by-line, not just asserted in the README). Gaps:
 
 ## Suggested priority (if picking this up)
 
-1. **1.1** (ai-service `index.ts` real-module coverage) and **1.2** (AMQP reconnect wiring,
-   3 services) — same root cause (untested connection-lifecycle code), highest blast radius.
+1. ~~**1.1**/**1.2** (real-module + AMQP reconnect coverage)~~ — done (2026-07-05).
 2. **UI: Settings page** — zero coverage on an admin-only, easy-to-regress branch.
 3. **CI: e2e-on-every-PR** — cheap process fix, closes a real "shipped a UI regression" risk.
 4. **1.3** (contract validation between services) — larger effort, but the AMQP message shape is
