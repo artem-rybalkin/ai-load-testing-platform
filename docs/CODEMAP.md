@@ -59,10 +59,12 @@ services/ai-service/src/
 
 ```
 services/worker-backend/src/
-├── index.ts   # k6 runner, per-test runDir, data file writing, saveScript(), Fastify health
+├── index.ts   # RabbitMQ consumer, cancel handling, saveScript(), Fastify health
+├── runner.ts  # runK6Test(): spawns k6, makeTailBuffer() (bounded stdout/stderr tail), makeLineBuffer()
 ├── parser.ts  # parseK6Output(), parseK6Errors(), aggregateWindow(), parseK6GroupMetrics()
 └── logger.ts
 └── src/__tests__/
+    ├── runner.test.ts  # runK6Test, validateScript, makeLineBuffer, makeTailBuffer
     └── parser.test.ts  # All parser functions (25 tests)
 ```
 

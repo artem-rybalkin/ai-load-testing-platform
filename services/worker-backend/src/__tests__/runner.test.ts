@@ -859,6 +859,51 @@ describe('makeLineBuffer', () => {
   });
 });
 
+// ─── makeTailBuffer ─────────────────────────────────────────────────────────
+
+describe('makeTailBuffer', () => {
+  it('returns everything pushed when under the cap', async () => {
+    const { makeTailBuffer } = await import('../runner');
+    const buf = makeTailBuffer(1024);
+
+    buf.push(Buffer.from('hello '));
+    buf.push(Buffer.from('world'));
+
+    expect(buf.toString()).toBe('hello world');
+  });
+
+  it('keeps only the trailing maxBytes once the cap is exceeded', async () => {
+    const { makeTailBuffer } = await import('../runner');
+    const buf = makeTailBuffer(10);
+
+    buf.push(Buffer.from('0123456789')); // exactly 10 bytes
+    buf.push(Buffer.from('ABCDE'));      // now 15 bytes total -> keep last 10
+
+    expect(buf.toString()).toBe('56789ABCDE');
+    expect(Buffer.byteLength(buf.toString())).toBe(10);
+  });
+
+  it('never exceeds maxBytes across many small pushes', async () => {
+    const { makeTailBuffer } = await import('../runner');
+    const buf = makeTailBuffer(100);
+
+    for (let i = 0; i < 1000; i++) {
+      buf.push(Buffer.from(`line-${i}\n`));
+    }
+
+    expect(Buffer.byteLength(buf.toString())).toBeLessThanOrEqual(100);
+    // The most recent content survives; the very first push is long gone.
+    expect(buf.toString()).toContain('line-999');
+    expect(buf.toString()).not.toContain('line-0\n');
+  });
+
+  it('returns an empty string when nothing has been pushed', async () => {
+    const { makeTailBuffer } = await import('../runner');
+    const buf = makeTailBuffer(1024);
+    expect(buf.toString()).toBe('');
+  });
+});
+
 // ─── k6Level ─────────────────────────────────────────────────────────────────
 
 describe('k6Level', () => {

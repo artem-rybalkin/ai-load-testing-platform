@@ -38,16 +38,36 @@ export const makeLineBuffer = (onLine: (line: string) => void): ((chunk: Buffer)
   };
 };
 
+/**
+ * Keeps only the trailing `maxBytes` of everything ever pushed. k6's
+ * end-of-test summary (the block runK6Test's regex parsing actually needs —
+ * a fixed few KB, emitted once at process exit) is always the LAST thing
+ * written to stdout/stderr, so a small bounded tail is enough; accumulating
+ * every chunk for a long/verbose test's full duration cost unbounded memory
+ * and made the final regex parse scan megabytes of irrelevant per-request
+ * output instead of the actual summary.
+ */
+export const makeTailBuffer = (maxBytes: number): { push: (chunk: Buffer) => void; toString: () => string } => {
+  let buf = Buffer.alloc(0);
+  return {
+    push: (chunk: Buffer): void => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length > maxBytes) buf = buf.subarray(buf.length - maxBytes);
+    },
+    toString: (): string => buf.toString('utf-8'),
+  };
+};
+
 // ── validateScript ────────────────────────────────────────────────────────────
 
 export const validateScript = (scriptPath: string): Promise<void> =>
   new Promise((resolve, reject) => {
     const k6 = spawn('k6', ['inspect', scriptPath]);
-    const stderrChunks: Buffer[] = [];
-    k6.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+    const stderr = makeTailBuffer(8 * 1_024);
+    k6.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
     k6.on('close', (code) => {
       if (code === 0) { resolve(); return; }
-      const detail = Buffer.concat(stderrChunks).toString('utf8').trim().slice(0, 2000);
+      const detail = stderr.toString().trim().slice(0, 2000);
       reject(new Error(`k6 script validation failed (exit ${code})${detail ? `: ${detail}` : ''}`));
     });
     k6.on('error', reject);
@@ -120,8 +140,11 @@ export const runK6Test = async (
     ctx?.runningTests.set(testId, k6);
     ctx?.notifyRunning(testId).catch(() => {});
 
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+    // Only the end-of-test summary (a fixed few KB, the last thing k6 writes)
+    // is ever read back out of these — a 64KB tail comfortably covers it
+    // without retaining a long/verbose test's full stdout+stderr in memory.
+    const stdoutTail = makeTailBuffer(64 * 1_024);
+    const stderrTail = makeTailBuffer(64 * 1_024);
     let fileOffset = 0;
 
     const logLines: string[] = [];
@@ -140,8 +163,8 @@ export const runK6Test = async (
     const stdoutLineBuf = makeLineBuffer(line => addLogLine(k6Level(line), line));
     const stderrLineBuf = makeLineBuffer(line => addLogLine(k6Level(line), line));
 
-    k6.stdout.on('data', (d: Buffer) => { stdoutChunks.push(d); stdoutLineBuf(d); });
-    k6.stderr.on('data', (d: Buffer) => { stderrChunks.push(d); stderrLineBuf(d); });
+    k6.stdout.on('data', (d: Buffer) => { stdoutTail.push(d); stdoutLineBuf(d); });
+    k6.stderr.on('data', (d: Buffer) => { stderrTail.push(d); stderrLineBuf(d); });
 
     const liveIntervalMs = ctx?.liveIntervalMs ?? LIVE_INTERVAL_MS;
     const liveWindowSec = liveIntervalMs / 1_000;
@@ -189,7 +212,7 @@ export const runK6Test = async (
         log.warn({ testId, code }, 'k6 exited with non-zero code — parsing partial output');
       }
 
-      const output = Buffer.concat(stdoutChunks).toString() + Buffer.concat(stderrChunks).toString();
+      const output = stdoutTail.toString() + stderrTail.toString();
       const metrics = parseK6Output(output);
       const { statusCodes, errorBreakdown, stepMetrics } = parseK6JsonOutput(jsonContent);
       metrics.statusCodes    = statusCodes;
@@ -198,7 +221,7 @@ export const runK6Test = async (
 
       if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
         const e = Object.assign(
-          new Error(`k6 exited with code ${code}: ${Buffer.concat(stderrChunks).toString().slice(-500)}`),
+          new Error(`k6 exited with code ${code}: ${stderrTail.toString().slice(-500)}`),
           { partialLog: logLines.join('\n') },
         );
         reject(e);
