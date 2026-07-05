@@ -141,9 +141,9 @@ const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string, pro
   });
 };
 
-const QUEUE       = 'test-results';
-const DLQ         = `${QUEUE}.dlq`;
-const MAX_RETRIES = 3;
+export const QUEUE = 'test-results';
+export const DLQ   = `${QUEUE}.dlq`;
+const MAX_RETRIES  = 3;
 
 let consumerConnected = false;
 export const isConsumerConnected = (): boolean => consumerConnected;
@@ -238,10 +238,10 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
 let reconnecting = false;
 
 /** Reconnect with capped exponential backoff (1s -> 30s), retrying forever until RabbitMQ is back. */
-const scheduleReconnect = (): void => {
+const scheduleReconnect = (deps: { pool?: Pool } = {}): void => {
   if (reconnecting) return;
   reconnecting = true;
-  connectWithBackoff(startConsumer, {
+  connectWithBackoff(() => startConsumer(deps), {
     onRetry: (err, attempt, nextDelayMs) =>
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ reconnect failed — retrying'),
   }).then(() => {
@@ -249,7 +249,11 @@ const scheduleReconnect = (): void => {
   });
 };
 
-export const startConsumer = async (): Promise<void> => {
+// `deps.pool` defaults to the module's own pool (./db) in production — it exists
+// purely so tests can point startConsumer at their own Testcontainers database
+// instead of mocking module-level pool binding.
+export const startConsumer = async (deps: { pool?: Pool } = {}): Promise<void> => {
+  const p = deps.pool ?? pool;
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL environment variable is required');
 
@@ -264,7 +268,7 @@ export const startConsumer = async (): Promise<void> => {
   connection.on('close', () => {
     log.warn('RabbitMQ connection closed — reconnecting');
     consumerConnected = false;
-    scheduleReconnect();
+    scheduleReconnect(deps);
   });
 
   const channel = await connection.createChannel();
@@ -300,7 +304,7 @@ export const startConsumer = async (): Promise<void> => {
     if (span) { span.setAttribute('test.id', result.testId); span.setAttribute('test.url', result.targetUrl); }
 
     try {
-      await handleResult(pool, result);
+      await handleResult(p, result);
       testLog.info('Result saved');
       channel.ack(msg);
     } catch (err) {

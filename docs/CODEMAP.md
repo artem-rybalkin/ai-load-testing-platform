@@ -117,6 +117,7 @@ services/results-service/src/
     ├── auth.test.ts      # POST /auth/login, /logout, GET /auth/me, session middleware (18 tests)
     ├── session.test.ts   # createSession/getSession/revokeSession/switchSessionTeam unit tests (11 tests)
     ├── consumer.test.ts  # handleResult pipeline, webhooks (11 tests)
+    ├── startConsumer.test.ts # real-module: connection lifecycle, malformed guard, retry/DLQ (16 tests)
     ├── stale.test.ts     # runStaleCleanup (10 tests)
     └── scheduler.test.ts # startScheduler, triggerSchedule (12 tests)
 ```

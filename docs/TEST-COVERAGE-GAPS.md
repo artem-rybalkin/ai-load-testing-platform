@@ -90,15 +90,19 @@ All three now guard the parse; the two cancel consumers ack-and-log on failure (
 signal, no DLQ), `results-service` routes to `test-results.dlq` matching the other consumers'
 convention.
 
-**Residual gap, not closed here:** `results-service/src/consumer.ts`'s `startConsumer` itself
-(connection/channel lifecycle, queue setup) still has no real-module test — same class of gap as
-1.2, just never included in that pass because it wasn't in the original 3-service scope. Its
-retry/DLQ-routing logic is still covered only by a hand-reimplementation
-(`consumer.test.ts`'s `consumeHandlerFn`), same pattern already replaced elsewhere this round.
-Closing it properly requires mocking `results-service/src/db.ts`'s module-level `pool` export to
-point at the file's existing per-file Testcontainers database (the other 3 services don't have
-this complication — they don't own a DB pool at all) — a real but separately-scoped follow-up, not
-bundled into this pass.
+**Residual gap — RESOLVED (2026-07-05):** `results-service/src/consumer.ts`'s `startConsumer`
+itself (connection/channel lifecycle, queue setup, retry/DLQ routing) now has real-module coverage
+too, closing the same class of gap as 1.2 for the one service that pass didn't originally scope
+in. The blocker noted above (its module-level `pool` import from `db.ts`, unlike the other 3
+services which don't own a DB pool at all) was resolved without any mocking: `startConsumer` and
+`scheduleReconnect` now accept an optional `{ pool?: Pool }` override (defaulting to the module's
+own `pool`, so production behavior is unchanged) — tests just pass in the file's existing
+Testcontainers pool. New `startConsumer.test.ts` (16 tests, EventEmitter-mocked amqplib) covers
+queue/DLQ assertion + prefetch, reconnect-on-close, reconnect-dedupe, `isConsumerConnected()`
+reflecting connection/channel state, the malformed-JSON and failed-schema-validation guards
+(against the real DB — confirms zero rows written), a valid message persisting via the real
+`handleResult`, and the full retry/DLQ-exhaustion matrix. The old `consumeHandlerFn`
+hand-reimplementation in `consumer.test.ts` was deleted.
 
 #### Scoping notes (2026-07-05)
 
