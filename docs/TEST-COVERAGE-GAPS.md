@@ -66,6 +66,51 @@ assert producer/consumer message-shape compatibility across `api-service` → `a
 `worker-backend`/`worker-client` → `results-service`. A field rename or type change on one side of
 a queue would only surface as a runtime `undefined` deep in a handler, not a test failure.
 
+#### Scoping notes (2026-07-05)
+
+**The five message shapes crossing a queue boundary**, all already TS interfaces in
+`packages/shared/src/index.ts` — no new domain modeling needed, just runtime enforcement of what's
+already declared:
+
+| Queue | Producer → Consumer | Shape | Consume site |
+|---|---|---|---|
+| `ai-requests` | `api-service` → `ai-service` | `EnrichedTestRequest` | `ai-service/src/index.ts:82` |
+| `backend-tests` | `api-service` \| `ai-service` → `worker-backend` | `EnrichedTestRequest` | `worker-backend/src/index.ts:217` |
+| `client-tests` | `api-service` \| `ai-service` → `worker-client` | `EnrichedTestRequest` (consumed as the narrower `TestRequest`) | `worker-client/src/index.ts:131` |
+| `test-results` | `worker-backend`/`worker-client` → `results-service` | `TestResult` (+ a few worker-added fields) | `results-service/src/consumer.ts:286` |
+| `cancel-fanout` | `api-service` → both workers | `{ testId: string }` (not a shared type — defined inline, twice) | `worker-backend/src/index.ts:203`, `worker-client/src/index.ts:117` |
+
+**Found in scoping, not previously flagged:** `results-service/src/consumer.ts`'s `JSON.parse` at
+line 286 sits **outside** its own `try/catch` (the `try` starts after it, wrapping only
+`handleResult`). Every other consumer in the repo (`ai-service`, both workers) already guards its
+parse and routes a malformed message to its DLQ — this one doesn't, so a malformed `test-results`
+message throws inside the async `consume` callback uncaught, is never acked, and (depending on
+amqplib's redelivery behavior) can loop forever instead of landing in `test-results.dlq`. Worth
+fixing regardless of which option below is chosen — it's a pre-existing gap in the *existing*
+guard pattern, not something a schema layer is required to catch.
+
+**Three ways to close this, increasing in cost:**
+
+- **A — Just the missing guard.** Wrap `results-service/src/consumer.ts`'s parse in the same
+  try/catch → DLQ pattern the other three consumers already use. Fixes the one real latent bug
+  above; leaves the "does the shape actually match" question open. ~30 min.
+- **B — Hand-written type guards, no new dependency.** One `isEnrichedTestRequest`/`isTestResult`/
+  `isCancelMessage` guard per shape in `packages/shared`, each checking required fields and types;
+  call at every consume site, route a failed guard to that queue's DLQ. Keeps the existing
+  interfaces as the single source of truth; guards must be hand-kept in sync with them (a new
+  required field needs both updated, same risk class as today, just narrowed to one file instead
+  of five). No new dependency. ~half a day across 4 services.
+- **C — zod schemas, the textbook fix.** Add `zod` to `packages/shared`, define one schema per
+  shape (schemas can double as the interface source via `z.infer`, removing the sync-drift risk
+  in B entirely), validate at every consume site, and add contract tests per queue pairing
+  asserting the producer's actual output satisfies the consumer's schema. Most rigorous — catches
+  a field rename at the type level, not just at the guard's hand-maintained checklist — but touches
+  all 5 services, adds a new runtime dependency, and is the only option that needs new contract
+  tests written (roughly one 2-way pairing test per queue, 5 total). ~1-2 days.
+
+**Recommendation:** A now (it's a real bug, cheap), then B or C as a separate, deliberately-scoped
+follow-up — not bundled with other work, since it touches every service's queue boundary at once.
+
 ### 1.4 No coverage threshold enforced anywhere
 `vitest.config.ts`'s `coverage` block has no `thresholds`, and the CI step uploads to Codecov with
 `fail_ci_if_error: false` — coverage can regress indefinitely without failing a build.
