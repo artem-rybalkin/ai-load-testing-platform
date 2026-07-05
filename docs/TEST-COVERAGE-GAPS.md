@@ -59,12 +59,46 @@ state).
 - Total: 4 services fixed, 405 tests passing across them (was ~35 fewer, several of which were
   dead-weight duplicates).
 
-### 1.3 No contract/schema validation between services
+### 1.3 ~~No contract/schema validation between services~~ — RESOLVED (2026-07-05, option C)
 RabbitMQ messages are consumed via raw `JSON.parse` with no schema validation (e.g.
-`results-service/src/consumer.ts:286`, `ai-service/src/index.ts:82`) and no zod/ajv contract tests
-assert producer/consumer message-shape compatibility across `api-service` → `ai-service` →
+~~`results-service/src/consumer.ts:286`~~, ~~`ai-service/src/index.ts:82`~~) and no zod/ajv contract
+tests assert producer/consumer message-shape compatibility across `api-service` → `ai-service` →
 `worker-backend`/`worker-client` → `results-service`. A field rename or type change on one side of
 a queue would only surface as a runtime `undefined` deep in a handler, not a test failure.
+
+**What shipped:** `zod` added to `packages/shared`; `packages/shared/src/contracts.ts` defines a
+schema per message shape (`TestRequestSchema`, `EnrichedTestRequestSchema`, `TestResultSchema`,
+`CancelMessageSchema`, plus their nested types). The existing hand-written interfaces in
+`index.ts` were deliberately **not** migrated to be zod-derived — that would mean touching every
+import site across all 8 services for a single validation layer. Instead each schema carries a
+compile-time two-way assignability check against its interface (`const _assert: Interface = null
+as unknown as z.infer<typeof Schema>` and the reverse) — if the two ever diverge, `tsc` fails on
+the assertion, so drift is still caught at compile time without any other file needing to change
+how it imports these types. All 5 consume sites (`ai-service/src/index.ts`,
+`worker-backend/src/index.ts` ×2, `worker-client/src/index.ts` ×2,
+`results-service/src/consumer.ts`) now `Schema.parse(JSON.parse(...))` instead of a bare cast.
+25 contract tests in `packages/shared/src/__tests__/contracts.test.ts` cover every schema:
+a minimal-required-fields example, a fully-populated example, and rejection of a missing/mistyped
+required field.
+
+**Also fixed while wiring this in (option A, folded into the same pass):** three consume sites had
+no guard around their `JSON.parse` at all — `results-service/src/consumer.ts:286` (the bug found
+during scoping), and **both workers' cancel-fanout consumers**
+(`worker-backend/src/index.ts:203`, `worker-client/src/index.ts:117`, found while wiring — a
+malformed cancel message threw uncaught inside the async `consume` callback and was never acked).
+All three now guard the parse; the two cancel consumers ack-and-log on failure (best-effort
+signal, no DLQ), `results-service` routes to `test-results.dlq` matching the other consumers'
+convention.
+
+**Residual gap, not closed here:** `results-service/src/consumer.ts`'s `startConsumer` itself
+(connection/channel lifecycle, queue setup) still has no real-module test — same class of gap as
+1.2, just never included in that pass because it wasn't in the original 3-service scope. Its
+retry/DLQ-routing logic is still covered only by a hand-reimplementation
+(`consumer.test.ts`'s `consumeHandlerFn`), same pattern already replaced elsewhere this round.
+Closing it properly requires mocking `results-service/src/db.ts`'s module-level `pool` export to
+point at the file's existing per-file Testcontainers database (the other 3 services don't have
+this complication — they don't own a DB pool at all) — a real but separately-scoped follow-up, not
+bundled into this pass.
 
 #### Scoping notes (2026-07-05)
 
@@ -108,8 +142,8 @@ guard pattern, not something a schema layer is required to catch.
   all 5 services, adds a new runtime dependency, and is the only option that needs new contract
   tests written (roughly one 2-way pairing test per queue, 5 total). ~1-2 days.
 
-**Recommendation:** A now (it's a real bug, cheap), then B or C as a separate, deliberately-scoped
-follow-up — not bundled with other work, since it touches every service's queue boundary at once.
+**Recommendation:** ~~A now (it's a real bug, cheap), then B or C as a separate,
+deliberately-scoped follow-up~~ — done: A and C both shipped together (2026-07-05), see above.
 
 ### 1.4 No coverage threshold enforced anywhere
 `vitest.config.ts`'s `coverage` block has no `thresholds`, and the CI step uploads to Codecov with
@@ -301,7 +335,7 @@ assertions (verified line-by-line, not just asserted in the README). Gaps:
 1. ~~**1.1**/**1.2** (real-module + AMQP reconnect coverage)~~ — done (2026-07-05).
 2. ~~**UI: Settings page**~~ — done (2026-07-05); e2e coverage for it is still open (see below).
 3. ~~**CI: e2e-on-every-PR**~~ — done (2026-07-05).
-4. **1.3** (contract validation between services) — larger effort, but the AMQP message shape is
-   the one thing every service silently depends on.
+4. ~~**1.3** (contract validation between services)~~ — done (2026-07-05); one residual gap noted
+   in the section above (`results-service`'s `startConsumer` still lacks real-module coverage).
 5. Everything else — pull into `TODO.md` opportunistically; none of it is currently causing
    incidents, all of it was found by inspection, not by a failure.

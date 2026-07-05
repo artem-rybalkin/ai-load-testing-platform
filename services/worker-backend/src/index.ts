@@ -6,7 +6,7 @@ import * as os from 'os';
 import Fastify from 'fastify';
 
 import { trace } from '@opentelemetry/api';
-import { EnrichedTestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders, LiveMetricWindowSec, DEFAULT_LIVE_METRIC_WINDOW_SEC } from '@alt/shared';
+import { EnrichedTestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders, LiveMetricWindowSec, DEFAULT_LIVE_METRIC_WINDOW_SEC, EnrichedTestRequestSchema, CancelMessageSchema } from '@alt/shared';
 import { log } from './logger';
 import { runK6Test, handleRetry, GRACE_PERIOD_MS } from './runner';
 
@@ -200,7 +200,14 @@ export const start = async (): Promise<void> => {
   // r2: cancel consumer — kills running k6 processes by testId
   ch.consume(cancelQueue, async (msg) => {
     if (!msg) return;
-    const { testId } = JSON.parse(msg.content.toString()) as { testId: string };
+    let testId: string;
+    try {
+      ({ testId } = CancelMessageSchema.parse(JSON.parse(msg.content.toString())));
+    } catch (err) {
+      log.error({ err: (err as Error).message }, 'Malformed message on cancel-fanout — ignoring');
+      ch.ack(msg);
+      return;
+    }
     const proc = runningTests.get(testId);
     if (proc) {
       log.info({ testId }, 'Cancelling k6 test');
@@ -214,7 +221,7 @@ export const start = async (): Promise<void> => {
     if (!msg) return;
     inFlightMessages++;
     try {
-      const test: EnrichedTestRequest = JSON.parse(msg.content.toString());
+      const test: EnrichedTestRequest = EnrichedTestRequestSchema.parse(JSON.parse(msg.content.toString()));
       const testLog = log.child({ testId: test.id, targetUrl: test.targetUrl });
       testLog.info('Received backend test');
 

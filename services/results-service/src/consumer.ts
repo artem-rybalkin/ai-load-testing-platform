@@ -3,7 +3,7 @@ import { createHmac } from 'crypto';
 import { Pool } from 'pg';
 import { trace } from '@opentelemetry/api';
 
-import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult, connectWithBackoff } from '@alt/shared';
+import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult, connectWithBackoff, TestResultSchema } from '@alt/shared';
 import { pool } from './db';
 import { analyzeResult } from './analyzer';
 import { log } from './logger';
@@ -283,7 +283,15 @@ export const startConsumer = async (): Promise<void> => {
   channel.consume(QUEUE, async (msg) => {
     if (!msg) return;
 
-    const result: TestResult = JSON.parse(msg.content.toString());
+    let result: TestResult;
+    try {
+      result = TestResultSchema.parse(JSON.parse(msg.content.toString()));
+    } catch (err) {
+      log.error({ err: (err as Error).message }, 'Malformed message on test-results — routing to DLQ');
+      channel.sendToQueue(DLQ, msg.content, { persistent: true });
+      channel.ack(msg);
+      return;
+    }
     const testLog = log.child({ testId: result.testId });
     testLog.info('Saving result');
 

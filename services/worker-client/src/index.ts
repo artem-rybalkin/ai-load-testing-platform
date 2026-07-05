@@ -4,7 +4,7 @@ import { Browser } from 'puppeteer';
 import Fastify from 'fastify';
 import * as os from 'os';
 
-import { TestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders } from '@alt/shared';
+import { TestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders, EnrichedTestRequestSchema, CancelMessageSchema } from '@alt/shared';
 import { log } from './logger';
 import { handleRetry, MAX_RETRIES } from './retry';
 import { runClientTest, avgNum, avgResourceBreakdown } from './runner';
@@ -114,7 +114,14 @@ export const start = async (): Promise<void> => {
   // r2: cancel consumer — closes running Puppeteer browser by testId
   ch.consume(cancelQueue, async (msg) => {
     if (!msg) return;
-    const { testId } = JSON.parse(msg.content.toString()) as { testId: string };
+    let testId: string;
+    try {
+      ({ testId } = CancelMessageSchema.parse(JSON.parse(msg.content.toString())));
+    } catch (err) {
+      log.error({ err: (err as Error).message }, 'Malformed message on cancel-fanout — ignoring');
+      ch.ack(msg);
+      return;
+    }
     const browser = runningBrowsers.get(testId);
     if (browser) {
       log.info({ testId }, 'Cancelling client test');
@@ -128,7 +135,15 @@ export const start = async (): Promise<void> => {
     if (!msg) return;
     inFlightMessages++;
     try {
-      const rawTest: TestRequest = JSON.parse(msg.content.toString());
+      let rawTest: TestRequest;
+      try {
+        rawTest = EnrichedTestRequestSchema.parse(JSON.parse(msg.content.toString()));
+      } catch (err) {
+        log.error({ err: (err as Error).message }, 'Malformed message on client-tests — routing to DLQ');
+        ch.sendToQueue(DLQ, msg.content, { persistent: true });
+        ch.ack(msg);
+        return;
+      }
       // Docker containers cannot reach the host via 'localhost' — rewrite to host.docker.internal.
       const test: TestRequest = {
         ...rawTest,

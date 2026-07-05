@@ -1,5 +1,6 @@
 export * from './aiProvider';
 export * from './aiValidation';
+export * from './contracts';
 
 /** Strip ANSI escape codes from a string (safe to call on every log line). */
 export const stripAnsi = (s: string): string =>

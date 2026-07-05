@@ -2,7 +2,7 @@ import './tracing';
 import amqplib from 'amqplib';
 import Fastify from 'fastify';
 
-import { EnrichedTestRequest, connectWithBackoff } from '@alt/shared';
+import { EnrichedTestRequest, connectWithBackoff, EnrichedTestRequestSchema } from '@alt/shared';
 import { log } from './logger';
 import { processAiRequest } from './processor';
 
@@ -79,7 +79,7 @@ export const startConsumer = async (): Promise<void> => {
 
     let test: EnrichedTestRequest;
     try {
-      test = JSON.parse(msg.content.toString());
+      test = EnrichedTestRequestSchema.parse(JSON.parse(msg.content.toString()));
     } catch (err) {
       log.error({ err: (err as Error).message }, 'Malformed message on ai-requests — routing to DLQ');
       channel.sendToQueue(DLQ, msg.content, { persistent: true });

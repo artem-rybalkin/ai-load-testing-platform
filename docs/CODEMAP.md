@@ -21,8 +21,12 @@ ai-load-testing-platform/
 
 ```
 packages/shared/
-└── src/index.ts              # ALL shared types: TestType, FlowStep, BackendMetrics,
-                              #   ClientMetrics, StepMetrics, SLOThresholds, etc.
+├── src/index.ts              # ALL shared types: TestType, FlowStep, BackendMetrics,
+│                             #   ClientMetrics, StepMetrics, SLOThresholds, etc.
+└── src/contracts.ts          # zod schemas mirroring the AMQP message-boundary types
+                              #   (TestRequestSchema, EnrichedTestRequestSchema,
+                              #   TestResultSchema, CancelMessageSchema) + compile-time
+                              #   drift guards against the hand-written interfaces above
 ```
 
 ## services/api-service — Port 3000
