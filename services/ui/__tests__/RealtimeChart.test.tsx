@@ -33,6 +33,40 @@ const steps = (rt: number, rps: number, err: number) => [
   { name: 'Step 2: Browse', avgResponseTime: rt,  rps, errorRate: err },
 ];
 
+describe('RealtimeChart — empty state (before the first live-metric point)', () => {
+  it('shows the waiting message', () => {
+    render(<RealtimeChart points={[]} />);
+    expect(screen.getByText('Waiting for first data point…')).toBeInTheDocument();
+  });
+
+  it('still renders all 4 panel frames instead of just the waiting text', () => {
+    render(<RealtimeChart points={[]} />);
+    expect(screen.getByText('Response Time')).toBeInTheDocument();
+    expect(screen.getByText('Error Rate')).toBeInTheDocument();
+    expect(screen.getByText('Virtual Users')).toBeInTheDocument();
+    expect(screen.getByText('Throughput')).toBeInTheDocument();
+  });
+
+  it('does not show the table-view toggle (nothing meaningful to tabulate yet)', () => {
+    render(<RealtimeChart points={[]} />);
+    expect(screen.queryByText('📋 Table view')).not.toBeInTheDocument();
+  });
+
+  it('does not show the per-step legend', () => {
+    render(<RealtimeChart points={[]} />);
+    expect(screen.queryByText(/more step/)).not.toBeInTheDocument();
+  });
+
+  it('switches from the empty-frame state to real panels once a point arrives', () => {
+    const { rerender } = render(<RealtimeChart points={[]} />);
+    expect(screen.getByText('Waiting for first data point…')).toBeInTheDocument();
+
+    rerender(<RealtimeChart points={[basePoint()]} />);
+    expect(screen.queryByText('Waiting for first data point…')).not.toBeInTheDocument();
+    expect(screen.getByText('📋 Table view')).toBeInTheDocument();
+  });
+});
+
 describe('RealtimeChart — chart titles with step metrics', () => {
   // ── Per-step titles always shown when steps exist ─────────────────────────
 

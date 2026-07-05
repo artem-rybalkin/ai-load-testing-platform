@@ -219,17 +219,19 @@ function TableView({ data, stepNames, hasSteps }: { data: TableRow[]; stepNames:
   );
 }
 
+// Rendered in place of real rows before the first live-metric window posts,
+// so the reader sees the chart's actual axis/grid frame immediately instead
+// of blank space or bare text — the frame communicates "this is what's
+// coming" the way a content skeleton does elsewhere in the app.
+const EMPTY_PLACEHOLDER_ROWS = 8;
+const emptyData: Record<string, number | string>[] = Array.from({ length: EMPTY_PLACEHOLDER_ROWS }, () => ({
+  t: '', vus: 0, rps: 0, avgResponseTime: 0, errorRate: 0, clientErrorRate: 0, serverErrorRate: 0,
+}));
+
 function RealtimeChart({ points, startedAt }: Props) {
   const [legendExpanded, setLegendExpanded] = useState(false);
   const [tableView, setTableView] = useState(false);
-
-  if (points.length === 0) {
-    return (
-      <div className="py-6 text-center">
-        <div className="animate-pulse text-tx-4 text-[12px] font-mono">Waiting for first data point…</div>
-      </div>
-    );
-  }
+  const isEmpty = points.length === 0;
 
   const stepNames: string[] = [];
   for (const p of points) {
@@ -253,7 +255,7 @@ function RealtimeChart({ points, startedAt }: Props) {
     : null;
   const windowLabel = windowSec === 60 ? '1min windows' : windowSec ? `${windowSec}s windows` : 'live windows';
 
-  const data = points.map(p => {
+  const data = isEmpty ? emptyData : points.map(p => {
     const row: Record<string, number | string> = {
       t:               fmtElapsed(p.timestamp, startedAt),
       vus:             p.vus,
@@ -276,6 +278,13 @@ function RealtimeChart({ points, startedAt }: Props) {
 
   return (
     <div className="space-y-4">
+      {isEmpty && (
+        <div className="text-center">
+          <div className="animate-pulse text-tx-4 text-[12px] font-mono">Waiting for first data point…</div>
+        </div>
+      )}
+
+      {!isEmpty && (
       <div className="flex justify-end">
         <button
           type="button"
@@ -285,10 +294,11 @@ function RealtimeChart({ points, startedAt }: Props) {
           {tableView ? '📈 Chart view' : '📋 Table view'}
         </button>
       </div>
+      )}
 
-      {tableView && <TableView data={data as TableRow[]} stepNames={stepNames} hasSteps={hasSteps} />}
+      {tableView && !isEmpty && <TableView data={data as TableRow[]} stepNames={stepNames} hasSteps={hasSteps} />}
 
-      {!tableView && (
+      {(!tableView || isEmpty) && (
       <>
       {/* ── Response time ─────────────────────────────────────────── */}
       <div>
@@ -302,18 +312,20 @@ function RealtimeChart({ points, startedAt }: Props) {
           <LineChart data={data}>
             <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
-            <YAxis tick={TICK} unit="ms" width={50} domain={[0, 'auto']} axisLine={false} tickLine={false} />
-            <Tooltip
-              content={(props) => (
-                <ChartTooltip
-                  {...props}
-                  unit="ms"
-                  resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'avg', item.name ?? '')) : 'Avg response'}
-                  isDashed={(item) => hasSteps && isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'avg', item.name ?? ''))) % STEP_COLORS.length)}
-                />
-              )}
-            />
-            {hasSteps ? stepNames.map((name, i) => (
+            <YAxis tick={TICK} unit="ms" width={50} domain={isEmpty ? [0, 200] : [0, 'auto']} axisLine={false} tickLine={false} />
+            {!isEmpty && (
+              <Tooltip
+                content={(props) => (
+                  <ChartTooltip
+                    {...props}
+                    unit="ms"
+                    resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'avg', item.name ?? '')) : 'Avg response'}
+                    isDashed={(item) => hasSteps && isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'avg', item.name ?? ''))) % STEP_COLORS.length)}
+                  />
+                )}
+              />
+            )}
+            {!isEmpty && (hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`avg_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
                 strokeDasharray={isDashedStep(i % STEP_COLORS.length) ? STEP_DASH : undefined}
@@ -321,7 +333,7 @@ function RealtimeChart({ points, startedAt }: Props) {
             )) : (
               <Line type="monotone" dataKey="avgResponseTime"
                 stroke="var(--chart-orange)" strokeWidth={1.5} dot={false} name="Avg response" />
-            )}
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -338,20 +350,22 @@ function RealtimeChart({ points, startedAt }: Props) {
           <LineChart data={data}>
             <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
-            <YAxis tick={TICK} unit="%" width={42} domain={[0, (max: number) => Math.max(max, 1)]} axisLine={false} tickLine={false} />
-            <Tooltip
-              content={(props) => (
-                <ChartTooltip
-                  {...props}
-                  unit="%"
-                  resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'err', item.name ?? '')) : (item.name ?? '')}
-                  isDashed={(item) => hasSteps
-                    ? isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'err', item.name ?? ''))) % STEP_COLORS.length)
-                    : item.name === 'Error rate (total)'}
-                />
-              )}
-            />
-            {hasSteps ? stepNames.map((name, i) => (
+            <YAxis tick={TICK} unit="%" width={42} domain={isEmpty ? [0, 5] : [0, (max: number) => Math.max(max, 1)]} axisLine={false} tickLine={false} />
+            {!isEmpty && (
+              <Tooltip
+                content={(props) => (
+                  <ChartTooltip
+                    {...props}
+                    unit="%"
+                    resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'err', item.name ?? '')) : (item.name ?? '')}
+                    isDashed={(item) => hasSteps
+                      ? isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'err', item.name ?? ''))) % STEP_COLORS.length)
+                      : item.name === 'Error rate (total)'}
+                  />
+                )}
+              />
+            )}
+            {!isEmpty && (hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`err_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
                 strokeDasharray={isDashedStep(i % STEP_COLORS.length) ? STEP_DASH : undefined}
@@ -367,7 +381,7 @@ function RealtimeChart({ points, startedAt }: Props) {
                 <Line type="monotone" dataKey="errorRate"
                   stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 2" dot={false} name="Error rate (total)" />
               </>
-            )}
+            ))}
           </LineChart>
         </ResponsiveContainer>
         {!hasSteps && (
@@ -401,9 +415,9 @@ function RealtimeChart({ points, startedAt }: Props) {
           <LineChart data={data}>
             <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
-            <YAxis tick={TICK} width={34} domain={[0, 'auto']} axisLine={false} tickLine={false} />
-            <Tooltip content={(props) => <ChartTooltip {...props} unit="" resolveLabel={() => 'VUs'} />} />
-            <Line type="monotone" dataKey="vus" stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />
+            <YAxis tick={TICK} width={34} domain={isEmpty ? [0, 10] : [0, 'auto']} axisLine={false} tickLine={false} />
+            {!isEmpty && <Tooltip content={(props) => <ChartTooltip {...props} unit="" resolveLabel={() => 'VUs'} />} />}
+            {!isEmpty && <Line type="monotone" dataKey="vus" stroke="#16a34a" strokeWidth={1.5} dot={false} name="VUs" />}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -420,18 +434,20 @@ function RealtimeChart({ points, startedAt }: Props) {
           <LineChart data={data}>
             <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="t" tick={TICK} interval="preserveStartEnd" axisLine={false} tickLine={false} />
-            <YAxis tick={TICK} unit=" rps" width={52} domain={[0, 'auto']} axisLine={false} tickLine={false} />
-            <Tooltip
-              content={(props) => (
-                <ChartTooltip
-                  {...props}
-                  unit=" rps"
-                  resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'rps', item.name ?? '')) : 'RPS'}
-                  isDashed={(item) => hasSteps && isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'rps', item.name ?? ''))) % STEP_COLORS.length)}
-                />
-              )}
-            />
-            {hasSteps ? stepNames.map((name, i) => (
+            <YAxis tick={TICK} unit=" rps" width={52} domain={isEmpty ? [0, 10] : [0, 'auto']} axisLine={false} tickLine={false} />
+            {!isEmpty && (
+              <Tooltip
+                content={(props) => (
+                  <ChartTooltip
+                    {...props}
+                    unit=" rps"
+                    resolveLabel={(item) => hasSteps ? String(labelFor(stepNames, 'rps', item.name ?? '')) : 'RPS'}
+                    isDashed={(item) => hasSteps && isDashedStep(stepNames.indexOf(String(labelFor(stepNames, 'rps', item.name ?? ''))) % STEP_COLORS.length)}
+                  />
+                )}
+              />
+            )}
+            {!isEmpty && (hasSteps ? stepNames.map((name, i) => (
               <Line key={name} type="monotone" dataKey={`rps_${toKey(name)}`}
                 stroke={STEP_COLORS[i % STEP_COLORS.length]} strokeWidth={1.5}
                 strokeDasharray={isDashedStep(i % STEP_COLORS.length) ? STEP_DASH : undefined}
@@ -439,7 +455,7 @@ function RealtimeChart({ points, startedAt }: Props) {
             )) : (
               <Line type="monotone" dataKey="rps"
                 stroke="#7c3aed" strokeWidth={1.5} dot={false} name="RPS" />
-            )}
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -447,7 +463,7 @@ function RealtimeChart({ points, startedAt }: Props) {
       {/* One shared legend for all three per-step panels above — they use the
           same step names/colors, so repeating it under each panel was pure
           duplication. */}
-      {hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
+      {!isEmpty && hasSteps && <StepLegend stepNames={stepNames} expanded={legendExpanded} onToggle={toggle} />}
       </>
       )}
     </div>
