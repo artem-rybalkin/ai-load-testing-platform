@@ -80,7 +80,10 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main'
+    # Previously only ran on pushes to main (github.ref == 'refs/heads/main'),
+    # which is never true for a pull_request event — so PRs merged into main
+    # with zero e2e validation. Now also runs on every PR targeting main.
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
 
     steps:
       - uses: actions/checkout@v4

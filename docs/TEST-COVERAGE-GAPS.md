@@ -207,8 +207,9 @@ assertions (verified line-by-line, not just asserted in the README). Gaps:
 
 ## 5. CI pipeline gaps
 
-- **E2E only runs on `main` branch pushes** (`if: github.ref == 'refs/heads/main'`) — PRs merge
-  without any e2e validation.
+- ~~**E2E only runs on `main` branch pushes**~~ — RESOLVED (2026-07-05): the `e2e` job's `if`
+  condition (`.github/workflows/test.yml`) now also matches `github.event_name == 'pull_request'`,
+  so it runs on every PR targeting `main`, not just after merge.
 - **Chaos tests have no dedicated CI step** — they only run because `chaos/**/*.test.ts` matches
   the root `vitest.config.ts` include glob; a chaos failure is indistinguishable from a unit-test
   failure in the CI log, and there's no separate reporting.
@@ -254,7 +255,7 @@ assertions (verified line-by-line, not just asserted in the README). Gaps:
 
 1. ~~**1.1**/**1.2** (real-module + AMQP reconnect coverage)~~ — done (2026-07-05).
 2. ~~**UI: Settings page**~~ — done (2026-07-05); e2e coverage for it is still open (see below).
-3. **CI: e2e-on-every-PR** — cheap process fix, closes a real "shipped a UI regression" risk.
+3. ~~**CI: e2e-on-every-PR**~~ — done (2026-07-05).
 4. **1.3** (contract validation between services) — larger effort, but the AMQP message shape is
    the one thing every service silently depends on.
 5. Everything else — pull into `TODO.md` opportunistically; none of it is currently causing
