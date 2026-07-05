@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useMemo, Suspense } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { createTest, getResult, getPresets, createPreset, getResults, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint, BackendMetrics } from '@/lib/api';
 import { useHealth } from '@/lib/HealthContext';
@@ -71,7 +71,9 @@ function LiveCard({ test }: { test: ActiveTest }) {
 
   const latest = points[points.length - 1];
   const elapsed = meta?.startedAt ? Math.max(0, Math.floor((now - new Date(meta.startedAt).getTime()) / 1000)) : 0;
-  const { area, line } = sparklinePath(points.map(p => p.avgResponseTime));
+  // points only changes on new live-metric events, not on the 1s `now` timer tick —
+  // memoized so that tick doesn't force recomputing the sparkline path every second.
+  const { area, line } = useMemo(() => sparklinePath(points.map(p => p.avgResponseTime)), [points]);
 
   return (
     <div
@@ -614,13 +616,17 @@ function HomeContent() {
 
   const inputCls = "w-full bg-bg border border-border rounded-control px-3.5 py-2.75 text-[13.5px] font-display font-semibold text-tx focus:outline-none focus:border-ink-bd placeholder:font-sans placeholder:font-normal placeholder:text-tx-5";
 
-  const completedToday = recent.filter(r => r.status === 'completed' && new Date(r.created_at).toDateString() === new Date().toDateString());
-  const passCount = completedToday.filter(r => r.perf_status === 'passed').length;
-  const passRate = completedToday.length > 0 ? Math.round((passCount / completedToday.length) * 100) : null;
-  const backendCompleted = completedToday.filter(r => r.metrics?.type === 'backend');
-  const avgP95 = backendCompleted.length > 0 ? Math.round(backendCompleted.reduce((s, r) => s + (r.metrics as BackendMetrics).p95ResponseTime, 0) / backendCompleted.length) : null;
-  const rpsResults = backendCompleted;
-  const avgRps = rpsResults.length > 0 ? rpsResults.reduce((s, r) => s + (r.metrics as BackendMetrics).rps, 0) / rpsResults.length : null;
+  // Only depends on `recent` — memoized so this doesn't re-filter/re-reduce on
+  // every unrelated re-render (form field edits, advanced-settings toggles, etc.)
+  const { testsToday, passRate, avgP95, avgRps } = useMemo(() => {
+    const completedToday = recent.filter(r => r.status === 'completed' && new Date(r.created_at).toDateString() === new Date().toDateString());
+    const passCount = completedToday.filter(r => r.perf_status === 'passed').length;
+    const passRate = completedToday.length > 0 ? Math.round((passCount / completedToday.length) * 100) : null;
+    const backendCompleted = completedToday.filter(r => r.metrics?.type === 'backend');
+    const avgP95 = backendCompleted.length > 0 ? Math.round(backendCompleted.reduce((s, r) => s + (r.metrics as BackendMetrics).p95ResponseTime, 0) / backendCompleted.length) : null;
+    const avgRps = backendCompleted.length > 0 ? backendCompleted.reduce((s, r) => s + (r.metrics as BackendMetrics).rps, 0) / backendCompleted.length : null;
+    return { testsToday: completedToday.length, passRate, avgP95, avgRps };
+  }, [recent]);
 
   return (
     <div>
@@ -654,7 +660,7 @@ function HomeContent() {
         {/* Stat band */}
         <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] bg-surface border border-border rounded-card overflow-hidden [&>*:not(:last-child)]:border-r [&>*:not(:last-child)]:border-border-2">
           {[
-            { label: 'Tests today', value: completedToday.length, suffix: null },
+            { label: 'Tests today', value: testsToday, suffix: null },
             { label: 'Pass rate', value: passRate ?? '—', suffix: passRate !== null ? '%' : null, color: passRate !== null && passRate >= 80 ? 'text-green-fg' : passRate !== null ? 'text-amber-fg' : undefined },
             { label: 'Avg p95', value: avgP95 ?? '—', suffix: avgP95 !== null ? 'ms' : null },
             { label: 'Throughput', value: avgRps !== null ? avgRps.toFixed(1) : '—', suffix: avgRps !== null ? '/s' : null },

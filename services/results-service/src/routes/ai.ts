@@ -12,8 +12,7 @@ import { getEffectiveAiProviderSetting } from '../settings';
 import { analyzeResult } from '../analyzer';
 import { fetchExternalMetrics } from '../externalMetrics';
 import {
-  isAiConfigured,
-  aiGenerateText,
+  getAiCapability,
   sendInternalError,
   buildEnglishPrompt,
   buildSwaggerPrompt,
@@ -43,11 +42,12 @@ export async function aiRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
     async (request, reply) => {
       const { phrase } = request.body;
       if (!phrase) return reply.code(400).send({ error: 'phrase is required' });
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
-        const text = (await aiGenerateText(pool,
+        const text = (await ai.generateText(
           `Convert this plain-English schedule description to a standard cron expression (5 fields: minute hour day month weekday).
 Also provide a short human-readable preview confirming when it runs. ${USER_DATA_INSTRUCTION}
 
@@ -72,7 +72,8 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`,
     async (request, reply) => {
       const { trend } = request.body;
       if (!trend || trend.length < 3) return reply.code(422).send({ error: 'Need at least 3 trend points' });
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
@@ -82,7 +83,7 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`,
           rps: t.metrics.rps,
           perfStatus: t.perf_status,
         }));
-        const text = (await aiGenerateText(pool,
+        const text = (await ai.generateText(
           `You are a performance engineer. Write a 2-sentence plain-English summary of this load test trend. Focus on what changed and what it means for the system.
 
 Trend data (chronological):
@@ -106,7 +107,8 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`,
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
@@ -121,7 +123,7 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`,
         const history = rows.map((r: { metrics: Record<string, number>; perf_status: string }) => ({
           vus: r.metrics.vus, p95: r.metrics.p95ResponseTime, rps: r.metrics.rps, perfStatus: r.perf_status,
         }));
-        const text = (await aiGenerateText(pool,
+        const text = (await ai.generateText(
           `Suggest sensible load test settings for this URL: ${url}
 Type: ${type}
 ${history.length > 0 ? `Recent run history:\n${JSON.stringify(history, null, 2)}` : 'No previous runs — suggest conservative defaults.'}
@@ -146,7 +148,8 @@ Return ONLY valid JSON:
     async (request, reply) => {
       const { events } = request.body;
       if (!events?.length) return reply.code(400).send({ error: 'events is required' });
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
@@ -159,7 +162,7 @@ Return ONLY valid JSON:
         const dist = Object.fromEntries(rows.map((r: { perf_status: string; count: string }) => [r.perf_status, parseInt(r.count)]));
         const total = Object.values(dist).reduce((a: number, b: number) => a + b, 0);
 
-        const text = (await aiGenerateText(pool,
+        const text = (await ai.generateText(
           `Analyse this load test result distribution and predict whether a webhook firing on [${events.join(', ')}] would be too noisy or never fire.
 
 Historical result distribution (${total} total runs):
@@ -185,11 +188,12 @@ Return ONLY valid JSON:
     { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type, vus, duration, profile, stepCount } = request.body;
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
-        const text = (await aiGenerateText(pool,
+        const text = (await ai.generateText(
           `Suggest a short, descriptive name and 2-3 tags for a load test preset with these settings. ${USER_DATA_INSTRUCTION}
 URL: ${fenceUserContent('url', url || 'n/a')}, Type: ${type}, VUs: ${vus ?? 'n/a'}, Duration: ${duration ?? 'n/a'}, Profile: ${profile ?? 'load'}${stepCount ? `, Steps: ${stepCount}` : ''}
 
@@ -215,11 +219,12 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`,
     async (request, reply) => {
       const { steps } = request.body;
       if (!steps || steps.length === 0) return reply.code(400).send({ error: 'steps is required' });
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
-        const text = (await aiGenerateText(pool,
+        const text = (await ai.generateText(
           `You are an expert in load testing. ${USER_DATA_INSTRUCTION} Analyse these HTTP steps and identify any hardcoded values in URLs or request bodies that should be parameterised (user IDs, emails, product IDs, search terms, session tokens, etc.).
 Suggest test-data column names for a CSV/JSON data file.
 
@@ -248,11 +253,12 @@ Return ONLY valid JSON:
       if (!script || script.length > 256 * 1024) {
         return reply.code(400).send({ error: 'script is required and must be under 256 KB' });
       }
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
-        const text = (await aiGenerateText(pool,
+        const text = (await ai.generateText(
           `You are an expert in both Playwright and k6. Translate the following Playwright test script into a k6 load test script. ${USER_DATA_INSTRUCTION}
 
 Rules:
@@ -285,7 +291,8 @@ ${fenceUserContent('playwright_script', script.slice(0, 8000))}`,
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
@@ -326,7 +333,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
   "reasoning": "<one sentence explaining the choices>"
 }`;
 
-        const text = (await aiGenerateText(pool, prompt)).trim();
+        const text = (await ai.generateText(prompt)).trim();
         await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text);
         if (!parsed || !isValidSuggestThresholdsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
@@ -385,7 +392,8 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
     { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { testId } = request.params;
-      if (!(await isAiConfigured(pool))) return reply.code(503).send({ error: 'No AI provider configured' });
+      const ai = await getAiCapability(pool);
+      if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
 
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
@@ -442,7 +450,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
   }
 ]`;
 
-        const text = (await aiGenerateText(pool, prompt)).trim();
+        const text = (await ai.generateText(prompt)).trim();
         await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text, 'array');
         if (!parsed || !isValidDiagnoseResponse(parsed)) return { diagnoses: [], message: 'AI returned unexpected response' };

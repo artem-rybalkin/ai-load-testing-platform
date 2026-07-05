@@ -10,7 +10,7 @@ import type { SLOThresholds, BackendMetrics, ClientMetrics } from '@alt/shared';
 import { broadcast } from '../ws';
 import { recordAudit } from '../audit';
 import { analyzeResult } from '../analyzer';
-import { isAiConfigured, aiGenerateText } from './helpers';
+import { getAiCapability } from './helpers';
 import { downsampleLivePoints } from '../liveMetricsDownsample';
 
 export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): Promise<void> {
@@ -434,21 +434,24 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
 
       // AI-8: Executive summary
       let execSummary = '';
-      if (result.metrics && result.perf_status && (await isAiConfigured(pool))) {
-        try {
-          const m = result.metrics;
-          const summaryCtx = {
-            url: result.target_url, type: result.type, perfStatus: result.perf_status,
-            p95: m.p95ResponseTime, avg: m.avgResponseTime, rps: m.rps,
-            errorRate: m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : '0',
-            analysis: result.analysis?.summary,
-          };
-          execSummary = (await aiGenerateText(pool,
-            `Write a 3-sentence executive summary of this load test result for a non-technical manager. Be clear, factual, and end with a recommendation.
+      if (result.metrics && result.perf_status) {
+        const ai = await getAiCapability(pool);
+        if (ai.configured) {
+          try {
+            const m = result.metrics;
+            const summaryCtx = {
+              url: result.target_url, type: result.type, perfStatus: result.perf_status,
+              p95: m.p95ResponseTime, avg: m.avgResponseTime, rps: m.rps,
+              errorRate: m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : '0',
+              analysis: result.analysis?.summary,
+            };
+            execSummary = (await ai.generateText(
+              `Write a 3-sentence executive summary of this load test result for a non-technical manager. Be clear, factual, and end with a recommendation.
 Data: ${JSON.stringify(summaryCtx)}
 Return only the summary text, no JSON, no markdown.`,
-          )).trim();
-        } catch { /* non-fatal */ }
+            )).trim();
+          } catch { /* non-fatal */ }
+        }
       }
 
       const doc = new PDFDocument({ margin: 50, size: 'A4' });

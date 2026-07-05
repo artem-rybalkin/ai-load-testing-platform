@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, diagnoseErrors, getTrendNarrative, getExecutionLog, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource, ErrorDiagnosis, BackendMetrics, ClientMetrics } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
@@ -124,15 +124,22 @@ function ExecutionLogPanel({
     }
   }, [liveLines, open, isRunning]);
 
-  const allEntries: LogEntry[] = isRunning
-    ? liveLines
-    : (stored ?? '').split('\n').filter(Boolean).map((s, i) => parseEntry(s, i));
+  // Re-parsing/joining/counting up to 5000 lines is real work — memoized so
+  // it only re-runs when the underlying log data actually changes, not on
+  // every unrelated re-render (parent countdown timers, other WS events).
+  const allEntries: LogEntry[] = useMemo(() => (
+    isRunning
+      ? liveLines
+      : (stored ?? '').split('\n').filter(Boolean).map((s, i) => parseEntry(s, i))
+  ), [isRunning, liveLines, stored]);
 
-  const visible = filter === 'ALL'
-    ? allEntries
-    : allEntries.filter(e => e.level === filter);
+  const visible = useMemo(() => (
+    filter === 'ALL' ? allEntries : allEntries.filter(e => e.level === filter)
+  ), [filter, allEntries]);
 
-  const rawText = allEntries.map(e => `[${e.level}] ${e.line}`).join('\n');
+  const rawText = useMemo(() => (
+    allEntries.map(e => `[${e.level}] ${e.line}`).join('\n')
+  ), [allEntries]);
 
   const download = (): void => {
     const blob = new Blob([rawText], { type: 'text/plain' });
@@ -146,10 +153,12 @@ function ExecutionLogPanel({
 
   const copy = (): void => { navigator.clipboard.writeText(rawText).catch(() => {}); };
 
-  const counts = allEntries.reduce<Record<string, number>>((acc, e) => {
-    acc[e.level] = (acc[e.level] ?? 0) + 1;
-    return acc;
-  }, {});
+  const counts = useMemo(() => (
+    allEntries.reduce<Record<string, number>>((acc, e) => {
+      acc[e.level] = (acc[e.level] ?? 0) + 1;
+      return acc;
+    }, {})
+  ), [allEntries]);
 
   return (
     <Card className="col-span-full">

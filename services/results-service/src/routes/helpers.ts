@@ -27,16 +27,19 @@ import { getAiProviderSetting } from '../settings';
 
 // ── AI helpers ────────────────────────────────────────────────────────────────
 
-/** Generates text using the globally-configured AI provider (with fallback chain). */
-export const aiGenerateText = async (pool: Pool, prompt: string): Promise<string> => {
+/**
+ * Fetches the globally-configured AI provider setting once and returns both
+ * whether it's configured and a bound text-generator using that same
+ * setting — every /ai/* route needs both, and calling isAiConfigured() then
+ * aiGenerateText() separately meant two identical DB reads per request.
+ */
+export const getAiCapability = async (pool: Pool): Promise<{
+  configured: boolean;
+  generateText: (prompt: string) => Promise<string>;
+}> => {
   const setting = await getAiProviderSetting(pool);
-  return generateAIText(prompt, setting);
-};
-
-/** Whether any provider in the globally-configured chain has an API key set. */
-export const isAiConfigured = async (pool: Pool): Promise<boolean> => {
-  const setting = await getAiProviderSetting(pool);
-  return [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
+  const configured = [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
+  return { configured, generateText: (prompt: string) => generateAIText(prompt, setting) };
 };
 
 // ── Generic error helper ──────────────────────────────────────────────────────
