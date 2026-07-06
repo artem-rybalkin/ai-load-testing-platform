@@ -283,5 +283,61 @@ describe('worker-client index.ts', () => {
       await expect(cancelHandler(makeMsg({ testId: 'never-started' }))).resolves.toBeUndefined();
       expect(channel.ack).toHaveBeenCalled();
     });
+
+    // ── Regression: bug #2 ────────────────────────────────────────────────────
+    // A cancel arriving during browser-pool acquisition is silently dropped.
+    // index.ts cancel handler (lines 131-137) only records a cancellation when
+    // runningBrowsers.get(testId) is already populated.  But runningBrowsers is
+    // set inside runClientTest AFTER browserPool.acquire() resolves (1-3 s on a
+    // cold launch).  A cancel message processed in that window is a complete
+    // no-op: the test completes normally with status:'completed'.
+    // Expected fix: track pending testIds (e.g. via a pendingCancels set) before
+    // acquire so that when acquire resolves the browser can be closed immediately.
+    it.fails(
+      'cancel arriving before runningBrowsers is populated (during acquire gap) is honored, not silently dropped',
+      async () => {
+        // Simulate the acquire gap: runClientTest resolves a promise (allowAcquire)
+        // before it sets runningBrowsers, mirroring the timing in the real code
+        // where browserPool.acquire() takes 1-3 s on a cold launch.
+        let allowAcquire!: () => void;
+        mockRunClientTest.mockImplementation(
+          async (test: TestRequest, ctx: { runningBrowsers: Map<string, { close: MockFn }> }) => {
+            // Phase 1 — "acquire in progress": runningBrowsers not yet populated.
+            await new Promise<void>(resolve => { allowAcquire = resolve; });
+            // Phase 2 — "acquire complete": browser now tracked.
+            ctx.runningBrowsers.set(test.id, { close: vi.fn().mockResolvedValue(undefined) });
+            return { metrics: makeMetrics(), executionLog: '' };
+          },
+        );
+
+        const { start } = await import('../index');
+        await start();
+
+        const cancelHandler = channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
+        const queueHandler  = channel.consume.mock.calls[1][1] as (msg: unknown) => Promise<void>;
+
+        const test = makeTest({ id: 'cancel-during-acquire' });
+        const queuePromise = queueHandler(makeMsg(test));
+
+        // Wait for runClientTest to start (it is now blocked on allowAcquire).
+        await vi.waitFor(() => expect(mockRunClientTest).toHaveBeenCalled());
+
+        // Cancel arrives while acquire is in flight — runningBrowsers is still empty.
+        await cancelHandler(makeMsg({ testId: test.id }));
+
+        // Let acquire complete — test runs to (currently) normal completion.
+        allowAcquire();
+        await queuePromise;
+
+        // Desired: cancel was honored → result must NOT be published to test-results.
+        // Currently: cancel was a no-op → result IS published with status:'completed'.
+        // → assertion fails → it.fails passes (bug confirmed).
+        expect(channel.sendToQueue).not.toHaveBeenCalledWith(
+          'test-results',
+          expect.anything(),
+          expect.anything(),
+        );
+      },
+    );
   });
 });

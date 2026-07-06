@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { FastifyInstance } from 'fastify';
-import { buildApp } from '../index';
+import { buildApp, parseDurationSeconds } from '../index';
 import { publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from '../queue';
 import { findExistingScript, checkDbHealth, incrementUsedCount } from '../scripts';
 import { getApiSession } from '../session';
@@ -671,5 +671,101 @@ describe('POST /tests — no-worker warning message', () => {
       typeof url === 'string' && url.includes('/message')
     );
     expect(messageCall).toBeUndefined();
+  });
+});
+
+// ─── RBAC: viewer role not enforced on mutating routes (regression #1 / #2) ───
+// Audit findings:
+//   #1 (High) — "viewer role isn't enforced on POST /tests or POST /tests/:testId/cancel"
+//   #2 (High) — "customScript code execution is reachable by a viewer-role user"
+//
+// Root cause: the onRequest hook (index.ts:89-149) only checks `role === null`;
+// it never returns 403 for role === 'viewer' on mutating methods. A viewer session
+// therefore passes through to the route handler and gets 200 instead of 403.
+//
+// Each it.fails() below PASSES while the bug exists (the inner assertion fails
+// as expected). Once the hook is fixed to block viewers on POST routes, the
+// inner assertions will pass, causing it.fails() to fail — the correct signal
+// that the regression tests should be unwrapped or removed.
+
+describe('RBAC — viewer role not enforced on mutating routes (regression #1/#2)', () => {
+  let viewerApp: FastifyInstance;
+
+  beforeAll(async () => {
+    process.env.SESSION_SECRET = 'test-secret';
+    viewerApp = await buildApp();
+  });
+
+  afterAll(async () => {
+    delete process.env.SESSION_SECRET;
+    await viewerApp.close();
+  });
+
+  beforeEach(() => {
+    mockGetApiSession.mockReset();
+    mockCheckTestQuota.mockReset().mockResolvedValue(null);
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+  });
+
+  // Bug #1a: a viewer session should receive 403 on POST /tests, not 200.
+  it.fails('returns 403 for viewer role on POST /tests (bug: currently 200)', async () => {
+    mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'viewer' });
+    const res = await viewerApp.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: validBody,
+      cookies: { alt_session: 'viewertoken' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+
+  // Bug #1b: a viewer session should receive 403 on POST /tests/:testId/cancel, not 200.
+  it.fails('returns 403 for viewer role on POST /tests/:testId/cancel (bug: currently 200)', async () => {
+    mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'viewer' });
+    const testId = '00000000-0000-0000-0000-000000000099';
+    const res = await viewerApp.inject({
+      method: 'POST',
+      url: `/tests/${testId}/cancel`,
+      cookies: { alt_session: 'viewertoken' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(mockPublishCancel).not.toHaveBeenCalled();
+  });
+
+  // Bug #2: the same RBAC gap lets a viewer submit a customScript for direct execution.
+  it.fails('returns 403 for viewer role on POST /tests with customScript (code execution via RBAC gap)', async () => {
+    mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'viewer' });
+    const res = await viewerApp.inject({
+      method: 'POST',
+      url: '/tests',
+      payload: {
+        ...validBody,
+        customScript: "import http from 'k6/http';\nexport default function() { http.get('http://example.com'); }",
+      },
+      cookies: { alt_session: 'viewertoken' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+});
+
+// ─── parseDurationSeconds — "ms" unit misparsing (regression #4) ──────────────
+// Audit finding #4 (Low):
+//   "parseDurationSeconds() misparses any '…ms' duration as minutes (~60 000x inflation)"
+//
+// Root cause: regex alternation `(h|m|s|ms)` — JS RegExp matches the first
+// successful branch, not the longest. For input "500ms" the engine matches unit
+// 'm' (minutes) before it reaches 'ms', so 500 minutes = 30 000 seconds is
+// returned instead of 500/1000 = 0.5 seconds.
+//
+// The fix is to reorder the alternation to put "ms" before "m": `(h|ms|m|s)`.
+
+describe('parseDurationSeconds — ms unit misparsing regression (#4)', () => {
+  // it.fails: currently parseDurationSeconds('500ms') returns 30000 (minutes),
+  // not 0.5 (seconds). When the regex is fixed, this test will pass and
+  // it.fails will flip to a test failure — signal to unwrap it.
+  it.fails('"500ms" should parse to 0.5 seconds (bug: regex matches "m" before "ms", returns 30000)', () => {
+    expect(parseDurationSeconds('500ms')).toBe(0.5);
   });
 });

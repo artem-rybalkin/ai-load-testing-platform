@@ -813,3 +813,69 @@ describe('handleResult — transaction rollback (M5)', () => {
     expect(webhookCall).toBeUndefined();
   });
 });
+
+// ─── Security regression: SSRF re-validation on webhook delivery ──────────────
+//
+// Finding #2 (Critical): fireWebhooks calls fetch(url) on a DB-stored URL with
+// no re-call to validateSsrfSafeUrl at delivery time. An attacker can register a
+// webhook with a public hostname that passes creation-time validation, then
+// repoint DNS to 169.254.169.254 (cloud metadata) before the next fire — DNS is
+// re-resolved on every fetch() call. Only validated once at POST /webhooks.
+//
+// Finding #3 (High): Even without DNS rebinding, the default fetch() behavior
+// follows redirects (up to 20 hops). A URL that's fully public and DNS-static
+// can still reach an internal target if its response 302s there.
+//
+// Both require fireWebhooks to use validateSsrfSafeUrl at delivery time and
+// redirect: 'manual' (instead of the default 'follow').
+
+describe('fireWebhooks — SSRF re-validation and redirect safety (regression #2, #3)', () => {
+  it.fails(
+    '#2 must not deliver to an SSRF-unsafe URL stored in the DB — no re-validation at delivery time (DNS-rebinding vector)',
+    async () => {
+      // Two webhooks: one safe (used as a sentinel to wait for fireWebhooks to finish),
+      // one with a cloud-metadata internal IP (the SSRF target). Both match 'failed'.
+      // In a DNS-rebinding attack the SSRF URL passes creation-time validation, then the
+      // DNS record is changed to an internal IP before the next delivery fire.
+      await pool.query(
+        `INSERT INTO webhooks (url, events) VALUES
+         ('https://sentinel.example.com/ok', '{failed}'),
+         ('http://169.254.169.254/latest/meta-data/', '{failed}')`,
+      );
+      const result = makeResult({ metrics: failedMetrics });
+      await handleResult(pool, result);
+
+      // fireWebhooks is fire-and-forget in handleResult; wait for the sentinel call
+      // so we know fireWebhooks has completed before checking the SSRF URL.
+      await vi.waitFor(
+        () => expect(mockFetch).toHaveBeenCalledWith('https://sentinel.example.com/ok', expect.anything()),
+        { timeout: 2000 },
+      );
+
+      // Correct behavior: fetch must never be called with an SSRF-unsafe URL.
+      // Current behavior: fetch IS called — no re-validation on the delivery path.
+      expect(mockFetch).not.toHaveBeenCalledWith(
+        'http://169.254.169.254/latest/meta-data/',
+        expect.anything(),
+      );
+    },
+  );
+
+  it.fails(
+    '#3 fireWebhooks must use redirect: manual to prevent SSRF via redirect chains',
+    async () => {
+      // A URL that is safe at creation time can still 302 to an internal target.
+      await pool.query(
+        `INSERT INTO webhooks (url, events) VALUES ('https://safe.example.com/hook', '{failed}')`,
+      );
+      const result = makeResult({ metrics: failedMetrics });
+      await handleResult(pool, result);
+
+      const call = mockFetch.mock.calls.find(([url]: unknown[]) => String(url) === 'https://safe.example.com/hook');
+      expect(call).toBeDefined();
+      // Correct: redirect: 'manual' so a 302 to 169.254.x.x can be caught and blocked.
+      // Current: default fetch behaviour follows redirects up to 20 hops with no re-check.
+      expect((call as [string, RequestInit])[1]).toMatchObject({ redirect: 'manual' });
+    },
+  );
+});

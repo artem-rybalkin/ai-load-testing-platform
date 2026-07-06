@@ -617,3 +617,101 @@ describe('getProviderSetting — per-team resolution', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
   });
 });
+
+// ─── Regression: FLOW_PROMPT step-data PII not fenced (Finding #1) ───────────
+
+describe('regression: FLOW_PROMPT step-data PII not fenced (finding #1)', () => {
+  it.fails(
+    'step body containing PII is wrapped in <user_data> fence (currently interpolated raw)',
+    async () => {
+      const fn = await getMockFn();
+      fn.mockClear();
+
+      const test = baseFlow();
+      // Simulate a login step body of the kind a real flow recording would capture.
+      test.steps![0].body = '{"email":"user@example.com","password":"hunter2"}';
+      await generateScript(test);
+      const prompt = await getLastPrompt();
+
+      // Correct: FLOW_PROMPT should wrap step body content in fenceUserContent() just as it
+      // already wraps test.description — separating untrusted recorded HTTP data from LLM instructions.
+      // Bug: s.body is spliced into the prompt string raw (no <user_data> wrapper, no redactPII()).
+      expect(prompt).toMatch(/<user_data[^>]*>[\s\S]*user@example\.com[\s\S]*<\/user_data>/);
+    },
+  );
+});
+
+// ─── Regression: message-only 429 detection missing in generateScript and compareDescriptions (Finding #2) ──
+
+describe('regression: message-only 429 rate-limit detection (finding #2)', () => {
+  it.fails(
+    'generateScript: error with "429" in message but no .status triggers backoff retry (currently throws immediately)',
+    async () => {
+      const fn = await getMockFn();
+      fn.mockReset();
+      fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
+      fn.mockRejectedValueOnce(new Error('rate limited: 429 quota exceeded'));
+      fn.mockResolvedValueOnce('generated-script-after-retry');
+
+      try {
+        // Bug: error.status is undefined ≠ 429 → code re-throws immediately instead of retrying.
+        // Correct: should detect '429' or 'quota' in error.message and apply the same backoff path
+        // (consistent with analyser-service/src/aiInsights.ts:305 and recorder-service/src/correlator.ts:418).
+        const result = await generateScript(baseFlow());
+        expect(result).toBe('generated-script-after-retry');
+        expect(fn).toHaveBeenCalledTimes(2);
+      } finally {
+        fn.mockReset();
+        fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
+      }
+    },
+  );
+
+  it.fails(
+    'compareDescriptions: error with "429" in message but no .status triggers backoff retry (currently defaults to REGENERATE immediately)',
+    async () => {
+      const fn = await getMockFn();
+      fn.mockReset();
+      fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
+      fn.mockRejectedValueOnce(new Error('rate limited: 429 quota exceeded'));
+      fn.mockResolvedValueOnce('REUSE');
+
+      try {
+        // Bug: error.status is undefined → else-branch fires immediately: log + return 'REGENERATE'.
+        // Correct: should detect '429'/'quota' in error.message and retry with backoff.
+        const result = await compareDescriptions('same endpoint', 'same endpoint description');
+        expect(result).toBe('REUSE');
+        expect(fn).toHaveBeenCalledTimes(2);
+      } finally {
+        fn.mockReset();
+        fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
+      }
+    },
+  );
+});
+
+// ─── Regression: compareDescriptions prompt injection gap (Finding #4) ────────
+
+describe("regression: compareDescriptions prompt missing fenceUserContent (finding #4)", () => {
+  it.fails(
+    'compareDescriptions prompt wraps both descriptions in <user_data> fence (currently interpolated raw)',
+    async () => {
+      const fn = await getMockFn();
+      fn.mockReset();
+      fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
+      fn.mockResolvedValueOnce('REUSE');
+
+      try {
+        await compareDescriptions('load test the login endpoint', 'load test the auth endpoint');
+        const prompt = fn.mock.calls.at(-1)?.[0] as string;
+        // Correct: storedDescription and newDescription should be wrapped in fenceUserContent()
+        // to match the prompt-injection mitigation used by BACKEND_PROMPT, CLIENT_PROMPT, and FLOW_PROMPT.
+        // Bug: they are spliced inside triple-quote delimiters with no <user_data> wrapper.
+        expect(prompt).toContain('<user_data');
+      } finally {
+        fn.mockReset();
+        fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
+      }
+    },
+  );
+});

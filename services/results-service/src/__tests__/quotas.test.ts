@@ -169,3 +169,49 @@ describe('getTeamUsage', () => {
     });
   });
 });
+
+// ─── Security regression: non-atomic Gemini quota (2026-07-05 audit #9) ───────
+
+// Finding #9 (Medium): checkGeminiQuota and incrementGeminiUsage are two separate
+// queries. Concurrent /ai/* requests from the same team all read the same
+// pre-increment count and all pass, then all increment — allowing a team to
+// overshoot maxGeminiCallsPerDay by up to (concurrent-request-count − 1).
+// Fix: replace the check-then-act pair with a single atomic SQL using
+//   INSERT ... ON CONFLICT DO UPDATE SET call_count = ... RETURNING call_count
+// so the increment only commits when the resulting count is within quota.
+describe('checkGeminiQuota / incrementGeminiUsage — non-atomic race condition (regression #9, Medium)', () => {
+  it.fails(
+    '#9 concurrent check-then-act sequences let a team exceed maxGeminiCallsPerDay',
+    async () => {
+      // Restrict the team to exactly 1 Gemini call per day.
+      await pool.query(
+        `INSERT INTO team_quotas (team_id, max_gemini_calls_per_day)
+         VALUES ($1, 1)
+         ON CONFLICT (team_id) DO UPDATE SET max_gemini_calls_per_day = 1`,
+        [teamId],
+      );
+
+      // Launch 5 concurrent check-then-act sequences, each simulating a separate
+      // /ai/* request handler: read the count, and if under quota, increment.
+      const results = await Promise.all(
+        Array.from({ length: 5 }, async () => {
+          const quotaError = await checkGeminiQuota(pool, teamId);
+          if (!quotaError) {
+            // Simulate the AI call completing before the increment (the gap where
+            // concurrency slips through — the real handler does the same).
+            await incrementGeminiUsage(pool, teamId);
+            return 'allowed';
+          }
+          return 'denied';
+        }),
+      );
+
+      const allowed = results.filter(r => r === 'allowed').length;
+
+      // Correct behavior: only 1 concurrent request should be allowed (quota = 1).
+      // Bug: all 5 read call_count=0 before any increment arrives, all pass the check,
+      // then all increment — the daily quota is exceeded by 4 extra calls.
+      expect(allowed).toBe(1); // fails — under concurrency, allowed > 1
+    },
+  );
+});

@@ -918,3 +918,157 @@ describe('k6Level', () => {
     expect(k6Level(line)).toBe(expected);
   });
 });
+
+// ─── Regression #2: write failure leaks runDir ────────────────────────────────
+//
+// Finding (Low): "Per-test run directory leaks on write failure"
+// runK6Test mkdir's the run dir, then an unguarded Promise.all writes
+// script.js / data.json / data.csv. Only the validateScript failure path
+// calls rm() to clean up. A writeFile rejection (disk full, EACCES, etc.)
+// throws straight out of the Promise.all and exits the function without ever
+// calling rm(), leaving the run directory behind.
+//
+// Desired: rm(runDir, { recursive: true, force: true }) is called whenever
+// runK6Test rejects, regardless of which failure path caused the rejection.
+// Current: rm is only called on the validateScript failure path.
+
+describe('runK6Test — write failure should clean up runDir (regression finding #2)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setupFs();
+  });
+
+  it.fails('write failure should remove the runDir even when writeFile rejects (currently leaks)', async () => {
+    const { runK6Test } = await import('../runner');
+
+    // Make the first writeFile call (script.js) reject, simulating disk-full or EACCES.
+    // setupFs() sets the default to resolve; mockRejectedValueOnce overrides the first call only.
+    mockWriteFile.mockRejectedValueOnce(new Error('ENOSPC: no space left on device'));
+
+    // validateScript (spawn) is never reached because writeFile fails first —
+    // include a stub anyway so mockSpawn state stays consistent.
+    const validate = makeProc();
+    mockSpawn.mockReturnValueOnce(validate);
+
+    // runK6Test must reject (the Promise.all throws)
+    await expect(
+      runK6Test('test-write-fail', 'export default function(){}', undefined, undefined, undefined, makeCtx())
+    ).rejects.toThrow();
+
+    // Desired: the runDir is cleaned up even when writeFile is the failure cause.
+    // Current: rm() is only called from the validateScript.catch handler, not here.
+    expect(mockRm).toHaveBeenCalledWith(
+      expect.stringContaining('k6-run-test-write-fail'),
+      { recursive: true, force: true },
+    );
+  });
+});
+
+// ─── Regression #3: mid-line poll silently drops the data point ───────────────
+//
+// Finding (Low): "A live-metrics poll landing mid-line silently drops that data point"
+// readAndPost() advances fileOffset to the current file size before checking
+// whether the last line read is complete. If the polling interval fires while
+// k6 is still writing a JSON line (no trailing '\n' yet), that partial line is
+// silently dropped by aggregateWindow's per-line try/catch.  On the next tick
+// fileOffset is already past the partial content, so the continuation bytes
+// are read in isolation and are also unparseable — the data point is lost.
+//
+// makeLineBuffer (used for stdout/stderr) correctly retains the incomplete
+// trailing fragment in an internal buffer and prepends it to the next chunk.
+// readAndPost does not apply equivalent buffering.
+//
+// Desired: a data point split across two poll ticks is retained and eventually
+// posted (as makeLineBuffer does for stdout/stderr).
+// Current: both halves are silently discarded.
+
+describe('readAndPost — mid-line split silently drops data point (regression finding #3)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    vi.resetModules();
+    setupFs();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.fails('a data point split across two poll ticks should not be lost (currently dropped)', async () => {
+    const { runK6Test } = await import('../runner');
+    const validate = makeProc();
+    const run      = makeProc();
+    mockSpawn.mockReturnValueOnce(validate).mockReturnValueOnce(run);
+
+    // A complete, valid JSON line that k6 would emit for one http_req_duration point.
+    const fullLine = JSON.stringify({
+      type:   'Point',
+      metric: 'http_req_duration',
+      data:   { value: 456, time: new Date().toISOString(), tags: {} },
+    });
+    // Split the line in half with NO trailing newline on the first chunk,
+    // simulating a poll that fires while k6 is still writing this line.
+    const splitAt = Math.floor(fullLine.length / 2);
+    const chunk1  = fullLine.slice(0, splitAt);           // partial JSON, no '\n'
+    const chunk2  = fullLine.slice(splitAt) + '\n';        // remainder + newline
+
+    const buf1 = Buffer.from(chunk1, 'utf-8');
+    const buf2 = Buffer.from(chunk2, 'utf-8');
+
+    // Tick 1: file contains only chunk1 (truncated mid-line, no '\n')
+    mockOpen.mockResolvedValueOnce({
+      stat:  vi.fn().mockResolvedValue({ size: buf1.length }),
+      read:  vi.fn().mockImplementation(async (dest: Buffer, _off: number, len: number, pos: number) => {
+        const data = buf1.subarray(pos, pos + len);
+        data.copy(dest, _off);
+        return { bytesRead: data.length };
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Tick 2: file now has chunk1 + chunk2 (the complete, newline-terminated line)
+    mockOpen.mockResolvedValueOnce({
+      stat:  vi.fn().mockResolvedValue({ size: buf1.length + buf2.length }),
+      read:  vi.fn().mockImplementation(async (dest: Buffer, _off: number, len: number, pos: number) => {
+        const full = Buffer.concat([buf1, buf2]);
+        const data = full.subarray(pos, pos + len);
+        data.copy(dest, _off);
+        return { bytesRead: data.length };
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const ctx = makeCtx();
+    ctx.liveIntervalMs = 5_000;
+
+    const promise = runK6Test('test-midline', 'export default function(){}', undefined, undefined, undefined, ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    validate.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Tick 1: reads chunk1 (no '\n'). split('\n').filter(trim) → [chunk1].
+    // aggregateWindow tries JSON.parse(chunk1) → throws (not valid JSON) → swallowed.
+    // fileOffset advances to buf1.length — the partial content is irreversibly forgotten.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // Tick 2: reads from fileOffset=buf1.length → reads only chunk2.
+    // chunk2 = fullLine.slice(splitAt) + '\n' — the second half of the JSON without the head.
+    // aggregateWindow tries JSON.parse(chunk2 without '\n') → throws → swallowed.
+    // The data point is permanently lost.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // Desired: postLiveMetric should have been called with the complete data point
+    // (value 456 → avgResponseTime: 456) once both halves were available.
+    // Current: the partial line and its remainder are both silently discarded;
+    // postLiveMetric is never called with this data point.
+    expect(ctx.postLiveMetric).toHaveBeenCalledWith(
+      'test-midline',
+      expect.objectContaining({ avgResponseTime: 456 }),
+    );
+
+    run.emit('close', 0);
+    await promise;
+  });
+});

@@ -1508,3 +1508,112 @@ describe('INTERNAL_API_KEY gating', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+// ─── Security regressions from 2026-07-05 audit ───────────────────────────────
+
+// Finding #1 (Critical): POST /results/:testId/cancel has no project_id filter.
+// The SQL is: UPDATE test_results SET status='cancelled' WHERE test_id=$1 AND
+// status IN ('pending','running') — no project_id column touched.
+// Any caller that knows another tenant's testId can cancel their test via the
+// internal-callback path (session auth is bypassed for URLs ending in /cancel).
+// Fix: the SQL must add AND ($2::uuid IS NULL OR project_id = $2::uuid), and the
+// handler must derive projectId from a body field passed by api-service.
+describe('POST /results/:testId/cancel — cross-tenant isolation (regression #1, Critical)', () => {
+  it.fails(
+    '#1 cancel must not succeed when the test belongs to a different project — no project_id filter in SQL',
+    async () => {
+      const projectId = crypto.randomUUID();
+      await pool.query(`INSERT INTO projects (id, name) VALUES ($1, 'team-alpha')`, [projectId]);
+      const testId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO test_results (test_id, type, target_url, status, project_id)
+         VALUES ($1, 'backend', 'http://example.com', 'running', $2)`,
+        [testId, projectId],
+      );
+
+      // The cancel endpoint is classified as an internal callback (any URL ending in
+      // '/cancel') — the session hook is skipped and request.projectId is never set.
+      // Correct behavior: without project ownership proof the handler must 404.
+      // Bug: SQL has no project_id filter — any caller can cancel any running test.
+      const res = await app.inject({ method: 'POST', url: `/results/${testId}/cancel` });
+      expect(res.statusCode).toBe(404); // fails — bug gives 200
+    },
+  );
+});
+
+// Finding #10 (Medium): PUT /log-sources/:id uses RETURNING * which includes
+// auth_header. GET /log-sources deliberately excludes auth_header with an explicit
+// comment ("readable by any team member, viewer included, not just admin"). A
+// partial PUT (e.g. renaming the source) still echoes the stored bearer token back
+// to the caller — the very exposure GET guards against.
+// Fix: change RETURNING * to RETURNING <explicit column list> that omits auth_header.
+describe('PUT /log-sources/:id — auth_header must not be echoed in the response (regression #10, Medium)', () => {
+  it.fails(
+    '#10 PUT partial update must not include auth_header in the response body',
+    async () => {
+      const create = await app.inject({
+        method: 'POST',
+        url: '/log-sources',
+        payload: {
+          name: 'Datadog Prod',
+          urlTemplate: 'https://datadog.example.com/logs',
+          authHeader: 'Bearer super-secret-datadog-token',
+        },
+      });
+      expect(create.statusCode).toBe(201);
+      const { id } = create.json().logSource;
+
+      // Update only the name — auth_header is unchanged in the DB.
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/log-sources/${id}`,
+        payload: { name: 'Datadog Prod Updated' },
+      });
+      expect(res.statusCode).toBe(200);
+
+      // Correct: auth_header omitted from response (same as GET /log-sources).
+      // Bug: RETURNING * includes auth_header in the response body.
+      expect(res.json().logSource).not.toHaveProperty('auth_header'); // fails — field is present
+    },
+  );
+});
+
+// Finding #11 (Low): resources.ts:178 runs an unscoped
+//   SELECT enabled FROM schedules WHERE id = $1
+// before the correctly-project-scoped UPDATE. Any caller with a known schedule UUID
+// can probe whether it exists and read its enabled/disabled state regardless of
+// team ownership (the write stays safe; only one boolean is leaked).
+// Fix: add AND project_id = $2 to the pre-check SELECT, or derive project_id from
+// the session and scope the lookup.
+describe('PUT /schedules/:id — pre-update enable-state SELECT must be project-scoped (regression #11, Low)', () => {
+  it.fails(
+    '#11 enable-state pre-check SELECT must include project_id filter — currently a cross-tenant boolean oracle',
+    async () => {
+      const projectA = crypto.randomUUID();
+      await pool.query(`INSERT INTO projects (id, name) VALUES ($1, 'team-a-sched')`, [projectA]);
+      const { rows: schedRows } = await pool.query(
+        `INSERT INTO schedules (name, cron, type, target_url, options, enabled, project_id)
+         VALUES ('Private Schedule', '* * * * *', 'backend', 'http://a.com', '{}', false, $1)
+         RETURNING id`,
+        [projectA],
+      );
+      const scheduleId = schedRows[0].id as string;
+
+      // Reproduce the exact unscoped query from resources.ts:178.
+      // A caller from a different project supplies the known schedule UUID.
+      const projectB = crypto.randomUUID();
+      const { rows: oracleRows } = await pool.query(
+        `SELECT enabled FROM schedules WHERE id = $1`,
+        [scheduleId],
+      );
+
+      // Correct: the pre-check should be scoped to projectB so it returns 0 rows
+      // (project B does not own this schedule → no information leak).
+      // The correctly-scoped query would be:
+      //   SELECT enabled FROM schedules WHERE id=$1 AND project_id=$2  (→ 0 rows)
+      // Bug: unscoped query returns 1 row, revealing enabled=false to project B.
+      void projectB; // unused in the buggy query — intentional
+      expect(oracleRows).toHaveLength(0); // fails — bug returns 1 row
+    },
+  );
+});

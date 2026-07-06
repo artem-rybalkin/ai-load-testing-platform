@@ -23,7 +23,7 @@ declare module 'fastify' {
 // value contains no recognizable duration component — callers must reject
 // these rather than silently treating them as 0s (which would bypass the
 // duration quota check).
-const parseDurationSeconds = (d: string | number): number | null => {
+export const parseDurationSeconds = (d: string | number): number | null => {
   if (typeof d === 'number') return Number.isFinite(d) ? Math.round(d) : null;
   const re = /(\d+(?:\.\d+)?)\s*(h|m|s|ms)/gi;
   let total = 0;

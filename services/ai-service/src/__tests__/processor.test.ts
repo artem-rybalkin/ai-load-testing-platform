@@ -376,3 +376,48 @@ describe('processAiRequest — ack guarantee', () => {
     expect(channel.ack).toHaveBeenCalledOnce();
   });
 });
+
+// ─── Regression: REGENERATE→failure retry requeues original message (Finding #3) ──
+
+describe('regression: REGENERATE→generate-failure requeues original message (finding #3)', () => {
+  beforeEach(() => { vi.unstubAllGlobals(); });
+
+  it.fails(
+    'requeued message omits cachedScript so retry skips comparison (currently requeues original with cachedScript)',
+    async () => {
+      const compareDescriptions = vi.fn().mockResolvedValue('REGENERATE');
+      const generateScript = vi.fn().mockRejectedValue(new Error('Gemini unavailable'));
+      const { channel, deps } = makeDeps({ generateScript, compareDescriptions });
+
+      const test: EnrichedTestRequest = {
+        ...BASE_TEST,
+        cachedScript: 'export default function cached(){}',
+        cachedScriptDescription: 'old description',
+        description: 'new description — semantically different',
+        scriptId: 'old-script-id',
+      };
+
+      // msg.content holds the original test object (with cachedScript) so we can
+      // inspect exactly what the retry requeues.
+      deps.msg = {
+        content: Buffer.from(JSON.stringify(test)),
+        properties: { headers: { 'x-retry-count': 0 } },
+      };
+
+      await processAiRequest(test, deps);
+
+      // A retry should have been published (retryCount=0 < MAX_RETRIES=3)
+      expect(channel.publish).toHaveBeenCalledOnce();
+
+      const requeuedBuffer = channel.publish.mock.calls[0][2] as Buffer;
+      const requeuedMsg = JSON.parse(requeuedBuffer.toString()) as Record<string, unknown>;
+
+      // Correct behavior: the requeued message should NOT carry cachedScript/cachedScriptDescription
+      // so the next processAiRequest call bypasses compareDescriptions and goes straight to generate —
+      // avoiding a redundant LLM comparison call on every one of the 3 retry attempts.
+      // Bug: processor.ts publishes msg.content (the original buffer), which still has cachedScript,
+      // causing compareDescriptions to fire again on each retry.
+      expect(requeuedMsg['cachedScript']).toBeUndefined();
+    },
+  );
+});

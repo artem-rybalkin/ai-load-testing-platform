@@ -214,3 +214,29 @@ describe('GET /health', () => {
     expect(body.checks.gemini).toBe('missing_key');
   });
 });
+
+// ─── Regression: unauthenticated POST /analyse (TODO finding #1 — Critical) ──
+//
+// buildApp() registers zero auth onRequest hooks and zero rate-limit plugins.
+// Any caller with no credentials can POST arbitrary metrics/teamId and trigger
+// a real Gemini/OpenAI/Anthropic call on the platform's account — cost-DoS and
+// prompt-injection surface. This test documents the EXPECTED behaviour once an
+// auth guard is added; it.fails confirms the bug exists today.
+
+describe('POST /analyse — security regression (finding #1)', () => {
+  it.fails(
+    'rejects unauthenticated requests with 401 or 403 (no auth guard exists yet)',
+    async () => {
+      // No Authorization header, no X-API-Key, no session cookie — a fully anonymous call.
+      const response = await app.inject({
+        method: 'POST',
+        url: '/analyse',
+        payload: analysePayload(),
+      });
+
+      // Bug: currently returns 200 (or another 2xx) because buildApp() has no
+      // onRequest auth hook. A fixed implementation must reject with 401 or 403.
+      expect([401, 403]).toContain(response.statusCode);
+    },
+  );
+});

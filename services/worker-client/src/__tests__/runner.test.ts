@@ -452,3 +452,89 @@ describe('runClientTest — execution log', () => {
     expect(result.executionLog).toContain('Complete');
   });
 });
+
+// ─── Regression: bug #1 ───────────────────────────────────────────────────────
+// LCP/FCP/CLS/TTFB report `0` instead of `undefined` when PerformanceObserver
+// callbacks never fire (e.g. non-paintable or redirected responses).
+// runner.ts initialises lcp/fcp/cls/fcp to 0 inside the page.evaluate closure
+// and never reassigns them when the PerformanceObserver callbacks don't fire
+// within the 3 s window. Unlike jsErrors / longTaskCount (runner.ts:314-315)
+// which correctly coalesce to `undefined` when absent, these become real zeros.
+// Expected fix: treat a 0 value for these metrics the same way jsErrors/
+// longTaskCount are treated — coalesce to undefined.
+describe('runClientTest — web-vitals zero-to-undefined (bug #1 regression)', () => {
+  beforeEach(() => { vi.unstubAllGlobals(); });
+
+  it.fails(
+    'lcp/fcp/cls should be undefined — not 0 — when PerformanceObserver callbacks never fire',
+    async () => {
+      // Simulate a non-paintable response: the PerformanceObserver callbacks for
+      // LCP, FCP, and CLS never fire, so page.evaluate resolves with the initial
+      // zero values after the 3 s timeout.  TTFB nav-timing also returns 0 (no
+      // navigation entry, e.g. a redirect or data: URL).
+      const page = makeMockPage({
+        ttfb: 0,
+        webVitals: makeWebVitals({ lcp: 0, fcp: 0, cls: 0 }),
+      });
+      const browser = makeMockBrowser({ newPageResult: page });
+      // Lighthouse is non-fatal; its absence keeps the test focused on Web Vitals.
+      const lh = vi.fn().mockRejectedValue(new Error('no chrome debug port'));
+      const { ctx } = makeCtx({
+        browser,
+        lighthouse: lh as unknown as ReturnType<typeof makeLighthouseMock>,
+      });
+
+      const result = await runClientTest(BASE_TEST, ctx);
+
+      // Desired (not yet implemented): "never fired" metrics → undefined, not 0.
+      // Currently avgNum() returns 0 → these assertions fail → it.fails passes.
+      expect(result.metrics.lcp).toBeUndefined();
+      expect(result.metrics.fcp).toBeUndefined();
+      expect(result.metrics.cls).toBeUndefined();
+    },
+  );
+});
+
+// ─── Regression: bug #3 ───────────────────────────────────────────────────────
+// A max-duration kill mid-Lighthouse-audit is reported as a normal "completed"
+// result.  When the kill timer fires during runLighthouse(), Lighthouse's own
+// try/catch (runner.ts:293-296) swallows the error and logs it as "non-fatal",
+// allowing runClientTest to return normally with status:'completed'.  The
+// identical timer firing during the sessions loop correctly propagates as a hard
+// failure.  Expected fix: after the Lighthouse catch block, detect that the kill
+// timer already fired (or that the browser is no longer connected) and re-throw.
+describe('runClientTest — max-duration kill during Lighthouse (bug #3 regression)', () => {
+  beforeEach(() => { vi.unstubAllGlobals(); });
+
+  it.fails(
+    'runClientTest should reject when the kill timer fires mid-Lighthouse-audit',
+    async () => {
+      // Wire browser.close() (triggered by the kill timer) → lighthouse rejection,
+      // simulating what happens in production when Chrome closes under Lighthouse.
+      let rejectLighthouse: ((err: Error) => void) | undefined;
+      const lh = vi.fn().mockImplementation(
+        () => new Promise<never>((_, reject) => { rejectLighthouse = reject; }),
+      );
+
+      const browser = makeMockBrowser({ newPageResult: makeMockPage() });
+      // Override close: when the kill timer calls browser.close(), relay the
+      // disconnect to the hanging Lighthouse promise (mirrors real Chrome behaviour).
+      browser.close.mockImplementation(async () => {
+        rejectLighthouse?.(new Error('Protocol error: Connection closed. Target closed.'));
+      });
+
+      const { ctx } = makeCtx({
+        browser: browser as unknown as ReturnType<typeof makeMockBrowser>,
+        lighthouse: lh as unknown as ReturnType<typeof makeLighthouseMock>,
+        // Very short — will fire after the synchronous mock sessions complete
+        // but while the hanging runLighthouse() promise is still pending.
+        maxDurationMs: 50,
+      });
+
+      // Desired: runClientTest should reject because the kill timer fired.
+      // Currently it resolves normally (Lighthouse error swallowed as non-fatal)
+      // → assertion fails → it.fails passes (bug confirmed).
+      await expect(runClientTest(BASE_TEST, ctx)).rejects.toThrow();
+    },
+  );
+});

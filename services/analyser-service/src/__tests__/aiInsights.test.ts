@@ -325,6 +325,86 @@ describe('performance', () => {
   });
 });
 
+// ─── Regression: known bugs (TODO findings #2 and #3) ────────────────────────
+
+describe('generateAiInsights — known-bug regressions', () => {
+  // Finding #2 (Medium): No internal timeout on the AI-provider call.
+  //
+  // results-service/src/consumer.ts wraps the POST /analyse call in a 12s
+  // AbortSignal.timeout and falls back to local analyzeResult() on abort, but
+  // analyser-service's generateAiInsights() has no internal timeout at all —
+  // generateAIText() at aiInsights.ts:281 is awaited with no AbortSignal or
+  // wrapping Promise.race. Under a slow (non-erroring) provider the handler can
+  // run for ~45s (1 attempt + 3s backoff + 1 retry), burning quota with nobody
+  // reading the response.
+  //
+  // Approach: mock generateAIText to resolve after 30s of fake time. Advance
+  // fake timers by 15s — enough for a well-implemented internal timeout (e.g.
+  // AbortSignal.timeout(10000)) to have fired and resolved with null. Check
+  // whether the call settled. It hasn't, confirming the gap.
+  it.fails(
+    'enforces an internal timeout on a slow AI-provider call (no timeout exists yet)',
+    async () => {
+      vi.useFakeTimers();
+      try {
+        const mock = await getMockFn();
+        // AI provider that takes 30s of fake time to respond — never errors, just slow.
+        mock.mockReturnValue(
+          new Promise<string>(r =>
+            setTimeout(() => r(JSON.stringify(validInsightsPayload)), 30_000),
+          ),
+        );
+
+        let resolved = false;
+        const resultPromise = generateAiInsights(makeCtx());
+        resultPromise.then(() => {
+          resolved = true;
+        });
+
+        // Advance 15s — enough for a reasonable internal timeout (e.g. 10s) to
+        // have fired, but less than the 30s mock duration.
+        // In a fixed implementation generateAiInsights would resolve (null) here.
+        await vi.advanceTimersByTimeAsync(15_000);
+        await Promise.resolve(); // flush any pending microtasks
+
+        // Fails today: the call is still pending — no internal timeout fires.
+        // A fixed implementation sets resolved = true before this point.
+        expect(resolved).toBe(true);
+      } finally {
+        // Drain remaining timers so the pending mock promise settles cleanly
+        // before teardown, avoiding an orphaned Promise affecting later tests.
+        await vi.runAllTimersAsync();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  // Finding #3 (Low): AI-insight severity validation is case-sensitive.
+  //
+  // ['critical','warning','info'].includes(parsed.severity) requires an exact
+  // lowercase match. A response with severity "Critical" (PascalCase — valid
+  // data, wrong case) hits the log.warn + immediate return null branch instead
+  // of the attempt < 2 retry path used for exceptions, discarding an otherwise
+  // fully-usable insight. The fix: normalise with .toLowerCase() before the
+  // includes() check.
+  it.fails(
+    'accepts mixed-case severity values (e.g. "Critical") instead of discarding the insight',
+    async () => {
+      const mock = await getMockFn();
+      // All required fields present; only severity casing differs from the exact lowercase set.
+      mock.mockResolvedValue(
+        JSON.stringify({ ...validInsightsPayload, severity: 'Critical' }),
+      );
+
+      const { insights } = await generateAiInsights(makeCtx());
+
+      // Bug: insights is null because 'Critical' !== 'critical' in the includes() check.
+      // A fixed implementation normalises severity to lowercase before comparing.
+      expect(insights).not.toBeNull();
+    },
+  );
+});
+
 // ─── Per-team AI provider resolution (AI-15 Phase C) ──────────────────────────
 
 describe('generateAiInsights — per-team provider resolution', () => {

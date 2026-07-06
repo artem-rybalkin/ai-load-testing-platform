@@ -451,4 +451,67 @@ describe('worker-backend index.ts', () => {
       expect(channel.ack).toHaveBeenCalled();
     });
   });
+
+  // ── Regression #1: cancel consumer — missing SIGKILL escalation ──────────
+  //
+  // Finding (Medium): "Cancel has no SIGKILL escalation, unlike the max-duration watchdog"
+  // The cancel-fanout consumer (index.ts:211-217) only sends SIGTERM to the k6
+  // child process with no follow-up timer. The max-duration watchdog in the
+  // same codebase escalates SIGTERM → SIGKILL after GRACE_PERIOD_MS
+  // (runner.ts:195-199). If a k6 process ignores SIGTERM, a user-initiated
+  // Stop does nothing further; the worker slot is not freed until the
+  // independent max-duration timer eventually fires (up to MAX_TEST_DURATION_MS,
+  // default 10 minutes).
+  //
+  // Desired: after sending SIGTERM on cancel, a follow-up timer should send
+  // SIGKILL after GRACE_PERIOD_MS if the process is still in runningTests.
+  // Current: no SIGKILL is ever sent from the cancel path.
+
+  describe('cancel consumer — missing SIGKILL escalation (regression finding #1)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: false });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it.fails('cancel consumer should SIGKILL the process after grace period when SIGTERM is ignored (currently never sends SIGKILL)', async () => {
+      const { start } = await import('../index');
+      // start() only uses microtasks (mocked amqplib resolves immediately), not setTimeout — safe with fake timers.
+      await start();
+
+      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+
+      // A process that stubbornly ignores SIGTERM — stays alive in runningTests forever.
+      const fakeProc = { kill: vi.fn() };
+      mockRunK6Test.mockImplementation((testId: string, ..._rest: unknown[]) => {
+        const ctx = _rest[_rest.length - 1] as { runningTests: Map<string, { kill: MockFn }> };
+        ctx.runningTests.set(testId, fakeProc);
+        return new Promise(() => {}); // never resolves — process ignores SIGTERM
+      });
+
+      // Start the test without awaiting (the handler blocks on the never-resolving mockRunK6Test).
+      void queueHandler(makeMsg(makeTest({ id: 'sigkill-test' })));
+
+      // Flush the async chain: parse → pool.query (mockQuery, microtask) →
+      // getLiveMetricWindowSec (fetch, rejected microtask) → mockRunK6Test (called).
+      // Plain await Promise.resolve() is safe with fake timers — Promises use microtasks,
+      // not macrotasks, so fake timers don't intercept them.
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Send cancel — current code sends SIGTERM only, no follow-up SIGKILL timer.
+      await cancelHandler(makeMsg({ testId: 'sigkill-test' }));
+      expect(fakeProc.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // Desired: after GRACE_PERIOD_MS (30 000ms), SIGKILL is sent because the
+      // process is still in runningTests (it ignored SIGTERM).
+      // runner.ts max-duration watchdog does exactly this escalation; cancel does not.
+      vi.advanceTimersByTime(30_001);
+
+      // This assertion FAILS in the current code — the cancel path never sets a SIGKILL timer.
+      expect(fakeProc.kill).toHaveBeenCalledWith('SIGKILL');
+    });
+  });
 });
