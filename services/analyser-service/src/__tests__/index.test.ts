@@ -52,11 +52,20 @@ const analysePayload = (overrides: Record<string, unknown> = {}): Record<string,
 
 let app: FastifyInstance;
 let originalApiKey: string | undefined;
+let originalInternalApiKey: string | undefined;
+
+// POST /analyse now requires this header (regression #1, Critical — see the
+// "security regression" describe block below). Every legitimate call in this
+// file uses it; the one test proving the guard omits it on purpose.
+const TEST_INTERNAL_API_KEY = 'test-internal-key';
+const internalKeyHeaders = { 'x-internal-key': TEST_INTERNAL_API_KEY };
 
 beforeEach(async () => {
   const mock = await getMockGenerateAIText();
   mock.mockReset();
   originalApiKey = process.env.GEMINI_API_KEY;
+  originalInternalApiKey = process.env.INTERNAL_API_KEY;
+  process.env.INTERNAL_API_KEY = TEST_INTERNAL_API_KEY;
   app = buildApp();
 });
 
@@ -65,6 +74,11 @@ afterEach(async () => {
     delete process.env.GEMINI_API_KEY;
   } else {
     process.env.GEMINI_API_KEY = originalApiKey;
+  }
+  if (originalInternalApiKey === undefined) {
+    delete process.env.INTERNAL_API_KEY;
+  } else {
+    process.env.INTERNAL_API_KEY = originalInternalApiKey;
   }
   await app.close();
 });
@@ -80,6 +94,7 @@ describe('POST /analyse', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/analyse',
+      headers: internalKeyHeaders,
       payload: analysePayload(),
     });
 
@@ -106,6 +121,7 @@ describe('POST /analyse', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/analyse',
+      headers: internalKeyHeaders,
       payload: analysePayload(),
     });
 
@@ -129,6 +145,7 @@ describe('POST /analyse', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/analyse',
+      headers: internalKeyHeaders,
       payload: analysePayload(),
     });
 
@@ -150,6 +167,7 @@ describe('POST /analyse', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/analyse',
+      headers: internalKeyHeaders,
       payload: analysePayload({
         externalMetrics: [
           { sourceName: 'Grafana Loki', platform: 'Loki', data: 'error rate spike at 12:05 UTC' },
@@ -178,6 +196,7 @@ describe('POST /analyse', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/analyse',
+      headers: internalKeyHeaders,
       payload: analysePayload({ teamId: 'team-analyse-1' }),
     });
 
@@ -216,26 +235,25 @@ describe('GET /health', () => {
 });
 
 // ─── Regression: unauthenticated POST /analyse (TODO finding #1 — Critical) ──
-//
-// buildApp() registers zero auth onRequest hooks and zero rate-limit plugins.
-// Any caller with no credentials can POST arbitrary metrics/teamId and trigger
-// a real Gemini/OpenAI/Anthropic call on the platform's account — cost-DoS and
-// prompt-injection surface. This test documents the EXPECTED behaviour once an
-// auth guard is added; it.fails confirms the bug exists today.
+// Fixed 2026-07-06: buildApp() now registers an onRequest hook requiring
+// X-Internal-Key to match INTERNAL_API_KEY on every route except /health —
+// unconditionally, even when INTERNAL_API_KEY is unset (see index.ts's
+// comment on why this differs from the rest of the codebase's internal-key
+// convention). results-service's consumer.ts now sends that header via
+// internalHeaders() on its call to this endpoint.
 
 describe('POST /analyse — security regression (finding #1)', () => {
-  it.fails(
-    'rejects unauthenticated requests with 401 or 403 (no auth guard exists yet)',
+  it(
+    'rejects unauthenticated requests with 401 or 403',
     async () => {
-      // No Authorization header, no X-API-Key, no session cookie — a fully anonymous call.
+      // No Authorization header, no X-API-Key, no session cookie, no
+      // X-Internal-Key — a fully anonymous call.
       const response = await app.inject({
         method: 'POST',
         url: '/analyse',
         payload: analysePayload(),
       });
 
-      // Bug: currently returns 200 (or another 2xx) because buildApp() has no
-      // onRequest auth hook. A fixed implementation must reject with 401 or 403.
       expect([401, 403]).toContain(response.statusCode);
     },
   );

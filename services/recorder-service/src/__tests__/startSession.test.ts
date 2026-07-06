@@ -35,6 +35,8 @@ function makeFakeBrowser() {
   const cdp = new FakeCDPSession();
   const page = {
     setViewport: vi.fn().mockResolvedValue(undefined),
+    setRequestInterception: vi.fn().mockResolvedValue(undefined),
+    on: vi.fn(),
     createCDPSession: vi.fn().mockResolvedValue(cdp),
   };
   const browser = {

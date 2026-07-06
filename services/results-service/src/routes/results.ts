@@ -96,14 +96,23 @@ export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool
   );
 
   // ── POST /results/:testId/cancel (internal) ───────────────────────────────
-  app.post<{ Params: { testId: string } }>(
+  app.post<{ Params: { testId: string }; Body: { projectId?: string | null } }>(
     '/results/:testId/cancel',
     async (request, reply) => {
       const { testId } = request.params;
+      const projectId = request.body?.projectId ?? null;
+      // Unlike the read-side ($N::uuid IS NULL OR project_id = $N::uuid) pattern —
+      // where a null *caller* projectId means "auth disabled, show everything" —
+      // a missing projectId here must NOT be treated as unrestricted access: this
+      // route has no session of its own (matched as an internal callback), so a
+      // caller with no proof of ownership must be refused whenever the target row
+      // actually belongs to a team. A row with no owner (project_id IS NULL, e.g.
+      // legacy/dev-mode data) can still be cancelled by anyone, same as before.
       const { rowCount } = await pool.query(
         `UPDATE test_results SET status = 'cancelled', status_message = NULL
-         WHERE test_id = $1 AND status IN ('pending', 'running')`,
-        [testId],
+         WHERE test_id = $1 AND status IN ('pending', 'running')
+           AND (project_id IS NULL OR project_id = $2::uuid)`,
+        [testId, projectId],
       );
       if (!rowCount) return reply.code(404).send({ error: 'Test not found or already finished' });
       broadcast({ type: 'test:status', testId, status: 'cancelled', perfStatus: null });

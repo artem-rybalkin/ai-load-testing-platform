@@ -675,18 +675,13 @@ describe('POST /tests — no-worker warning message', () => {
 });
 
 // ─── RBAC: viewer role not enforced on mutating routes (regression #1 / #2) ───
-// Audit findings:
+// Audit findings, fixed 2026-07-06:
 //   #1 (High) — "viewer role isn't enforced on POST /tests or POST /tests/:testId/cancel"
 //   #2 (High) — "customScript code execution is reachable by a viewer-role user"
 //
-// Root cause: the onRequest hook (index.ts:89-149) only checks `role === null`;
-// it never returns 403 for role === 'viewer' on mutating methods. A viewer session
-// therefore passes through to the route handler and gets 200 instead of 403.
-//
-// Each it.fails() below PASSES while the bug exists (the inner assertion fails
-// as expected). Once the hook is fixed to block viewers on POST routes, the
-// inner assertions will pass, causing it.fails() to fail — the correct signal
-// that the regression tests should be unwrapped or removed.
+// Fix: the onRequest hook (index.ts) now returns 403 for role === 'viewer' on
+// every mutating method (POST/PUT/PATCH/DELETE) in the session-auth branch —
+// api-service has no /teams or /orgs routes to except, unlike results-service.
 
 describe('RBAC — viewer role not enforced on mutating routes (regression #1/#2)', () => {
   let viewerApp: FastifyInstance;
@@ -708,7 +703,7 @@ describe('RBAC — viewer role not enforced on mutating routes (regression #1/#2
   });
 
   // Bug #1a: a viewer session should receive 403 on POST /tests, not 200.
-  it.fails('returns 403 for viewer role on POST /tests (bug: currently 200)', async () => {
+  it('returns 403 for viewer role on POST /tests', async () => {
     mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'viewer' });
     const res = await viewerApp.inject({
       method: 'POST',
@@ -721,7 +716,7 @@ describe('RBAC — viewer role not enforced on mutating routes (regression #1/#2
   });
 
   // Bug #1b: a viewer session should receive 403 on POST /tests/:testId/cancel, not 200.
-  it.fails('returns 403 for viewer role on POST /tests/:testId/cancel (bug: currently 200)', async () => {
+  it('returns 403 for viewer role on POST /tests/:testId/cancel', async () => {
     mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'viewer' });
     const testId = '00000000-0000-0000-0000-000000000099';
     const res = await viewerApp.inject({
@@ -734,7 +729,7 @@ describe('RBAC — viewer role not enforced on mutating routes (regression #1/#2
   });
 
   // Bug #2: the same RBAC gap lets a viewer submit a customScript for direct execution.
-  it.fails('returns 403 for viewer role on POST /tests with customScript (code execution via RBAC gap)', async () => {
+  it('returns 403 for viewer role on POST /tests with customScript (code execution via RBAC gap)', async () => {
     mockGetApiSession.mockResolvedValue({ projectId: 'team-123', role: 'viewer' });
     const res = await viewerApp.inject({
       method: 'POST',

@@ -1,5 +1,5 @@
 import puppeteer, { Browser, Page, CDPSession } from 'puppeteer-core';
-import { FlowStep, RecordedRequest } from '@alt/shared';
+import { FlowStep, RecordedRequest, validateSsrfSafeUrl } from '@alt/shared';
 import { log } from './logger';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -113,6 +113,29 @@ export function toFlowSteps(requests: RecordedRequest[]): FlowStep[] {
     });
 }
 
+// ─── SSRF request-interception handler ───────────────────────────────────────
+
+/**
+ * Returns a Puppeteer request-interception handler that re-validates every URL
+ * the browser navigates to — including each redirect hop — using the provided
+ * SSRF validator. Puppeteer's interception API fires a fresh 'request' event for
+ * every redirect target, so every hop is independently checked.
+ *
+ * Exported separately so it can be unit-tested without a real Puppeteer instance.
+ */
+export function createSsrfInterceptHandler(
+  validate: (url: string) => string | null | undefined,
+): (request: { url(): string; abort(reason?: string): void; continue(): void }) => void {
+  return (request) => {
+    const err = validate(request.url());
+    if (err) {
+      request.abort('blockedbyclient');
+    } else {
+      request.continue();
+    }
+  };
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export async function startSession(
@@ -143,6 +166,12 @@ export async function startSession(
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
+
+  // Re-validate every URL the browser navigates to, including redirect hops.
+  // Puppeteer fires a fresh 'request' event for each redirect target, so this
+  // catches 302→private-IP attacks that bypass the one-time targetUrl check.
+  await page.setRequestInterception(true);
+  page.on('request', createSsrfInterceptHandler(validateSsrfSafeUrl));
 
   const cdp: CDPSession = await page.createCDPSession();
   await cdp.send('Network.enable');

@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { fetchSsrfSafe } from '@alt/shared';
 
 /**
  * For each log source (scoped to projectId, or every source when projectId is null —
@@ -47,7 +48,7 @@ export async function fetchExternalMetrics(
           const headers: Record<string, string> = { 'Accept': 'application/json' };
           if (row.auth_header) headers['Authorization'] = row.auth_header;
 
-          const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+          const res = await fetchSsrfSafe(url, { headers, signal: AbortSignal.timeout(5000) });
           if (!res.ok) return;
           const text = await res.text();
           results.push({

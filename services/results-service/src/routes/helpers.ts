@@ -22,6 +22,7 @@ import {
   fenceUserContent,
   USER_DATA_INSTRUCTION,
   validateSsrfSafeUrl,
+  fetchSsrfSafe,
 } from '@alt/shared';
 import { getAiProviderSetting } from '../settings';
 
@@ -124,7 +125,7 @@ export const fetchAndSummarizeSwagger = async (url: string): Promise<string> => 
         const specSsrfError = validateSsrfSafeUrl(specUrl);
         if (specSsrfError) continue;
         try {
-          const specRes = await fetch(specUrl, { signal: AbortSignal.timeout(5_000) });
+          const specRes = await fetchSsrfSafe(specUrl, { signal: AbortSignal.timeout(5_000) });
           if (!specRes.ok) continue;
           const specText = await specRes.text();
           try {
@@ -138,7 +139,7 @@ export const fetchAndSummarizeSwagger = async (url: string): Promise<string> => 
   } catch { /* URL parse failed — proceed normally */ }
 
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    const res = await fetchSsrfSafe(url, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return `[Swagger fetch failed: HTTP ${res.status}]`;
 
     const text = await res.text();

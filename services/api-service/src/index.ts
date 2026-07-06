@@ -140,6 +140,14 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         return reply.code(403).send({ error: 'No team selected — create or join a team first' });
       }
 
+      // A viewer is read-only everywhere else in the platform (results-service's
+      // onRequest hook enforces the same rule) — api-service has no /teams or
+      // /orgs routes to except, so every mutating method is blocked outright.
+      const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method);
+      if (isMutation && session.role === 'viewer') {
+        return reply.code(403).send({ error: 'Viewer role cannot perform this action' });
+      }
+
       request.projectId = session.projectId ?? undefined;
       request.role = session.role;
     } else {
@@ -331,7 +339,15 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       const { testId } = request.params;
       const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
 
-      const res = await fetch(`${resultsUrl}/results/${testId}/cancel`, { method: 'POST', headers: internalHeaders() });
+      // Forward the caller's own team so results-service can refuse to cancel
+      // a test belonging to a different project — the internal-callback path
+      // this hits has no session of its own, so without this it can't tell
+      // one tenant's testId from another's.
+      const res = await fetch(`${resultsUrl}/results/${testId}/cancel`, {
+        method: 'POST',
+        headers: internalHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ projectId: request.projectId ?? null }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         return reply.code(res.status).send(body);

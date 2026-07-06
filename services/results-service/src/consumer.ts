@@ -3,7 +3,7 @@ import { createHmac } from 'crypto';
 import { Pool } from 'pg';
 import { trace } from '@opentelemetry/api';
 
-import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult, connectWithBackoff, TestResultSchema } from '@alt/shared';
+import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult, connectWithBackoff, TestResultSchema, fetchSsrfSafe, internalHeaders } from '@alt/shared';
 import { pool } from './db';
 import { analyzeResult } from './analyzer';
 import { log } from './logger';
@@ -29,7 +29,7 @@ const callAnalyserService = async (
   try {
     const res = await fetch(`${ANALYSER_URL}/analyse`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ testId, targetUrl, type, metrics, previousMetrics, thresholds: thresholds ?? null, externalMetrics, teamId: projectId }),
       signal: AbortSignal.timeout(12000),
     });
@@ -124,7 +124,7 @@ const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string, pro
     const sig = secret
       ? createHmac('sha256', secret).update(body).digest('hex')
       : null;
-    return { url, promise: fetch(url, {
+    return { url, promise: fetchSsrfSafe(url, {
       method: 'POST',
       headers: {
         'Content-Type': contentType,

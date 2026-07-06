@@ -704,13 +704,95 @@ export function internalHeaders(extra?: Record<string, string>): Record<string, 
 const SSRF_BLOCKED_HOSTNAME_RE = /^(localhost|.*\.local|host\.docker\.internal|.*\.internal|metadata\.google\.internal)$/i;
 const SSRF_PRIVATE_IPV4_RE = /^(0\.0\.0\.0|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|169\.254\.\d+\.\d+)$/;
 
+/** True for a bracketed IPv6 literal hostname as produced by the WHATWG URL parser, e.g. "[::1]". */
+const isIpv6Literal = (host: string): boolean => host.startsWith('[') && host.endsWith(']');
+
+/** Parses the first (leftmost) hextet of a bracket-stripped IPv6 address as a 0-65535 integer. "" (from a leading "::") is 0. */
+const firstHextet = (addr: string): number => {
+  const first = addr.split(':')[0];
+  return first === '' ? 0 : parseInt(first, 16);
+};
+
+/** Checks a bracket-stripped IPv6 literal (e.g. "::1", "fc00::1", "::ffff:a9fe:a9fe") against blocked ranges. */
+const isPrivateIpv6 = (rawAddr: string): boolean => {
+  const addr = rawAddr.toLowerCase();
+  if (addr === '::1' || addr === '::') return true; // loopback / unspecified
+  const hex = firstHextet(addr);
+  if (hex >= 0xfe80 && hex <= 0xfebf) return true; // link-local fe80::/10
+  if (hex >= 0xfc00 && hex <= 0xfdff) return true; // unique-local fc00::/7
+  // IPv4-mapped: "::ffff:a.b.c.d" (dotted) or "::ffff:xxxx:yyyy" (hex, post-URL-normalization)
+  const dotted = addr.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) return SSRF_PRIVATE_IPV4_RE.test(dotted[1]);
+  const hexPair = addr.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hexPair) {
+    const hi = parseInt(hexPair[1], 16);
+    const lo = parseInt(hexPair[2], 16);
+    return SSRF_PRIVATE_IPV4_RE.test([hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.'));
+  }
+  return false;
+};
+
 /** Returns an error message if `raw` is unsafe to fetch/navigate to server-side (private/internal/link-local target), or null if it's safe. */
 export const validateSsrfSafeUrl = (raw: string): string | null => {
   let parsed: URL;
   try { parsed = new URL(raw); } catch { return 'Invalid URL'; }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'URL must use http or https';
-  const host = parsed.hostname.toLowerCase();
+  // Strip a trailing dot (FQDN notation) before matching — DNS/the OS resolver
+  // treats "localhost." identically to "localhost", but the anchored blocklist
+  // regexes below would not match it without this normalization.
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  if (isIpv6Literal(host)) {
+    return isPrivateIpv6(host.slice(1, -1)) ? 'URL targets a private/internal IP range' : null;
+  }
   if (SSRF_BLOCKED_HOSTNAME_RE.test(host)) return 'URL targets a blocked internal hostname';
   if (SSRF_PRIVATE_IPV4_RE.test(host)) return 'URL targets a private/internal IP range';
   return null;
+};
+
+/**
+ * Fetches `url` with SSRF protection that goes beyond a one-time
+ * `validateSsrfSafeUrl` check at creation time:
+ *  - Re-validates the hostname/IP on every call, not just once when a
+ *    webhook/log-source was created — closes the DNS-rebinding gap where a
+ *    hostname resolves to a public IP at creation time and is repointed at
+ *    an internal/metadata IP before it's actually fetched.
+ *  - Resolves the hostname via DNS and validates the resolved address too
+ *    (not just the literal string), so a hostname that only *becomes*
+ *    private after a DNS change is still caught.
+ *  - Follows redirects manually, re-running both checks on every hop —
+ *    `fetch()`'s default `redirect: 'follow'` would otherwise reach an
+ *    internal target via a 302 without ever revalidating the final URL.
+ * Dynamically imports `dns/promises` (matching aiProvider.ts's pattern for
+ * other Node-only dependencies in this package) so this file stays safe to
+ * bundle for the browser (UI) — the import is never reached unless this
+ * function is actually called, which only happens server-side.
+ */
+export const fetchSsrfSafe = async (url: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> => {
+  let current = url;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const validationError = validateSsrfSafeUrl(current);
+    if (validationError) throw new Error(`SSRF check failed: ${validationError}`);
+
+    const parsed = new URL(current);
+    if (!isIpv6Literal(parsed.hostname)) {
+      const { lookup } = await import('dns/promises');
+      try {
+        const addresses = await lookup(parsed.hostname, { all: true });
+        const blocked = addresses.some((a) => (a.family === 6 ? isPrivateIpv6(a.address) : SSRF_PRIVATE_IPV4_RE.test(a.address)));
+        if (blocked) throw new Error('SSRF check failed: hostname resolves to a private/internal IP');
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('SSRF check failed')) throw err;
+        throw new Error(`SSRF check failed: could not resolve hostname (${(err as Error).message})`);
+      }
+    }
+
+    const res = await fetch(current, { ...init, redirect: 'manual' });
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) {
+      current = new URL(location, current).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error('SSRF check failed: too many redirects');
 };

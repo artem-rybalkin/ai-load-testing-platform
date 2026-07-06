@@ -73,6 +73,21 @@ services:
     environment:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
 
+  # No override existed for this service at all before, so it silently inherited
+  # the base compose file's "3008:3008" host port mapping into production — the
+  # only internal-only service that did. Now explicitly zeroed out like its
+  # siblings above, as defense-in-depth alongside the app-level internal-key
+  # auth check added to index.ts's onRequest hook for the same finding.
+  analyser-service:
+    ports: !reset []
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    environment:
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+
   results-service:
     ports: !reset []    # Caddy proxies data.${DOMAIN} → results-service:3004
     deploy:

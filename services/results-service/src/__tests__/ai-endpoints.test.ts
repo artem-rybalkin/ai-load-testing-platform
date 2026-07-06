@@ -22,7 +22,17 @@ const mockGenerateAIText = vi.hoisted(() => vi.fn());
 
 vi.mock('@alt/shared', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@alt/shared')>();
-  return { ...actual, generateAIText: mockGenerateAIText };
+  return {
+    ...actual,
+    generateAIText: mockGenerateAIText,
+    // fetchSsrfSafe: skip DNS resolution (test hostnames are not real) while still
+    // replicating the two security behaviors under test: SSRF validation and redirect:'manual'.
+    fetchSsrfSafe: vi.fn().mockImplementation(async (url: string, init: RequestInit = {}) => {
+      const err = actual.validateSsrfSafeUrl(url);
+      if (err) throw new Error(`SSRF check failed: ${err}`);
+      return (globalThis.fetch as typeof fetch)(url, { ...init, redirect: 'manual' });
+    }),
+  };
 });
 
 vi.mock('../scheduler', () => ({

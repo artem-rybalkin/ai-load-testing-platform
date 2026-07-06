@@ -29,6 +29,22 @@ interface AnalyseBody {
 export function buildApp(): FastifyInstance {
   const app = Fastify({ logger: false });
 
+  // This service is server-to-server only — results-service's consumer.ts is
+  // the sole caller. Unlike the internal-callback convention elsewhere in this
+  // codebase (401 on mismatch, no-op when INTERNAL_API_KEY is empty), auth here
+  // is unconditional: an empty/unset INTERNAL_API_KEY blocks every request
+  // rather than falling open, because a POST /analyse call directly triggers a
+  // real (costed) Gemini/OpenAI/Anthropic call — there is no safe "auth
+  // disabled" mode for an endpoint that spends money per request.
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.url === '/health') return;
+    const internalApiKey = process.env.INTERNAL_API_KEY || '';
+    const header = request.headers['x-internal-key'];
+    if (!internalApiKey || header !== internalApiKey) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+
   app.get('/health', async (_request, reply) => {
     const hasGemini = Boolean(process.env.GEMINI_API_KEY);
     return reply.code(200).send({

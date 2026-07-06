@@ -1511,15 +1511,15 @@ describe('INTERNAL_API_KEY gating', () => {
 
 // ─── Security regressions from 2026-07-05 audit ───────────────────────────────
 
-// Finding #1 (Critical): POST /results/:testId/cancel has no project_id filter.
-// The SQL is: UPDATE test_results SET status='cancelled' WHERE test_id=$1 AND
-// status IN ('pending','running') — no project_id column touched.
-// Any caller that knows another tenant's testId can cancel their test via the
-// internal-callback path (session auth is bypassed for URLs ending in /cancel).
-// Fix: the SQL must add AND ($2::uuid IS NULL OR project_id = $2::uuid), and the
-// handler must derive projectId from a body field passed by api-service.
+// Finding #1 (Critical, fixed 2026-07-06): POST /results/:testId/cancel now
+// requires project ownership proof. The SQL adds
+// AND (project_id IS NULL OR project_id = $2::uuid) — a row with no owner
+// (dev-mode/legacy data) stays cancellable by anyone, but a row that belongs
+// to a team can only be cancelled by a caller who proves membership in that
+// same team. api-service forwards its own request.projectId as the body's
+// projectId field on every cancel call.
 describe('POST /results/:testId/cancel — cross-tenant isolation (regression #1, Critical)', () => {
-  it.fails(
+  it(
     '#1 cancel must not succeed when the test belongs to a different project — no project_id filter in SQL',
     async () => {
       const projectId = crypto.randomUUID();

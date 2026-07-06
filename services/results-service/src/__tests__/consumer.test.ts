@@ -5,6 +5,23 @@ import { handleResult } from '../consumer';
 import { createSchema } from '../db';
 import type { TestResult, BackendMetrics } from '@alt/shared';
 
+// Mock fetchSsrfSafe so DNS resolution is not required in tests.
+// The mock replicates the two key behaviors the regression tests verify:
+//   1. SSRF-unsafe URLs are rejected before fetch is called.
+//   2. Safe URLs are fetched with redirect: 'manual'.
+// Full DNS-rebinding and multi-hop redirect coverage lives in @alt/shared's own tests.
+vi.mock('@alt/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alt/shared')>();
+  return {
+    ...actual,
+    fetchSsrfSafe: vi.fn().mockImplementation(async (url: string, init: RequestInit = {}) => {
+      const err = actual.validateSsrfSafeUrl(url);
+      if (err) throw new Error(`SSRF check failed: ${err}`);
+      return (globalThis.fetch as typeof fetch)(url, { ...init, redirect: 'manual' });
+    }),
+  };
+});
+
 let pool: Pool;
 let dropDb: () => Promise<void>;
 let mockFetch: ReturnType<typeof vi.fn>;
@@ -816,22 +833,18 @@ describe('handleResult — transaction rollback (M5)', () => {
 
 // ─── Security regression: SSRF re-validation on webhook delivery ──────────────
 //
-// Finding #2 (Critical): fireWebhooks calls fetch(url) on a DB-stored URL with
-// no re-call to validateSsrfSafeUrl at delivery time. An attacker can register a
-// webhook with a public hostname that passes creation-time validation, then
-// repoint DNS to 169.254.169.254 (cloud metadata) before the next fire — DNS is
-// re-resolved on every fetch() call. Only validated once at POST /webhooks.
+// Finding #2 (Critical) — FIXED: fireWebhooks now calls fetchSsrfSafe() instead
+// of bare fetch(), which re-validates the URL (including DNS-resolved IP) on every
+// delivery attempt — closing the DNS-rebinding window where a hostname passes
+// creation-time validation and is later repointed to a cloud-metadata address.
 //
-// Finding #3 (High): Even without DNS rebinding, the default fetch() behavior
-// follows redirects (up to 20 hops). A URL that's fully public and DNS-static
-// can still reach an internal target if its response 302s there.
-//
-// Both require fireWebhooks to use validateSsrfSafeUrl at delivery time and
-// redirect: 'manual' (instead of the default 'follow').
+// Finding #3 (High) — FIXED: fetchSsrfSafe() internally uses redirect: 'manual'
+// and re-validates each hop, so a public URL that 302s to an internal target is
+// blocked before the redirect is followed.
 
 describe('fireWebhooks — SSRF re-validation and redirect safety (regression #2, #3)', () => {
-  it.fails(
-    '#2 must not deliver to an SSRF-unsafe URL stored in the DB — no re-validation at delivery time (DNS-rebinding vector)',
+  it(
+    '#2 must not deliver to an SSRF-unsafe URL stored in the DB — re-validation at delivery time blocks DNS-rebinding',
     async () => {
       // Two webhooks: one safe (used as a sentinel to wait for fireWebhooks to finish),
       // one with a cloud-metadata internal IP (the SSRF target). Both match 'failed'.
@@ -852,8 +865,8 @@ describe('fireWebhooks — SSRF re-validation and redirect safety (regression #2
         { timeout: 2000 },
       );
 
-      // Correct behavior: fetch must never be called with an SSRF-unsafe URL.
-      // Current behavior: fetch IS called — no re-validation on the delivery path.
+      // Fixed: fetchSsrfSafe re-validates the URL before every fetch call.
+      // The literal cloud-metadata IP is caught by validateSsrfSafeUrl and fetch is never called.
       expect(mockFetch).not.toHaveBeenCalledWith(
         'http://169.254.169.254/latest/meta-data/',
         expect.anything(),
@@ -861,8 +874,8 @@ describe('fireWebhooks — SSRF re-validation and redirect safety (regression #2
     },
   );
 
-  it.fails(
-    '#3 fireWebhooks must use redirect: manual to prevent SSRF via redirect chains',
+  it(
+    '#3 fireWebhooks uses redirect: manual (via fetchSsrfSafe) to prevent SSRF via redirect chains',
     async () => {
       // A URL that is safe at creation time can still 302 to an internal target.
       await pool.query(
@@ -871,10 +884,16 @@ describe('fireWebhooks — SSRF re-validation and redirect safety (regression #2
       const result = makeResult({ metrics: failedMetrics });
       await handleResult(pool, result);
 
+      // fireWebhooks is fire-and-forget — wait for the call before asserting details.
+      await vi.waitFor(
+        () => expect(mockFetch).toHaveBeenCalledWith('https://safe.example.com/hook', expect.anything()),
+        { timeout: 2000 },
+      );
+
       const call = mockFetch.mock.calls.find(([url]: unknown[]) => String(url) === 'https://safe.example.com/hook');
       expect(call).toBeDefined();
-      // Correct: redirect: 'manual' so a 302 to 169.254.x.x can be caught and blocked.
-      // Current: default fetch behaviour follows redirects up to 20 hops with no re-check.
+      // Fixed: fetchSsrfSafe always passes redirect: 'manual' to fetch, so a 302 to
+      // an internal target is caught and blocked on the next hop.
       expect((call as [string, RequestInit])[1]).toMatchObject({ redirect: 'manual' });
     },
   );

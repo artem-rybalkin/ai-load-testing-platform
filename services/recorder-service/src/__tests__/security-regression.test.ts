@@ -34,7 +34,7 @@ vi.mock('puppeteer-core', () => ({ default: {} }));
 
 import { detectCorrelations } from '../correlator';
 import * as correlatorModule from '../correlator';
-import { toFlowSteps } from '../recorder';
+import { toFlowSteps, createSsrfInterceptHandler } from '../recorder';
 import { validateRecorderUrl } from '../index';
 import { validateSsrfSafeUrl } from '@alt/shared';
 import type { RecordedRequest, FlowStep } from '@alt/shared';
@@ -221,20 +221,46 @@ describe('Finding #3 — recorder SSRF guard wiring and redirect gap', () => {
     expect(validateRecorderUrl).toBe(validateSsrfSafeUrl);
   });
 
-  // The post-redirect bypass cannot be exercised in the Vitest/Node environment:
-  // it requires a real Chromium/Puppeteer instance AND a test HTTP server that
-  // serves a 302 to an RFC-1918 address. That is an integration/E2E concern.
-  // See: services/recorder-service/src/index.ts:101 — page.goto() follows all
-  // redirects with no post-redirect call to validateRecorderUrl.
-  it.skip('recorder SSRF guard does not re-validate the URL after page.goto() follows a redirect', () => {
-    // To reproduce: start an HTTP server at e.g. http://test.example.com/redirect
-    // that returns HTTP 302 Location: http://192.168.1.1/internal.
-    // Launch recorder with targetUrl = 'http://test.example.com/redirect'.
-    // validateRecorderUrl passes (test.example.com is public) but page.goto()
-    // follows the 302 to 192.168.1.1 without any re-check — the recording then
-    // proceeds against the private address and its response body can flow into
-    // the Gemini correlation prompt.
-    // Not testable without real Puppeteer/Chromium + a live redirecting server.
+  // The fix installs a Puppeteer request-interception handler (createSsrfInterceptHandler)
+  // on the page before any navigation. Puppeteer fires a fresh 'request' event for
+  // every redirect hop, so the handler re-validates every URL the browser visits —
+  // including the final target of a 302 redirect chain.
+  //
+  // This test exercises the handler directly (extracted for testability) using a
+  // minimal fake request object — no real Puppeteer/Chromium required.
+  it('request interception handler validates every URL including redirect targets and blocks private-IP hops', () => {
+    const handler = createSsrfInterceptHandler(validateSsrfSafeUrl);
+
+    // A public/external URL passes through — the handler calls continue()
+    const publicReq = {
+      url: () => 'https://api.example.com/data',
+      abort: vi.fn(),
+      continue: vi.fn(),
+    };
+    handler(publicReq);
+    expect(publicReq.continue).toHaveBeenCalledOnce();
+    expect(publicReq.abort).not.toHaveBeenCalled();
+
+    // Redirect hop to loopback (the confirmed live exploit target: 127.0.0.1:6080)
+    // must be blocked — this is the exact redirect-gap that the fix closes.
+    const loopbackReq = {
+      url: () => 'http://127.0.0.1:6080/',
+      abort: vi.fn(),
+      continue: vi.fn(),
+    };
+    handler(loopbackReq);
+    expect(loopbackReq.abort).toHaveBeenCalledWith('blockedbyclient');
+    expect(loopbackReq.continue).not.toHaveBeenCalled();
+
+    // Redirect hop to an RFC-1918 private range must also be blocked
+    const privateReq = {
+      url: () => 'http://192.168.1.1/internal',
+      abort: vi.fn(),
+      continue: vi.fn(),
+    };
+    handler(privateReq);
+    expect(privateReq.abort).toHaveBeenCalledWith('blockedbyclient');
+    expect(privateReq.continue).not.toHaveBeenCalled();
   });
 });
 
