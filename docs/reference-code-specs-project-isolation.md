@@ -258,7 +258,7 @@ No additional auth-specific fields beyond those inherited from `TestRequest`.
 
 | ID | Type | Description |
 |----|------|-------------|
-| U1 | Unknown | `test_scripts.project_id` is always `null` for scripts inserted by `worker-backend` (no session context in workers). The `GET /scripts` project filter would return 0 scripts for any authenticated project session. This is an isolation gap. |
+| U1 | **Resolved (2026-07-06)** | Originally: `test_scripts.project_id` was always `null` for scripts inserted by `worker-backend`, breaking `GET /scripts`'s project filter. Verified fixed — `worker-backend/src/index.ts:70-71`'s `saveScript` upsert now does `project_id = COALESCE(test_scripts.project_id, EXCLUDED.project_id)`, preserving the `project_id` set by the originating api-service request instead of overwriting it with the worker's own null context. Already documented in `docs/ARCHITECTURE.md`'s Security Architecture section; this reference doc was the one place still describing the old behavior. | `services/worker-backend/src/index.ts:70-71` |
 | U2 | Unknown | `POST /results/:testId/baseline` and `DELETE /results/:testId/baseline` do not apply the `project_id` filter. Cross-project baseline manipulation is possible. |
 | U3 | Unknown | `GET /results/:testId/report.pdf` does not apply the `project_id` filter. Any authenticated user can download any report. |
 | U4 | Unknown | `live_metrics` table has no `project_id` column. Live metric data is not project-isolated. |

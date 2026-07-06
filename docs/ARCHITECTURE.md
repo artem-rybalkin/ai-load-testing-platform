@@ -161,6 +161,67 @@ All 14 AI features follow a consistent pattern: lazy Gemini calls (only when use
 
 AI-12 and AI-13 are pure functions (no Gemini). All others degrade gracefully when `GEMINI_API_KEY` is absent or quota is exceeded.
 
+## Service Internals — Deep Dive
+
+Request lifecycles, auth flows, and retry semantics for each service, from a full-codebase reverse-engineering pass (2026-07-05). Complements the high-level tables above — see `TODO.md`'s Open section for the bugs found during the same pass, with file:line evidence and failure scenarios.
+
+### ai-service — AI script generation
+
+Consumes `ai-requests` (prefetch = `WORKER_CONCURRENCY`, default 3). Every message validated with `EnrichedTestRequestSchema.parse()`; malformed messages route straight to `ai-requests.dlq`. Routing inside `processAiRequest()`:
+- **Comparison branch** (cached script + description both present): exact-match descriptions skip the LLM entirely (`REUSE`, quota-saving shortcut); otherwise `compareDescriptions()` classifies REUSE/REGENERATE via LLM. `REUSE` forwards the cached script unchanged with no generation step at all.
+- **Generation branch** (cache miss, or REGENERATE): status message → `generateScript()` builds a type-specific prompt (`BACKEND_PROMPT`/`CLIENT_PROMPT`/`FLOW_PROMPT`) → status message → publish to the target worker queue.
+
+User-controlled text is wrapped in `fenceUserContent()` (`<user_data>` tags + an instruction to treat it as data, not instructions) as a partial prompt-injection mitigation — applied inconsistently (`compareDescriptions`'s prompt doesn't use it; see `TODO.md`).
+
+LLM calls go through `@alt/shared`'s `generateAIText()` — provider-agnostic, tries `setting.provider` then each `fallbacks` entry in order, each provider skipped if its API key env var is unset. `getProviderSetting()` caches the team's provider chain from results-service for 30s.
+
+Retry has two independent layers: an *inner* 429-backoff (up to 3 attempts, 60s/120s waits) inside `generateScript`/`compareDescriptions`, and an *outer* queue-level retry (`x-retry-count` header, immediate requeue, `MAX_RETRIES=3` then DLQ) in `processAiRequest`'s catch block.
+
+### api-service — ingress / routing
+
+Single `onRequest` hook checked in order: internal-trusted (`X-Internal-Key`) → per-team API key (`team_api_keys`) → global `API_KEYS` list → DB-backed session cookie (`getApiSession()`). Only two business routes: `POST /tests` and `POST /tests/:testId/cancel`.
+
+`POST /tests`'s three-way script-cache routing decision tree:
+1. `customScript` present → publish directly to the worker queue, skip AI/cache entirely.
+2. No cached script → publish to `ai-requests` for generation.
+3. Cached script, no description or type is `flow` → reuse directly (increment `used_count`), publish to worker queue.
+4. Cached script + description → attach `cachedScript`/`cachedScriptDescription`, publish to `ai-requests` for comparison.
+
+Script-cache lookup (`scripts.ts`): `canonicalStep()` picks a fixed field order before SHA-256-hashing the step array to a `flow:<hex16>` key, avoiding JSON key-order drift between HAR/manual/re-run step objects. `checkTestQuota()` (VUs, duration, concurrency) runs before every queue publish.
+
+### analyser-service — deterministic analysis + AI insights
+
+`POST /analyse` has no body validation, no CORS, no auth hook, and no rate limiting (see `TODO.md` — Critical). Deterministic analysis (`analyzeResult` in `@alt/shared`) computes backend/Web-Vitals threshold violations and a ±10%/>20% regression dead-zone against the previous run. AI insights (`aiInsights.ts`) build a size-capped prompt (top-5 steps by p95) and retry up to 2 attempts, classifying 429/quota errors as non-retried, `SyntaxError` as a non-retried parse failure. The documented "12s timeout with local fallback" is enforced entirely on the *caller's* side (`results-service/src/consumer.ts`'s `AbortSignal.timeout(12000)`), not inside analyser-service itself.
+
+### recorder-service — flow recorder
+
+`POST /recordings/start` launches non-headless `puppeteer-core` against an Xvfb display, opens a CDP session, and optionally navigates to `targetUrl` after a single upfront SSRF check (`validateRecorderUrl` = shared `validateSsrfSafeUrl`) — redirects are not re-validated (see `TODO.md`). `POST /recordings/:id/stop` deletes the session from its in-memory map *before* any `await`, specifically to prevent double-processing/double Gemini billing on a concurrent stop. `finishSession()` pipeline: `toFlowSteps`/`computeThinkTimes` (pure) → `detectCorrelations` (Gemini) → `suggestStepNames` + `suggestIgnorePatterns` (Gemini, parallel) → `detectDuplicateSteps` (pure). PII redaction (`redactPII()`) is applied to request/response bodies before they reach the correlation prompt, but after truncation and not to auth headers (both tracked as gaps in `TODO.md`).
+
+### results-service — storage, API, WebSocket, scheduler
+
+Auth resolution order in the single `onRequest` hook: `/auth/*` exempt → `publicPaths` (`/health`, `/system/ai-status`, `/ws`) exempt → internal server-to-server callbacks (`X-Internal-Key`) → per-team API key → global `API_KEYS` → DB-backed session + `team_members` role → no-team gate (403) → org-membership resolution → mutation RBAC (`viewer` 403 on POST/PUT/PATCH/DELETE). Falls open (`projectId=undefined`) when `SESSION_SECRET` is unset. The project-scoping filter `($N::uuid IS NULL OR project_id = $N::uuid)` is the platform-wide convention for team isolation, applied almost everywhere — confirmed gaps are tracked in `TODO.md`.
+
+WebSocket broadcast (`ws.ts`) delivers to same-process clients directly, plus Redis pub/sub so all horizontally-scaled replicas receive events (an `INSTANCE_ID` tag prevents double-delivery on the originating replica). The scheduler (`scheduler.ts`) registers one live `node-cron` task per enabled schedule at boot with **no leader election** — scaling to N replicas fires every schedule N times (tracked in `TODO.md`).
+
+### worker-backend — k6 runner
+
+`runK6Test` creates a per-test run directory (`k6-run-${testId}`), writes `script.js`/`data.json`/`data.csv`, validates via `k6 inspect`, then spawns `k6 run --out json=<jsonPath> ...`. Live metrics: stdout/stderr line-buffered into a bounded execution log; every `liveIntervalMs`, `readAndPost` incrementally parses new JSON lines and POSTs a `LiveMetricPoint`. On close, the whole JSON file is re-read for final parsing and the run directory is removed. Cancel sends `SIGTERM` only (no `SIGKILL` escalation, unlike the max-duration watchdog — tracked in `TODO.md`). The stale-cleanup mechanism (`STALE_RUNNING_MINUTES`) lives in **results-service**, not here — it only flips DB status on a timer, never touches the worker's process or temp files.
+
+### worker-client — Puppeteer runner
+
+Per test: acquire a browser from `browserPool` (reuses idle instances) → run `options.sessions` sequentially, collecting Web Vitals via `PerformanceObserver` with a fixed 3s wait → run a Lighthouse audit (non-fatal on failure) → aggregate and publish. A `killTimer` force-closes the browser after `maxDurationMs` (default 5 min); if it fires during the Lighthouse phase, Lighthouse's own try/catch swallows the resulting error as "non-fatal" and the test reports `'completed'` instead of a failure (tracked in `TODO.md`) — the identical timer firing during the sessions loop correctly propagates as a hard failure.
+
+### ui — Vite + React Router SPA
+
+API client (`lib/api/*.ts`) is inconsistent about error handling: `teams.ts`/`orgs.ts`/`apiKeys.ts` funnel every response through an `orgJson()` helper that throws on non-2xx; `tests.ts`/`webhooks.ts`/`schedules.ts`/`presets.ts`/`system.ts`/`logSources.ts` mostly call `res.json()` directly with no `res.ok` check, treating HTTP errors as successful payloads (4 tracked bugs in `TODO.md`, all sharing this root cause). WebSocket (`ResultsSocketContext.tsx`) is a single shared connection with exponential backoff (1s→30s) and a synthetic `reconnected` event so consumers know to re-sync. No `ErrorBoundary` exists anywhere in the component tree.
+
+### Cross-service patterns
+
+- **429/rate-limit detection** exists in 3 inconsistent flavors across ai-service (`.status === 429` only), analyser-service, and recorder-service (`status === 429 || msg.includes('429') || msg.includes('quota')` — broader, but the substring match is unanchored and can false-positive). See `TODO.md`.
+- **Internal service-to-service auth**: every internal HTTP call carries `X-Internal-Key` via `internalHeaders()` (`@alt/shared`) when `INTERNAL_API_KEY` is set.
+- **AMQP resilience**: all 5 queue-connected services use the same `connectWithBackoff()` (1s→30s capped exponential, retries forever) for both initial connect and reconnect-on-close.
+- **Retry/DLQ shape**: every consumer uses the same `x-retry-count` header + `MAX_RETRIES=3` + `.dlq` queue pattern; retries are always an immediate requeue with no backoff at the queue layer — pacing (where it exists) is done inside the handler instead.
+
 ## Key Technical Decisions
 
 | Decision | Rationale |
