@@ -342,8 +342,8 @@ describe('generateAiInsights — known-bug regressions', () => {
   // fake timers by 15s — enough for a well-implemented internal timeout (e.g.
   // AbortSignal.timeout(10000)) to have fired and resolved with null. Check
   // whether the call settled. It hasn't, confirming the gap.
-  it.fails(
-    'enforces an internal timeout on a slow AI-provider call (no timeout exists yet)',
+  it(
+    'enforces an internal timeout on a slow AI-provider call',
     async () => {
       vi.useFakeTimers();
       try {
@@ -367,8 +367,8 @@ describe('generateAiInsights — known-bug regressions', () => {
         await vi.advanceTimersByTimeAsync(15_000);
         await Promise.resolve(); // flush any pending microtasks
 
-        // Fails today: the call is still pending — no internal timeout fires.
-        // A fixed implementation sets resolved = true before this point.
+        // The internal setTimeout(INSIGHTS_TIMEOUT_MS) fires at 10s, the
+        // Promise.race resolves with { insights: null }, and resolved is true.
         expect(resolved).toBe(true);
       } finally {
         // Drain remaining timers so the pending mock promise settles cleanly

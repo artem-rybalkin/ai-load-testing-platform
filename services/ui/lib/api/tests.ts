@@ -180,6 +180,10 @@ export const clearBaseline = async (testId: string): Promise<void> => {
 
 export const compareResults = async (a: string, b: string): Promise<{ resultA: TestResult; resultB: TestResult }> => {
   const res = await f(`${RESULTS_URL}/results/compare?a=${a}&b=${b}`, { cache: 'no-store' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
   return res.json();
 };
 

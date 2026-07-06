@@ -20,8 +20,6 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Compare-runs page crash (no ErrorBoundary)', () => {
   test('shows a friendly error instead of crashing when a compared result does not exist', async ({ page }) => {
-    test.fail();
-
     const pageErrors: Error[] = [];
     page.on('pageerror', (err) => pageErrors.push(err));
 
@@ -97,8 +95,6 @@ export default function () { http.get('http://api-service:3000/health'); sleep(1
 
 test.describe('Webhook creation silent failure', () => {
   test('shows an error and preserves the form instead of silently resetting it', async ({ page }) => {
-    test.fail();
-
     await page.goto('/webhooks');
     await page.waitForLoadState('networkidle');
 
@@ -121,7 +117,7 @@ test.describe('Webhook creation silent failure', () => {
     // so the user can retry. Currently: the form silently clears (`setUrl('')`
     // runs unconditionally after the awaited call resolves without throwing)
     // and nothing in the webhook list or on the page indicates failure.
-    await expect(page.getByText(/error|failed|rejected/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('p').filter({ hasText: /error|failed|rejected/i })).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('input[placeholder="https://your-endpoint.example.com/webhook"]')).toHaveValue(url);
   });
 });

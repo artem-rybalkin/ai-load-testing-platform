@@ -89,7 +89,7 @@ describe('Finding #1 — void-return actions silently ignore HTTP errors', () =>
 // ---------------------------------------------------------------------------
 
 describe('Finding #2 — compareResults resolves with error body instead of throwing on 404', () => {
-  it.fails(
+  it(
     'compareResults: should reject when the server returns 404',
     async () => {
       // Stub returns { error: "Not found" } — a 404 body, not a results pair.
@@ -112,7 +112,7 @@ describe('Finding #2 — compareResults resolves with error body instead of thro
 // ---------------------------------------------------------------------------
 
 describe('Finding #3 — createWebhook resolves with error body instead of throwing on non-2xx', () => {
-  it.fails(
+  it(
     'createWebhook: should reject when the server returns 422',
     async () => {
       // Bug: createWebhook returns the 422 body as { webhook: ... } which

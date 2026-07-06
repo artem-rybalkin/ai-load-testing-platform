@@ -81,6 +81,50 @@ export const incrementGeminiUsage = async (pool: Pool, teamId: string | undefine
 };
 
 /**
+ * Atomically check the daily Gemini quota AND record usage in a single SQL
+ * statement.  Returns null when the call is allowed (usage already recorded),
+ * or an error string when the team has reached its limit.
+ *
+ * Use this instead of the two-step checkGeminiQuota + incrementGeminiUsage
+ * pattern in concurrent /ai/* request handlers — separating the two queries
+ * creates a check-then-act race that lets concurrent requests all read the
+ * same pre-increment count and all slip through together.
+ */
+export const checkAndIncrementGeminiUsage = async (pool: Pool, teamId: string | undefined): Promise<string | null> => {
+  if (!teamId) return null;
+
+  const quota = await getTeamQuota(pool, teamId);
+  const limit = quota.maxGeminiCallsPerDay;
+
+  // INSERT the first row of the day (call_count=1).
+  // On conflict, increment ONLY when the current count is still under the
+  // limit — the conditional WHERE means no row is returned when the limit
+  // is already reached, which we treat as the over-quota signal.
+  const { rows } = await pool.query<{ call_count: number }>(
+    `INSERT INTO gemini_usage (team_id, usage_date, call_count)
+     VALUES ($1, CURRENT_DATE, 1)
+     ON CONFLICT (team_id, usage_date) DO UPDATE
+       SET call_count = gemini_usage.call_count + 1
+       WHERE gemini_usage.call_count < $2
+     RETURNING call_count`,
+    [teamId, limit],
+  );
+
+  if (rows.length === 0) {
+    // ON CONFLICT path: WHERE condition failed — already at or over the limit.
+    return `Team has reached its daily AI quota (max ${limit} calls/day)`;
+  }
+
+  // INSERT path (first call of the day): call_count is now 1.
+  // Guard against the edge case where the configured limit is 0.
+  if (rows[0].call_count > limit) {
+    return `Team has reached its daily AI quota (max ${limit} calls/day)`;
+  }
+
+  return null;
+};
+
+/**
  * Batched equivalent of calling getTeamQuota()+getTeamUsage() per team — used by
  * GET /orgs/:id, which previously issued 4 queries per team (N+1) instead of the
  * 4 total queries this does regardless of team count.

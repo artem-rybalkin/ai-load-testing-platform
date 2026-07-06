@@ -7,7 +7,7 @@ import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 import type { SLOThresholds, BackendMetrics, ClientMetrics, ChatMessage, ChatAttachment, ChatMode } from '@alt/shared';
 import { isProviderConfigured, generateAIText, extractAndParseAIJson, fenceUserContent, USER_DATA_INSTRUCTION, redactPII } from '@alt/shared';
-import { checkGeminiQuota, incrementGeminiUsage } from '../quotas';
+import { checkGeminiQuota, checkAndIncrementGeminiUsage } from '../quotas';
 import { getEffectiveAiProviderSetting } from '../settings';
 import { analyzeResult } from '../analyzer';
 import { fetchExternalMetrics } from '../externalMetrics';
@@ -44,7 +44,7 @@ export async function aiRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
       if (!phrase) return reply.code(400).send({ error: 'phrase is required' });
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const text = (await ai.generateText(
@@ -55,7 +55,6 @@ Description: "${fenceUserContent('schedule_description', phrase)}"
 
 Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`,
         )).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text);
         if (!parsed || !isValidCronResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
@@ -109,7 +108,7 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`,
       if (!url) return reply.code(400).send({ error: 'url is required' });
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const projectId = request.projectId ?? null;
@@ -131,7 +130,6 @@ ${history.length > 0 ? `Recent run history:\n${JSON.stringify(history, null, 2)}
 Return ONLY valid JSON:
 {"vus": <number>, "duration": "<e.g. 1m>", "profile": "load|spike|soak|capacity", "reasoning": "<one sentence>"}`,
         )).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text);
         if (!parsed || !isValidSuggestSettingsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
@@ -150,7 +148,7 @@ Return ONLY valid JSON:
       if (!events?.length) return reply.code(400).send({ error: 'events is required' });
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const projectId = request.projectId ?? null;
@@ -174,7 +172,6 @@ ${JSON.stringify(dist)}
 Return ONLY valid JSON:
 {"level": "noisy|ok|silent", "message": "<one sentence warning or confirmation>"}`,
         )).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text);
         if (!parsed || !isValidWebhookNoiseResponse(parsed)) return { warning: null };
         const { level, message } = parsed as { level: string; message: string };
@@ -193,7 +190,7 @@ Return ONLY valid JSON:
       const { url, type, vus, duration, profile, stepCount } = request.body;
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const text = (await ai.generateText(
@@ -205,7 +202,6 @@ Tags should be lowercase, single words or hyphenated (e.g. "e2e", "smoke", "auth
 
 Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`,
         )).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text);
         if (!parsed || !isValidPresetNameResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
@@ -224,7 +220,7 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`,
       if (!steps || steps.length === 0) return reply.code(400).send({ error: 'steps is required' });
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const text = (await ai.generateText(
@@ -237,7 +233,6 @@ ${fenceUserContent('flow_steps', redactPII(JSON.stringify(steps.slice(0, 20), nu
 Return ONLY valid JSON:
 {"columns": ["column_name_1", "column_name_2"], "reasoning": "<one sentence>"}`,
         )).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text);
         if (!parsed || !isValidParamSuggestionsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return parsed;
@@ -258,7 +253,7 @@ Return ONLY valid JSON:
       }
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const text = (await ai.generateText(
@@ -277,7 +272,6 @@ ${targetUrl ? `- Primary target URL: ${targetUrl}` : ''}
 Playwright script to translate:
 ${fenceUserContent('playwright_script', script.slice(0, 8000))}`,
         )).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const k6Script = text.replace(/^```(?:javascript|js)?\s*/i, '').replace(/\s*```$/i, '').trim();
         if (!k6Script) return reply.code(500).send({ error: 'AI returned unexpected response' });
         return { k6Script };
@@ -296,7 +290,7 @@ ${fenceUserContent('playwright_script', script.slice(0, 8000))}`,
       if (!url) return reply.code(400).send({ error: 'url is required' });
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
         const projectId = request.projectId ?? null;
@@ -337,7 +331,6 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
 }`;
 
         const text = (await ai.generateText(prompt)).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text);
         if (!parsed || !isValidSuggestThresholdsResponse(parsed)) return reply.code(500).send({ error: 'AI returned unexpected response' });
 
@@ -398,7 +391,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
       const ai = await getAiCapability(pool);
       if (!ai.configured) return reply.code(503).send({ error: 'No AI provider configured' });
 
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
 
       const projectId = request.projectId ?? null;
@@ -454,7 +447,6 @@ Return ONLY valid JSON array. Include only categories with count > 0:
 ]`;
 
         const text = (await ai.generateText(prompt)).trim();
-        await incrementGeminiUsage(pool, request.projectId);
         const parsed = extractAndParseAIJson(text, 'array');
         if (!parsed || !isValidDiagnoseResponse(parsed)) return { diagnoses: [], message: 'AI returned unexpected response' };
         return { diagnoses: parsed };
@@ -480,7 +472,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
       const configured = [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
       if (!configured) return reply.code(503).send({ error: 'No AI provider configured' });
 
-      const quotaError = await checkGeminiQuota(pool, request.projectId);
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
 
       try {
@@ -500,8 +492,6 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         }
 
         const text = (await generateAIText(prompt, setting)).trim();
-        await incrementGeminiUsage(pool, request.projectId);
-
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
         let parsed: Record<string, unknown>;

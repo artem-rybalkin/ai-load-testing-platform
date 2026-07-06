@@ -267,6 +267,13 @@ export interface AiInsightsResult {
   rateLimited: boolean;
 }
 
+/** Internal deadline for a complete AI-insights cycle (both attempts + backoff).
+ *  Keeps analyser-service in sync with the 12s outer timeout that results-service
+ *  places on the /analyse call — provider quota is not burned for a response that
+ *  nobody will read. Plain setTimeout (not AbortSignal.timeout) so that Vitest
+ *  fake-timer tests can advance past it predictably. */
+const INSIGHTS_TIMEOUT_MS = 10_000;
+
 export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsightsResult> => {
   const setting = await getProviderSetting(ctx.teamId);
   if (!isAnyProviderConfigured(setting)) {
@@ -277,50 +284,66 @@ export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsigh
   const payload = buildPayload(ctx);
   const prompt = buildPrompt(payload, ctx.externalMetrics);
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const text = (await generateAIText(prompt, setting)).trim();
+  // Race the two-attempt retry loop against a hard internal deadline so a slow
+  // (non-erroring) provider cannot hold the handler open indefinitely.
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutGuard = new Promise<AiInsightsResult>((resolve) => {
+    timeoutId = setTimeout(() => {
+      log.warn({ timeoutMs: INSIGHTS_TIMEOUT_MS }, 'AI insights internal timeout — giving up');
+      resolve({ insights: null, rateLimited: false });
+    }, INSIGHTS_TIMEOUT_MS);
+  });
 
-      // Strip markdown fences if the model wraps the output
-      const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-      const parsed = JSON.parse(cleaned) as AiInsights;
+  const work = (async (): Promise<AiInsightsResult> => {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const text = (await generateAIText(prompt, setting)).trim();
 
-      // Validate required fields
-      if (
-        typeof parsed.narrative === 'string' &&
-        Array.isArray(parsed.anomalies) &&
-        Array.isArray(parsed.rootCauses) &&
-        Array.isArray(parsed.recommendations) &&
-        ['critical', 'warning', 'info'].includes(parsed.severity)
-      ) {
-        log.info({ attempt }, 'AI insights generated');
-        return { insights: parsed, rateLimited: false };
-      }
+        // Strip markdown fences if the model wraps the output
+        const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        const parsed = JSON.parse(cleaned) as AiInsights;
 
-      log.warn({ attempt, parsed }, 'AI insights response had unexpected shape');
-      return { insights: null, rateLimited: false };
-    } catch (err: unknown) {
-      const msg = (err as Error).message ?? '';
-      const status = (err as { status?: number }).status;
+        // Validate required fields
+        if (
+          typeof parsed.narrative === 'string' &&
+          Array.isArray(parsed.anomalies) &&
+          Array.isArray(parsed.rootCauses) &&
+          Array.isArray(parsed.recommendations) &&
+          ['critical', 'warning', 'info'].includes(parsed.severity)
+        ) {
+          log.info({ attempt }, 'AI insights generated');
+          return { insights: parsed, rateLimited: false };
+        }
 
-      if (status === 429 || msg.includes('429') || msg.includes('quota')) {
-        log.warn({ attempt }, 'AI provider rate limited — skipping AI insights');
-        return { insights: null, rateLimited: true };
-      }
-
-      if (err instanceof SyntaxError) {
-        log.warn({ attempt }, 'AI insights JSON parse error — skipping');
+        log.warn({ attempt, parsed }, 'AI insights response had unexpected shape');
         return { insights: null, rateLimited: false };
-      }
+      } catch (err: unknown) {
+        const msg = (err as Error).message ?? '';
+        const status = (err as { status?: number }).status;
 
-      if (attempt < 2) {
-        log.warn({ attempt, err: msg }, 'AI insights attempt failed, retrying');
-        await new Promise(r => setTimeout(r, 3000));
-      } else {
-        log.error({ err: msg }, 'AI insights generation failed');
+        if (status === 429 || msg.includes('429') || msg.includes('quota')) {
+          log.warn({ attempt }, 'AI provider rate limited — skipping AI insights');
+          return { insights: null, rateLimited: true };
+        }
+
+        if (err instanceof SyntaxError) {
+          log.warn({ attempt }, 'AI insights JSON parse error — skipping');
+          return { insights: null, rateLimited: false };
+        }
+
+        if (attempt < 2) {
+          log.warn({ attempt, err: msg }, 'AI insights attempt failed, retrying');
+          await new Promise(r => setTimeout(r, 3000));
+        } else {
+          log.error({ err: msg }, 'AI insights generation failed');
+        }
       }
     }
-  }
 
-  return { insights: null, rateLimited: false };
+    return { insights: null, rateLimited: false };
+  })();
+
+  const result = await Promise.race([work, timeoutGuard]);
+  clearTimeout(timeoutId);
+  return result;
 };

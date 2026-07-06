@@ -382,8 +382,8 @@ describe('processAiRequest — ack guarantee', () => {
 describe('regression: REGENERATE→generate-failure requeues original message (finding #3)', () => {
   beforeEach(() => { vi.unstubAllGlobals(); });
 
-  it.fails(
-    'requeued message omits cachedScript so retry skips comparison (currently requeues original with cachedScript)',
+  it(
+    'requeued message omits cachedScript so retry skips comparison',
     async () => {
       const compareDescriptions = vi.fn().mockResolvedValue('REGENERATE');
       const generateScript = vi.fn().mockRejectedValue(new Error('Gemini unavailable'));

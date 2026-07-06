@@ -505,7 +505,7 @@ describe('runClientTest — web-vitals zero-to-undefined (bug #1 regression)', (
 describe('runClientTest — max-duration kill during Lighthouse (bug #3 regression)', () => {
   beforeEach(() => { vi.unstubAllGlobals(); });
 
-  it.fails(
+  it(
     'runClientTest should reject when the kill timer fires mid-Lighthouse-audit',
     async () => {
       // Wire browser.close() (triggered by the kill timer) → lighthouse rejection,

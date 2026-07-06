@@ -106,7 +106,9 @@ export const runClientTest = async (
   const browser = await browserPool.acquire();
 
   runningBrowsers.set(test.id, browser);
+  let killTimerFired = false;
   const killTimer = setTimeout(async () => {
+    killTimerFired = true;
     log.warn({ testId: test.id, maxMs: maxDurationMs }, 'Puppeteer test exceeded max duration, closing browser');
     await browser.close().catch(() => {});
   }, maxDurationMs);
@@ -293,6 +295,12 @@ export const runClientTest = async (
     } catch (err) {
       testLog.error({ err: (err as Error).message }, 'Lighthouse audit failed (non-fatal)');
       addLog('WARN', `Lighthouse audit failed (non-fatal): ${(err as Error).message}`);
+      // If the kill timer fired while Lighthouse was running, the browser close
+      // caused the Lighthouse rejection.  Re-throw as a hard failure so the
+      // result is not mistakenly published as 'completed' (bug #3 fix).
+      if (killTimerFired) {
+        throw err;
+      }
     }
 
     // ── Average Web Vitals across sessions ───────────────────────────────────

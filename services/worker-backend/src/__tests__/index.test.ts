@@ -476,7 +476,7 @@ describe('worker-backend index.ts', () => {
       vi.useRealTimers();
     });
 
-    it.fails('cancel consumer should SIGKILL the process after grace period when SIGTERM is ignored (currently never sends SIGKILL)', async () => {
+    it('cancel consumer should SIGKILL the process after grace period when SIGTERM is ignored', async () => {
       const { start } = await import('../index');
       // start() only uses microtasks (mocked amqplib resolves immediately), not setTimeout — safe with fake timers.
       await start();

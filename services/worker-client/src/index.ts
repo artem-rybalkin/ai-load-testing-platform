@@ -128,10 +128,13 @@ export const start = async (): Promise<void> => {
       ch.ack(msg);
       return;
     }
+    // Always record the cancellation so a cancel arriving before
+    // runningBrowsers is populated (during browserPool.acquire()) is
+    // still honored once acquire() completes (bug #2 fix).
+    cancelledTests.add(testId);
     const browser = runningBrowsers.get(testId);
     if (browser) {
       log.info({ testId }, 'Cancelling client test');
-      cancelledTests.add(testId);
       await browser.close().catch(() => {});
     }
     ch.ack(msg);

@@ -78,7 +78,8 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
       const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
         `INSERT INTO log_sources (name, platform, url_template, metrics_endpoint_template, auth_header, project_id)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id, name, platform, url_template, metrics_endpoint_template, project_id, created_at`,
         [name, platform ?? null, urlTemplate, metricsEndpointTemplate ?? null, authHeader ?? null, projectId]
       );
       return reply.code(201).send({ logSource: rows[0] });
@@ -110,7 +111,7 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
       const projectId = request.projectId ?? null;
       vals.push(id);
       vals.push(projectId);
-      const { rows } = await pool.query(`UPDATE log_sources SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING *`, vals);
+      const { rows } = await pool.query(`UPDATE log_sources SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING id, name, platform, url_template, metrics_endpoint_template, project_id, created_at`, vals);
       if (rows.length === 0) return reply.code(404).send({ error: 'Log source not found' });
       return { logSource: rows[0] };
     }

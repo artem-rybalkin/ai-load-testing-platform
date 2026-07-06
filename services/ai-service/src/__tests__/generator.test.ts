@@ -644,8 +644,8 @@ describe('regression: FLOW_PROMPT step-data PII not fenced (finding #1)', () => 
 // ─── Regression: message-only 429 detection missing in generateScript and compareDescriptions (Finding #2) ──
 
 describe('regression: message-only 429 rate-limit detection (finding #2)', () => {
-  it.fails(
-    'generateScript: error with "429" in message but no .status triggers backoff retry (currently throws immediately)',
+  it(
+    'generateScript: error with "429" in message but no .status triggers backoff retry',
     async () => {
       const fn = await getMockFn();
       fn.mockReset();
@@ -653,22 +653,25 @@ describe('regression: message-only 429 rate-limit detection (finding #2)', () =>
       fn.mockRejectedValueOnce(new Error('rate limited: 429 quota exceeded'));
       fn.mockResolvedValueOnce('generated-script-after-retry');
 
+      vi.useFakeTimers();
       try {
-        // Bug: error.status is undefined ≠ 429 → code re-throws immediately instead of retrying.
-        // Correct: should detect '429' or 'quota' in error.message and apply the same backoff path
-        // (consistent with analyser-service/src/aiInsights.ts:305 and recorder-service/src/correlator.ts:418).
-        const result = await generateScript(baseFlow());
+        // isRateLimitError() now detects '429' as a word-boundary-anchored number in the message,
+        // triggering the same backoff path as a structured { status: 429 } error.
+        const promise = generateScript(baseFlow());
+        await vi.runAllTimersAsync();
+        const result = await promise;
         expect(result).toBe('generated-script-after-retry');
         expect(fn).toHaveBeenCalledTimes(2);
       } finally {
+        vi.useRealTimers();
         fn.mockReset();
         fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
       }
     },
   );
 
-  it.fails(
-    'compareDescriptions: error with "429" in message but no .status triggers backoff retry (currently defaults to REGENERATE immediately)',
+  it(
+    'compareDescriptions: error with "429" in message but no .status triggers backoff retry',
     async () => {
       const fn = await getMockFn();
       fn.mockReset();
@@ -676,13 +679,17 @@ describe('regression: message-only 429 rate-limit detection (finding #2)', () =>
       fn.mockRejectedValueOnce(new Error('rate limited: 429 quota exceeded'));
       fn.mockResolvedValueOnce('REUSE');
 
+      vi.useFakeTimers();
       try {
-        // Bug: error.status is undefined → else-branch fires immediately: log + return 'REGENERATE'.
-        // Correct: should detect '429'/'quota' in error.message and retry with backoff.
-        const result = await compareDescriptions('same endpoint', 'same endpoint description');
+        // isRateLimitError() detects '429' in message and retries with backoff instead of
+        // immediately returning 'REGENERATE'.
+        const promise = compareDescriptions('same endpoint', 'same endpoint description');
+        await vi.runAllTimersAsync();
+        const result = await promise;
         expect(result).toBe('REUSE');
         expect(fn).toHaveBeenCalledTimes(2);
       } finally {
+        vi.useRealTimers();
         fn.mockReset();
         fn.mockResolvedValue("import http from 'k6/http';\nexport default function() {}");
       }

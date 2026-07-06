@@ -47,7 +47,7 @@ export const processAiRequest = async (
     if (test.cachedScript && test.description) {
       if (test.cachedScriptDescription == null) {
         log.info({ testId: test.id }, 'Cached script has no stored description — regenerating');
-        test = { ...test, scriptId: undefined };
+        test = { ...test, scriptId: undefined, cachedScript: undefined, cachedScriptDescription: undefined };
       } else {
         const same = test.description.trim().toLowerCase() === test.cachedScriptDescription.trim().toLowerCase();
         const verdict = same ? 'REUSE' : await compareFn(test.description, test.cachedScriptDescription, test.projectId);
@@ -59,7 +59,8 @@ export const processAiRequest = async (
           channel.ack(msg);
           return;
         }
-        test = { ...test, scriptId: undefined };
+        // Clear cached fields so any retry skips straight to generation — no redundant LLM comparison.
+        test = { ...test, scriptId: undefined, cachedScript: undefined, cachedScriptDescription: undefined };
       }
     }
 
@@ -83,7 +84,7 @@ export const processAiRequest = async (
         test.id,
         `Gemini unavailable — retrying… (${attemptsLeft} attempt${attemptsLeft !== 1 ? 's' : ''} left)`,
       );
-      channel.publish('', 'ai-requests', msg.content, {
+      channel.publish('', 'ai-requests', Buffer.from(JSON.stringify(test)), {
         persistent: true,
         headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 },
       });

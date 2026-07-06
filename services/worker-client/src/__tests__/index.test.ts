@@ -293,7 +293,7 @@ describe('worker-client index.ts', () => {
     // no-op: the test completes normally with status:'completed'.
     // Expected fix: track pending testIds (e.g. via a pendingCancels set) before
     // acquire so that when acquire resolves the browser can be closed immediately.
-    it.fails(
+    it(
       'cancel arriving before runningBrowsers is populated (during acquire gap) is honored, not silently dropped',
       async () => {
         // Simulate the acquire gap: runClientTest resolves a promise (allowAcquire)

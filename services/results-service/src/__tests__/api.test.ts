@@ -1548,7 +1548,7 @@ describe('POST /results/:testId/cancel — cross-tenant isolation (regression #1
 // to the caller — the very exposure GET guards against.
 // Fix: change RETURNING * to RETURNING <explicit column list> that omits auth_header.
 describe('PUT /log-sources/:id — auth_header must not be echoed in the response (regression #10, Medium)', () => {
-  it.fails(
+  it(
     '#10 PUT partial update must not include auth_header in the response body',
     async () => {
       const create = await app.inject({

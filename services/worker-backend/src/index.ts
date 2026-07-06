@@ -213,6 +213,16 @@ export const start = async (): Promise<void> => {
       log.info({ testId }, 'Cancelling k6 test');
       cancelledTests.add(testId);
       proc.kill('SIGTERM');
+      // Escalate to SIGKILL after the grace period if the process is still
+      // alive (mirrors the max-duration watchdog in runner.ts:195-199).
+      // The check against runningTests is self-cleaning: runner's close handler
+      // deletes the entry, so the timer is a no-op if the process already exited.
+      setTimeout(() => {
+        if (runningTests.has(testId)) {
+          log.warn({ testId }, 'k6 process did not exit after cancel SIGTERM — escalating to SIGKILL');
+          runningTests.get(testId)!.kill('SIGKILL');
+        }
+      }, GRACE_PERIOD_MS);
     }
     ch.ack(msg);
   }, { noAck: false });

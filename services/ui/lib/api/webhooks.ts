@@ -20,6 +20,10 @@ export const createWebhook = async (url: string, events?: string[], format?: str
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, events, format, workspaceId }),
   });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
   return res.json();
 };
 

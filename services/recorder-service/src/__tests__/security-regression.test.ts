@@ -277,7 +277,7 @@ describe('Finding #3 — recorder SSRF guard wiring and redirect gap', () => {
 // result.length is silently dropped (the idx < result.length guard at line 244).
 
 describe('Finding #4 — correlations mis-attached when a 5xx request is in the captured set', () => {
-  it.fails('correlation from a request after a 5xx attaches to the correct filtered step', async () => {
+  it('correlation from a request after a 5xx attaches to the correct filtered step', async () => {
     const mock = await getMock();
 
     // Four requests: index 1 is a 5xx and will be dropped by toFlowSteps().

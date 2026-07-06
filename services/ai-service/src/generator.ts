@@ -372,6 +372,21 @@ export default function() {
 `;
 };
 
+/**
+ * Returns true when an error represents an AI-provider rate-limit.
+ * Checks both the structured `.status === 429` (standard HTTP error objects) and
+ * message text — using a word-boundary-anchored pattern so "3429ms" or "failed after 3429"
+ * do NOT false-positive, unlike the bare `.includes('429')` used in sibling services.
+ */
+const isRateLimitError = (err: unknown): boolean => {
+  const e = err as { status?: number; message?: string };
+  if (e.status === 429) return true;
+  const msg = typeof e.message === 'string' ? e.message : '';
+  // \b429\b: matches "429" as a standalone number; rejects "3429ms", "14299", etc.
+  // "quota": targets quota-exhaustion messages emitted by AI providers.
+  return /\b429\b/.test(msg) || msg.includes('quota');
+};
+
 export const compareDescriptions = async (
   newDescription: string,
   storedDescription: string,
@@ -405,8 +420,7 @@ Reply with exactly one word: REUSE or REGENERATE`;
       log.warn({ verdict }, 'Unexpected comparison verdict, defaulting to REGENERATE');
       return 'REGENERATE';
     } catch (err: unknown) {
-      const error = err as { status?: number };
-      if (error.status === 429 && attempt < maxRetries) {
+      if (isRateLimitError(err) && attempt < maxRetries) {
         const waitTime = 60000 * attempt;
         log.info({ waitSeconds: waitTime / 1000 }, 'Rate limited on comparison, waiting before retry');
         await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -436,8 +450,7 @@ export const generateScript = async (test: TestRequest): Promise<string> => {
       log.info({ testType: test.type }, 'Script generated successfully');
       return script;
     } catch (err: unknown) {
-      const error = err as { status?: number };
-      if (error.status === 429 && attempt < maxRetries) {
+      if (isRateLimitError(err) && attempt < maxRetries) {
         const waitTime = 60000 * attempt;
         log.info({ waitSeconds: waitTime / 1000 }, 'Rate limited, waiting before retry');
         await new Promise(resolve => setTimeout(resolve, waitTime));

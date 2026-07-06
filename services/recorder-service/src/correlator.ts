@@ -264,29 +264,76 @@ function substituteValue(
   return changed ? { ...step, body, headers } : step;
 }
 
+/**
+ * Build a map from unfiltered-request-index → filtered-step-index.
+ *
+ * `toFlowSteps` drops 5xx responses before building the step array, creating a
+ * gap between the AI's indices (which reference the full `requests` array sent to
+ * the model via `buildSummary`) and the `steps` array indices that
+ * `applyCorrelations` writes into.  This function reconstructs the mapping by
+ * applying the same filter predicate (`responseStatus < 500`), capped at
+ * `steps.length` to account for FLOW_STEPS_CAP.
+ *
+ * Returns `undefined` when both arrays have the same length (no filtering
+ * occurred), so the caller can skip the mapping step entirely.
+ */
+function buildIndexMap(
+  requests: RecordedRequest[],
+  steps: FlowStep[],
+): Map<number, number> | undefined {
+  if (requests.length === steps.length) return undefined;
+  const map = new Map<number, number>();
+  let filteredIdx = 0;
+  for (let reqIdx = 0; reqIdx < requests.length && filteredIdx < steps.length; reqIdx++) {
+    if (requests[reqIdx].responseStatus < 500) {
+      map.set(reqIdx, filteredIdx++);
+    }
+  }
+  return map;
+}
+
 /** Apply correlation entries back onto FlowStep[].extract, and rewrite consuming steps to reference {{varName}}. */
-function applyCorrelations(requests: RecordedRequest[], steps: FlowStep[], correlations: CorrelationEntry[]): FlowStep[] {
+function applyCorrelations(
+  requests: RecordedRequest[],
+  steps: FlowStep[],
+  correlations: CorrelationEntry[],
+  indexMap?: Map<number, number>,
+): FlowStep[] {
   let result: FlowStep[] = steps.map(s => ({ ...s, extract: { ...(s.extract ?? {}) } }));
 
+  // Translate an unfiltered-request index returned by the AI to the corresponding
+  // filtered-step index.  When no map is provided (arrays are already 1:1 aligned),
+  // the index passes through unchanged.
+  const toFilteredIdx = (unfilteredIdx: number): number =>
+    indexMap ? (indexMap.get(unfilteredIdx) ?? -1) : unfilteredIdx;
+
   for (const corr of correlations) {
-    if (corr.sourceStepIndex < 0 || corr.sourceStepIndex >= result.length) continue;
+    const filteredSourceIdx = toFilteredIdx(corr.sourceStepIndex);
+    if (filteredSourceIdx < 0 || filteredSourceIdx >= result.length) continue;
 
     const varName = corr.variableName.replace(/[^a-z0-9_]/gi, '_') || `var_${corr.sourceStepIndex}`;
     const rule: ExtractRule = { source: corr.source, expression: corr.expression };
 
     // Add extract rule to the source step
-    result[corr.sourceStepIndex].extract = {
-      ...result[corr.sourceStepIndex].extract,
+    result[filteredSourceIdx].extract = {
+      ...result[filteredSourceIdx].extract,
       [varName]: rule,
     };
 
-    // Replace the literal value with {{varName}} in the steps that consume it
+    // Replace the literal value with {{varName}} in the steps that consume it.
+    // extractValue uses the UNFILTERED request index (corr.sourceStepIndex) — correct:
+    // we need the original captured response body/headers, not the filtered step.
     const value = extractValue(requests[corr.sourceStepIndex], rule);
     let substitutedIn: number[] = [];
     if (value && value.length >= 3) {
-      substitutedIn = corr.usedInStepIndices.filter(idx => idx >= 0 && idx < result.length && idx !== corr.sourceStepIndex);
-      for (const idx of substitutedIn) {
-        result[idx] = substituteValue(result[idx], value, varName, requests[idx]?.headers);
+      for (const unfilteredUsedIdx of corr.usedInStepIndices) {
+        const filteredUsedIdx = toFilteredIdx(unfilteredUsedIdx);
+        if (filteredUsedIdx < 0 || filteredUsedIdx >= result.length || filteredUsedIdx === filteredSourceIdx) continue;
+        // Use the UNFILTERED request index to retrieve the original captured headers
+        // (toFlowSteps strips auth/cookie headers from step.headers; substituteValue
+        // needs the raw capture to detect when the value was sent via a stripped header).
+        result[filteredUsedIdx] = substituteValue(result[filteredUsedIdx], value, varName, requests[unfilteredUsedIdx]?.headers);
+        substitutedIn.push(filteredUsedIdx);
       }
     }
 
@@ -451,7 +498,12 @@ export async function detectCorrelations(
       return steps;
     }
 
-    const enriched = applyCorrelations(requests, steps, parsed.correlations);
+    // Build a mapping from unfiltered-request index to filtered-step index so that
+    // AI-returned indices (which reference the full requests array passed to
+    // buildSummary) are translated correctly before writing into the steps array
+    // (which may be shorter when toFlowSteps dropped 5xx responses).
+    const indexMap = buildIndexMap(requests, steps);
+    const enriched = applyCorrelations(requests, steps, parsed.correlations, indexMap);
     correlatorRateLimited = false;
     log.info({ correlationCount: parsed.correlations.length }, 'Correlation detection complete');
     return enriched;
