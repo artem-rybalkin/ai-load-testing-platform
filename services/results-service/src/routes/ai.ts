@@ -6,7 +6,7 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 import type { SLOThresholds, BackendMetrics, ClientMetrics, ChatMessage, ChatAttachment, ChatMode } from '@alt/shared';
-import { isProviderConfigured, generateAIText, extractAndParseAIJson, fenceUserContent, USER_DATA_INSTRUCTION } from '@alt/shared';
+import { isProviderConfigured, generateAIText, extractAndParseAIJson, fenceUserContent, USER_DATA_INSTRUCTION, redactPII } from '@alt/shared';
 import { checkGeminiQuota, incrementGeminiUsage } from '../quotas';
 import { getEffectiveAiProviderSetting } from '../settings';
 import { analyzeResult } from '../analyzer';
@@ -153,10 +153,13 @@ Return ONLY valid JSON:
       const quotaError = await checkGeminiQuota(pool, request.projectId);
       if (quotaError) return reply.code(429).send({ error: quotaError });
       try {
+        const projectId = request.projectId ?? null;
         const { rows } = await pool.query(
           `SELECT perf_status, COUNT(*) as count
            FROM test_results WHERE status = 'completed' AND perf_status IS NOT NULL
+             AND ($1::uuid IS NULL OR project_id = $1::uuid)
            GROUP BY perf_status`,
+          [projectId],
         );
         if (rows.length === 0) return { warning: null, message: 'Not enough run history to predict noise' };
         const dist = Object.fromEntries(rows.map((r: { perf_status: string; count: string }) => [r.perf_status, parseInt(r.count)]));
@@ -229,7 +232,7 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`,
 Suggest test-data column names for a CSV/JSON data file.
 
 Steps:
-${fenceUserContent('flow_steps', JSON.stringify(steps.slice(0, 20), null, 2))}
+${fenceUserContent('flow_steps', redactPII(JSON.stringify(steps.slice(0, 20), null, 2)))}
 
 Return ONLY valid JSON:
 {"columns": ["column_name_1", "column_name_2"], "reasoning": "<one sentence>"}`,
@@ -432,7 +435,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
 
       try {
         const externalSection = externalMetrics.length > 0
-          ? `\n\nExternal observability data (from configured integrations):\n${externalMetrics.map(e => `--- ${e.sourceName}${e.platform ? ` (${e.platform})` : ''} ---\n${e.data}`).join('\n\n')}`
+          ? `\n\nExternal observability data (from configured integrations):\n${externalMetrics.map(e => `--- ${e.sourceName}${e.platform ? ` (${e.platform})` : ''} ---\n${fenceUserContent('external_metrics', e.data)}`).join('\n\n')}`
           : '';
 
         const prompt = `You are a performance engineering expert. A k6 load test produced the following error breakdown. Diagnose each non-zero error category with a likely root cause and one concrete next step.${externalSection ? ' Use the external observability data to enrich your diagnosis where relevant.' : ''}

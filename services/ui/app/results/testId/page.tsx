@@ -248,24 +248,31 @@ export default function ResultPage() {
   const [trendNarrative, setTrendNarrative] = useState<string | null>(null);
   const [trendNarrativeLoading, setTrendNarrativeLoading] = useState(false);
   const [liveLogLines, setLiveLogLines] = useState<LogEntry[]>([]);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleCancel = async () => {
     setCancelling(true);
+    setActionError(null);
     try {
       await cancelTest(testId);
       const data = await getResult(testId);
       if (data.result) setResult(data.result);
+    } catch (e) {
+      setActionError((e as Error).message);
     } finally { setCancelling(false); }
   };
 
   const handleBaseline = async () => {
     if (!result) return;
     setBaselineBusy(true);
+    setActionError(null);
     try {
       if (result.is_baseline) await clearBaseline(testId);
       else await setBaseline(testId);
       const data = await getResult(testId);
       if (data.result) setResult(data.result);
+    } catch (e) {
+      setActionError((e as Error).message);
     } finally { setBaselineBusy(false); }
   };
 
@@ -436,6 +443,7 @@ export default function ResultPage() {
                 {cancelling ? 'Stopping…' : 'Stop'}
               </button>
             )}
+            {actionError && <p data-testid="action-error" className="text-red-fg text-[12px] font-mono w-full mt-1">{actionError}</p>}
             {result.status === 'completed' && (
               <>
                 <button onClick={handleBaseline} disabled={baselineBusy}

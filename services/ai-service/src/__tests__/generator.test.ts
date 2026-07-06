@@ -621,8 +621,8 @@ describe('getProviderSetting — per-team resolution', () => {
 // ─── Regression: FLOW_PROMPT step-data PII not fenced (Finding #1) ───────────
 
 describe('regression: FLOW_PROMPT step-data PII not fenced (finding #1)', () => {
-  it.fails(
-    'step body containing PII is wrapped in <user_data> fence (currently interpolated raw)',
+  it(
+    'step body containing PII is wrapped in <user_data> fence',
     async () => {
       const fn = await getMockFn();
       fn.mockClear();

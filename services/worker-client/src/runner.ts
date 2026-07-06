@@ -300,14 +300,23 @@ export const runClientTest = async (
     const inpValue = lhInp ?? (avgInp > 0 ? avgInp : undefined);
     const avgLongTaskCount = avgNum(snapshots, 'longTaskCount');
 
+    // Coalesce 0 → undefined for metrics whose PerformanceObserver (or navigation
+    // timing API) may never have fired, so the result exposes "unavailable" rather
+    // than a spurious perfect score. Mirrors the existing pattern for
+    // jsErrors / longTaskCount / inp in this same block.
+    const avgLcp  = avgNum(snapshots, 'lcp');
+    const avgFcp  = avgNum(snapshots, 'fcp');
+    const avgCls  = avgNum(snapshots, 'cls');
+    const avgTtfb = avgNum(snapshots, 'ttfb');
+
     return {
       metrics: {
         type: 'client',
-        lcp:              avgNum(snapshots, 'lcp'),
+        lcp:              avgLcp  > 0 ? avgLcp  : undefined,
         fid:              avgNum(snapshots, 'fid'),
-        cls:              avgNum(snapshots, 'cls'),
-        ttfb:             avgNum(snapshots, 'ttfb'),
-        fcp:              avgNum(snapshots, 'fcp'),
+        cls:              avgCls  > 0 ? avgCls  : undefined,
+        ttfb:             avgTtfb > 0 ? avgTtfb : undefined,
+        fcp:              avgFcp  > 0 ? avgFcp  : undefined,
         inp:              inpValue,
         tbt:              lhTbt,
         tti:              lhTti,

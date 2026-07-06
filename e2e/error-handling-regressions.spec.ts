@@ -42,8 +42,6 @@ test.describe('Compare-runs page crash (no ErrorBoundary)', () => {
 
 test.describe('Silent failures on Stop / Set-baseline / Clear-baseline', () => {
   test('shows an error when Stop fails instead of failing silently', async ({ page }) => {
-    test.fail();
-
     await page.goto('/');
     await page.fill('input[type="text"][placeholder*="acme"]', 'http://localhost:3000/health');
     await page.getByText(/advanced settings/i).click();
@@ -65,12 +63,11 @@ test.describe('Silent failures on Stop / Set-baseline / Clear-baseline', () => {
     // Desired: an error is surfaced. Currently: the button silently returns
     // to its normal state and the test keeps running with zero indication
     // anything went wrong — there is no error UI for this action at all.
-    await expect(page.getByText(/error|failed|forbidden/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId('action-error')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId('action-error')).toContainText(/forbidden/i);
   });
 
   test('shows an error when Set baseline fails instead of failing silently', async ({ page }) => {
-    test.fail();
-
     await page.goto('/');
     await page.getByRole('button', { name: /custom script/i }).click();
     const urlInput = page.locator('input[placeholder*="example"]');
@@ -93,7 +90,8 @@ export default function () { http.get('http://api-service:3000/health'); sleep(1
     await page.waitForTimeout(2000);
 
     // Desired: an error is surfaced instead of the button quietly resetting.
-    await expect(page.getByText(/error|failed|forbidden/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId('action-error')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId('action-error')).toContainText(/forbidden/i);
   });
 });
 

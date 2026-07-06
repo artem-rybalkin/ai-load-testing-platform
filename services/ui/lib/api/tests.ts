@@ -155,15 +155,27 @@ export const getExecutionLog = async (testId: string): Promise<{ log: string | n
 };
 
 export const cancelTest = async (testId: string): Promise<void> => {
-  await f(`${API_URL}/tests/${testId}/cancel`, { method: 'POST' });
+  const res = await f(`${API_URL}/tests/${testId}/cancel`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
 };
 
 export const setBaseline = async (testId: string): Promise<void> => {
-  await f(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'POST' });
+  const res = await f(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
 };
 
 export const clearBaseline = async (testId: string): Promise<void> => {
-  await f(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'DELETE' });
+  const res = await f(`${RESULTS_URL}/results/${testId}/baseline`, { method: 'DELETE' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
 };
 
 export const compareResults = async (a: string, b: string): Promise<{ resultA: TestResult; resultB: TestResult }> => {

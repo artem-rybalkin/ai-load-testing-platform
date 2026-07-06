@@ -160,11 +160,11 @@ export const LighthouseScoreSchema: z.ZodType<LighthouseScore> = z.object({
 
 export const ClientMetricsSchema: z.ZodType<ClientMetrics> = z.object({
   type: z.literal('client'),
-  lcp: z.number(),
+  lcp: z.number().optional(),
   fid: z.number(),
-  cls: z.number(),
-  ttfb: z.number(),
-  fcp: z.number(),
+  cls: z.number().optional(),
+  ttfb: z.number().optional(),
+  fcp: z.number().optional(),
   inp: z.number().optional(),
   tbt: z.number().optional(),
   tti: z.number().optional(),

@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { fetchSsrfSafe } from '@alt/shared';
+import { fetchSsrfSafe, redactPII } from '@alt/shared';
 
 /**
  * For each log source (scoped to projectId, or every source when projectId is null —
@@ -54,7 +54,7 @@ export async function fetchExternalMetrics(
           results.push({
             sourceName: row.name,
             platform: row.platform,
-            data: text.slice(0, 3000), // cap at 3 KB per source
+            data: redactPII(text.slice(0, 3000)), // cap at 3 KB per source, then redact PII
           });
         } catch { /* non-fatal */ }
       })

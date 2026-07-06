@@ -465,7 +465,7 @@ describe('runClientTest — execution log', () => {
 describe('runClientTest — web-vitals zero-to-undefined (bug #1 regression)', () => {
   beforeEach(() => { vi.unstubAllGlobals(); });
 
-  it.fails(
+  it(
     'lcp/fcp/cls should be undefined — not 0 — when PerformanceObserver callbacks never fire',
     async () => {
       // Simulate a non-paintable response: the PerformanceObserver callbacks for
@@ -486,8 +486,7 @@ describe('runClientTest — web-vitals zero-to-undefined (bug #1 regression)', (
 
       const result = await runClientTest(BASE_TEST, ctx);
 
-      // Desired (not yet implemented): "never fired" metrics → undefined, not 0.
-      // Currently avgNum() returns 0 → these assertions fail → it.fails passes.
+      // "Never fired" metrics → undefined, not 0 (fixed 2026-07-06).
       expect(result.metrics.lcp).toBeUndefined();
       expect(result.metrics.fcp).toBeUndefined();
       expect(result.metrics.cls).toBeUndefined();

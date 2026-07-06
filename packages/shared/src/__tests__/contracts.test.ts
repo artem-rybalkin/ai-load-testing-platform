@@ -202,8 +202,8 @@ describe('BackendMetricsSchema / ClientMetricsSchema (standalone)', () => {
     expect(BackendMetricsSchema.safeParse(msg).success).toBe(false);
   });
 
-  it('rejects client metrics missing a required CWV field', () => {
-    const msg = { type: 'client', lcp: 1, fid: 1, cls: 0.1, ttfb: 1 }; // missing fcp
+  it('rejects client metrics missing a required field', () => {
+    const msg = { type: 'client', lcp: 1, cls: 0.1, ttfb: 1, fcp: 1 }; // missing fid (required)
     expect(ClientMetricsSchema.safeParse(msg).success).toBe(false);
   });
 });

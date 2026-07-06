@@ -283,11 +283,11 @@ export interface ResourceBreakdown {
 
 export interface ClientMetrics {
   type: 'client';
-  lcp: number;
+  lcp?: number;   // undefined when PerformanceObserver never fired (e.g. non-paintable response)
   fid: number;
-  cls: number;
-  ttfb: number;
-  fcp: number;
+  cls?: number;   // undefined when PerformanceObserver never fired; note: genuine CLS=0 also maps to undefined
+  ttfb?: number;  // undefined when navigation timing entry is absent (e.g. redirect / data: URL)
+  fcp?: number;   // undefined when PerformanceObserver never fired
   inp?: number;              // Interaction to Next Paint (ms) — CWV since March 2024
   tbt?: number;              // Total Blocking Time (ms) — from Lighthouse
   tti?: number;              // Time to Interactive (ms) — from Lighthouse
@@ -467,10 +467,10 @@ const analyzeClient = (
   const thresholdViolations: string[] = [];
   const diffs: MetricDiff[] = [];
 
-  if (current.lcp  > t.lcp)  thresholdViolations.push(`LCP ${Math.round(current.lcp)}ms exceeds threshold ${t.lcp}ms`);
-  if (current.fcp  > t.fcp)  thresholdViolations.push(`FCP ${Math.round(current.fcp)}ms exceeds threshold ${t.fcp}ms`);
-  if (current.ttfb > t.ttfb) thresholdViolations.push(`TTFB ${Math.round(current.ttfb)}ms exceeds threshold ${t.ttfb}ms`);
-  if (current.cls  > t.cls)  thresholdViolations.push(`CLS ${current.cls.toFixed(3)} exceeds threshold ${t.cls}`);
+  if (current.lcp  != null && current.lcp  > t.lcp)  thresholdViolations.push(`LCP ${Math.round(current.lcp)}ms exceeds threshold ${t.lcp}ms`);
+  if (current.fcp  != null && current.fcp  > t.fcp)  thresholdViolations.push(`FCP ${Math.round(current.fcp)}ms exceeds threshold ${t.fcp}ms`);
+  if (current.ttfb != null && current.ttfb > t.ttfb) thresholdViolations.push(`TTFB ${Math.round(current.ttfb)}ms exceeds threshold ${t.ttfb}ms`);
+  if (current.cls  != null && current.cls  > t.cls)  thresholdViolations.push(`CLS ${current.cls.toFixed(3)} exceeds threshold ${t.cls}`);
   if (current.inp  != null && current.inp  > t.inp)  thresholdViolations.push(`INP ${Math.round(current.inp)}ms exceeds threshold ${t.inp}ms`);
   if (current.tbt  != null && current.tbt  > t.tbt)  thresholdViolations.push(`TBT ${Math.round(current.tbt)}ms exceeds threshold ${t.tbt}ms`);
   if (current.lighthouseScore && current.lighthouseScore.performance < LIGHTHOUSE_THRESHOLD_PERFORMANCE)
@@ -483,9 +483,9 @@ const analyzeClient = (
       { key: 'inp', label: 'INP' }, { key: 'tbt', label: 'TBT' },
     ];
     for (const { key, label } of vitalKeys) {
-      const curr = current[key] as number;
-      const prev = previous[key] as number;
-      if (!prev) continue;
+      const curr = current[key] as number | undefined;
+      const prev = previous[key] as number | undefined;
+      if (curr == null || !prev) continue;
       const rawDiff = ((curr - prev) / prev) * 100;
       diffs.push({ metric: label, current: key === 'cls' ? Math.round(curr * 1000) / 1000 : Math.round(curr), previous: key === 'cls' ? Math.round(prev * 1000) / 1000 : Math.round(prev), diffPercent: Math.round(rawDiff * 10) / 10, status: getDiffStatus(rawDiff) });
     }

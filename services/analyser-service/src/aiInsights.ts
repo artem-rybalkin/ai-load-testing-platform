@@ -1,6 +1,7 @@
 import {
   BackendMetrics, ClientMetrics, AiInsights, MetricDiff, StepMetrics,
   AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, isProviderConfigured,
+  fenceUserContent,
 } from '@alt/shared';
 import { PerfStatus } from './analyzer';
 import { log } from './logger';
@@ -211,7 +212,7 @@ const buildPrompt = (payload: AnalysisPromptPayload, externalMetrics?: ExternalM
 
   const externalSection = externalMetrics && externalMetrics.length > 0
     ? `\n\nExternal Observability Data (from configured integrations — use this to enrich root cause analysis):\n${
-        externalMetrics.map(e => `--- ${e.sourceName}${e.platform ? ` (${e.platform})` : ''} ---\n${e.data}`).join('\n\n')
+        externalMetrics.map(e => `--- ${e.sourceName}${e.platform ? ` (${e.platform})` : ''} ---\n${fenceUserContent('external_metrics', e.data)}`).join('\n\n')
       }`
     : '';
 

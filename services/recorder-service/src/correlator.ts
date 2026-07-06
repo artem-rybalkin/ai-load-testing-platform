@@ -95,9 +95,45 @@ function isTextContentType(contentType: string | undefined): boolean {
   return /json|text|xml|x-www-form-urlencoded|javascript/i.test(contentType);
 }
 
+// Maximum PII pattern length (longest match is an RFC-5321 email, 254 chars).
+// Used as a safety margin so that PII straddling the body-truncation boundary
+// is fully visible to redactPII() before the slice is applied — while avoiding
+// O(n²) backtracking in EMAIL_RE on very large unbounded bodies.
+const MAX_PII_LENGTH = 300;
+
 /** Build a compact summary of request/response pairs to send to Gemini */
 function buildSummary(requests: RecordedRequest[]): string {
-  const pairs = requests.slice(0, 20).map((r, i) => {
+  const slice = requests.slice(0, 20);
+
+  // Finding #1: Collect all auth-related request header values so they can be
+  // redacted everywhere in the summary, preventing bearer tokens / API keys from
+  // reaching Gemini even if the same value also appears in a response body
+  // (e.g. the login response body echoes back an access_token that a later
+  // request re-sends as an Authorization header).
+  const authTokens = new Set<string>();
+  for (const r of slice) {
+    for (const [k, v] of Object.entries(r.headers)) {
+      if (/^authorization$|x-auth|x-csrf|x-token|x-api-key/i.test(k) && v) {
+        authTokens.add(v);
+        // Also add the credential-only part (e.g. "TOKEN" from "Bearer TOKEN")
+        const firstSpace = v.indexOf(' ');
+        if (firstSpace !== -1) authTokens.add(v.slice(firstSpace + 1));
+      }
+    }
+  }
+
+  /** Replace any collected auth-token values in `text` with [REDACTED]. */
+  const redactAuthTokens = (text: string): string => {
+    let result = text;
+    for (const token of authTokens) {
+      if (token.length >= 4) {
+        result = result.split(token).join('[REDACTED]');
+      }
+    }
+    return result;
+  };
+
+  const pairs = slice.map((r, i) => {
     const requestContentType = Object.entries(r.headers).find(([k]) => k.toLowerCase() === 'content-type')?.[1];
     const responseContentType = Object.entries(r.responseHeaders).find(([k]) => k.toLowerCase() === 'content-type')?.[1];
 
@@ -105,14 +141,21 @@ function buildSummary(requests: RecordedRequest[]): string {
       index: i,
       method: r.method,
       url: r.url,
-      // Include auth-related request headers so Gemini can see tokens being USED
+      // Include auth-related request headers so Gemini can see tokens being USED,
+      // but redact their literal values so credentials do not leave the perimeter.
+      // Finding #1: map values to '[REDACTED]' instead of forwarding them verbatim.
       requestHeaders: Object.fromEntries(
-        Object.entries(r.headers).filter(([k]) =>
-          /^authorization$|x-auth|x-csrf|x-token|x-api-key/i.test(k)
-        )
+        Object.entries(r.headers)
+          .filter(([k]) => /^authorization$|x-auth|x-csrf|x-token|x-api-key/i.test(k))
+          .map(([k]) => [k, '[REDACTED]'])
       ),
+      // Finding #2: redact first on a windowed slice (limit + MAX_PII_LENGTH), then
+      // truncate to the actual limit. The extra margin ensures a PII value that
+      // straddles the boundary is fully matched by the regex — without running
+      // redactPII on the entire unbounded body (EMAIL_RE is O(n²) on long inputs).
+      // Finding #1: also scrub any auth-token values that appear in the body.
       requestBody: r.body
-        ? (isTextContentType(requestContentType) ? redactPII(r.body.slice(0, 500)) : '[BINARY_BODY_OMITTED]')
+        ? (isTextContentType(requestContentType) ? redactAuthTokens(redactPII(r.body.slice(0, 500 + MAX_PII_LENGTH))).slice(0, 500) : '[BINARY_BODY_OMITTED]')
         : undefined,
       responseStatus: r.responseStatus,
       // Include response headers that commonly carry tokens
@@ -121,9 +164,9 @@ function buildSummary(requests: RecordedRequest[]): string {
           /set-cookie|x-auth|authorization|token|location/i.test(k)
         )
       ),
-      // 2000 chars — JWT access_token values are typically 800-1500 chars
+      // 2000 chars — JWT access_token values are typically 800-1500 chars.
       responseBody: r.responseBody
-        ? (isTextContentType(responseContentType) ? redactPII(r.responseBody.slice(0, 2000)) : '[BINARY_BODY_OMITTED]')
+        ? (isTextContentType(responseContentType) ? redactAuthTokens(redactPII(r.responseBody.slice(0, 2000 + MAX_PII_LENGTH))).slice(0, 2000) : '[BINARY_BODY_OMITTED]')
         : undefined,
     };
   });

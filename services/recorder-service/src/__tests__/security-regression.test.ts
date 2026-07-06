@@ -88,7 +88,7 @@ beforeEach(async () => {
 // prompt summary, or replace literal values with a placeholder token.
 
 describe('Finding #1 — auth headers forwarded verbatim to Gemini', () => {
-  it.fails('Authorization header value does not appear verbatim in the Gemini prompt', async () => {
+  it('Authorization header value does not appear verbatim in the Gemini prompt', async () => {
     const mock = await getMock();
     const token = 'supersecretbearertoken999';
 
@@ -120,7 +120,7 @@ describe('Finding #1 — auth headers forwarded verbatim to Gemini', () => {
     expect(prompt).not.toContain(token);
   });
 
-  it.fails('X-Api-Key header value does not appear verbatim in the Gemini prompt', async () => {
+  it('X-Api-Key header value does not appear verbatim in the Gemini prompt', async () => {
     const mock = await getMock();
     const apiKey = 'xapikey-cleartext-leaked-4567';
 
@@ -163,7 +163,7 @@ describe('Finding #1 — auth headers forwarded verbatim to Gemini', () => {
 //   redactPII(r.body).slice(0, 500)
 
 describe('Finding #2 — PII straddling the truncation boundary reaches Gemini', () => {
-  it.fails('email straddling the 500-char request-body boundary is fully redacted', async () => {
+  it('email straddling the 500-char request-body boundary is fully redacted', async () => {
     const mock = await getMock();
 
     // Place the email so it starts 8 chars before the 500-char boundary.

@@ -7,8 +7,10 @@
  * calling `res.json()` or returning.  A non-2xx response is therefore
  * indistinguishable from a successful one.
  *
- * Each test is wrapped in `it.fails` because it asserts DESIRED behaviour
- * that is not yet implemented:
+ * cancelTest/setBaseline/clearBaseline (finding #1) are fixed as of
+ * 2026-07-06 — those three now run as plain `it()`. compareResults
+ * (#2) and createWebhook (#3) are still open and remain `it.fails`
+ * until they get the same treatment:
  *   - When the bug is PRESENT  → the function resolves silently, the
  *     `.rejects.toThrow()` assertion fails → `it.fails` reports PASS (CI green).
  *   - When the bug is FIXED    → the function rejects, the assertion passes
@@ -53,7 +55,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('Finding #1 — void-return actions silently ignore HTTP errors', () => {
-  it.fails(
+  it(
     'cancelTest: should reject when the server returns 403',
     async () => {
       // Bug: cancelTest resolves (returns undefined) even on 403.
@@ -62,14 +64,14 @@ describe('Finding #1 — void-return actions silently ignore HTTP errors', () =>
     },
   );
 
-  it.fails(
+  it(
     'setBaseline: should reject when the server returns 403',
     async () => {
       await expect(setBaseline('test-id-abc')).rejects.toThrow();
     },
   );
 
-  it.fails(
+  it(
     'clearBaseline: should reject when the server returns 403',
     async () => {
       await expect(clearBaseline('test-id-abc')).rejects.toThrow();

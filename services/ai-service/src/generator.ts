@@ -234,12 +234,12 @@ const FLOW_PROMPT = (test: TestRequest): string => {
   const stepDefs = steps.map((s, i) => {
     const lines: string[] = [
       `  Step ${i + 1}: ${s.name}`,
-      `    URL: ${s.url}`,
+      `    URL: ${fenceUserContent('url', s.url)}`,
       `    Method: ${s.method}`,
     ];
-    if (s.body) lines.push(`    Body: ${s.body}`);
+    if (s.body) lines.push(`    Body: ${fenceUserContent('body', s.body)}`);
     if (s.headers && Object.keys(s.headers).length > 0) {
-      lines.push(`    Headers: ${JSON.stringify(s.headers)}`);
+      lines.push(`    Headers: ${fenceUserContent('headers', JSON.stringify(s.headers))}`);
     }
     if (s.extract && Object.keys(s.extract).length > 0) {
       lines.push('    Extract variables:');

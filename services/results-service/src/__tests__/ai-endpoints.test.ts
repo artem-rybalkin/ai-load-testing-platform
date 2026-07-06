@@ -1062,7 +1062,7 @@ describe('Gemini quota enforcement', () => {
 // or passwords in POST bodies that then reach the LLM verbatim.
 // Fix: call redactPII() on the summarised HAR string before building the prompt.
 describe('POST /chat/parse — HAR attachment PII must be redacted before reaching the AI (regression #4, High)', () => {
-  it.fails(
+  it(
     '#4 summarizeHar must redact PII in POST bodies before the content is included in the AI prompt',
     async () => {
       const harWithPii = JSON.stringify({
@@ -1111,7 +1111,7 @@ describe('POST /chat/parse — HAR attachment PII must be redacted before reachi
 // Fix: call redactPII(e.data) and fenceUserContent('external_metrics', ...) before
 // building externalSection.
 describe('GET /results/:testId/diagnose — external log source content must be PII-redacted (regression #5, High)', () => {
-  it.fails(
+  it(
     '#5 external log source data must be PII-redacted before being included in the AI prompt',
     async () => {
       // Insert a log source whose metrics_endpoint_template will be called.
@@ -1173,7 +1173,7 @@ describe('GET /results/:testId/diagnose — external log source content must be 
 // very data it should be protecting.
 // Fix: call redactPII(JSON.stringify(steps)) before fenceUserContent().
 describe('POST /ai/param-suggestions — steps must be PII-redacted before reaching the AI (regression #6, High)', () => {
-  it.fails(
+  it(
     '#6 steps containing PII must be redacted before being included in the AI prompt',
     async () => {
       mockGenerateAIText.mockResolvedValueOnce(
@@ -1209,7 +1209,7 @@ describe('POST /ai/param-suggestions — steps must be PII-redacted before reach
 // this query returns the global pass/fail/degraded distribution across all tenants.
 // Fix: add AND ($1::uuid IS NULL OR project_id = $1::uuid) to the GROUP BY query.
 describe('POST /ai/webhook-noise — result distribution must be scoped to the current team (regression #7, High)', () => {
-  it.fails(
+  it(
     '#7 aggregation query has no project_id filter — cross-tenant pass/fail distribution leaks into the AI prompt',
     async () => {
       const projectA = crypto.randomUUID();
@@ -1217,6 +1217,16 @@ describe('POST /ai/webhook-noise — result distribution must be scoped to the c
       await pool.query(
         `INSERT INTO projects (id, name) VALUES ($1, 'team-a-noise'), ($2, 'team-b-noise')`,
         [projectA, projectB],
+      );
+
+      // Set up a per-team API key for Team A so the request is scoped to projectA.
+      // Using a unique rawKey derived from the UUID so there's no key_hash UNIQUE conflict.
+      const rawKey = `test-wn-${projectA}`;
+      const keyHashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawKey));
+      const keyHash = Array.from(new Uint8Array(keyHashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      await pool.query(
+        `INSERT INTO team_api_keys (team_id, name, key_hash) VALUES ($1, 'noise-test-key', $2)`,
+        [projectA, keyHash],
       );
 
       // Team A: 2 passed runs — a healthy team
@@ -1240,13 +1250,15 @@ describe('POST /ai/webhook-noise — result distribution must be scoped to the c
         jsonResponse({ level: 'ok', message: 'Looks fine.' }),
       );
 
-      // Call the endpoint. Without session auth projectId is undefined, but the
-      // bug is that the SQL has NO project_id column in the WHERE clause at all:
-      // even with a valid session the query would still aggregate all tenants.
+      // Call the endpoint scoped to Team A via per-team API key.
+      // With the fix the query filters to projectA → only {"passed":2} appears.
+      // Without the fix (no project_id column in WHERE) the query returns the
+      // global distribution {"passed":2,"failed":5}, leaking Team B's data.
       await app.inject({
         method: 'POST',
         url: '/ai/webhook-noise',
         payload: { events: ['failed'] },
+        headers: { 'x-api-key': rawKey },
       });
 
       const prompt = mockGenerateAIText.mock.calls[0][0] as string;
@@ -1254,7 +1266,7 @@ describe('POST /ai/webhook-noise — result distribution must be scoped to the c
       // Correct: Team A's prompt must only show {"passed":2} — no "failed" key.
       // Bug: no project_id filter → the prompt includes both teams: {"passed":2,"failed":5}.
       // The presence of "failed" in the distribution proves cross-tenant data leaked.
-      expect(prompt).not.toContain('"failed"'); // fails — team B's failures appear in prompt
+      expect(prompt).not.toContain('"failed"');
     },
   );
 });

@@ -23,6 +23,7 @@ import {
   USER_DATA_INSTRUCTION,
   validateSsrfSafeUrl,
   fetchSsrfSafe,
+  redactPII,
 } from '@alt/shared';
 import { getAiProviderSetting } from '../settings';
 
@@ -200,7 +201,7 @@ export const processAttachments = async (attachments: ChatAttachment[]): Promise
       const summary = await fetchAndSummarizeSwagger(att.content);
       parts.push(`<swagger_spec${att.filename ? ` file="${att.filename}"` : ''}>\n${summary}\n</swagger_spec>`);
     } else if (att.type === 'har') {
-      const summary = summarizeHar(att.content);
+      const summary = redactPII(summarizeHar(att.content));
       parts.push(`<har_recording${att.filename ? ` file="${att.filename}"` : ''}>\n${summary}\n</har_recording>`);
     } else if (att.type === 'documentation') {
       parts.push(`<documentation${att.filename ? ` file="${att.filename}"` : ''}>\n${att.content.slice(0, CONTEXT_CHAR_CAP)}\n</documentation>`);

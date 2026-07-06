@@ -207,6 +207,40 @@ describe('triggerSchedule — API_KEY header', () => {
   });
 });
 
+// ─── Multi-replica leader election ───────────────────────────────────────────
+
+describe('triggerSchedule — multi-replica leader election', () => {
+  it('fires exactly once when two replicas trigger the same schedule concurrently', async () => {
+    // Regression for: "Scheduler has no leader election — every replica fires
+    // every cron job."  Each replica runs the same node-cron callback at the
+    // same wall-clock second; only the replica that wins the Postgres advisory
+    // lock for (schedule_id, fire_window) should call POST /tests.
+    //
+    // We simulate two replicas by calling the captured cron callback twice
+    // concurrently against the same DB pool (each call gets its own connection,
+    // equivalent to two separate results-service processes sharing the same DB).
+    const id = await insertSchedule();
+    await startScheduler(pool);
+
+    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+
+    // Fire both "replicas" simultaneously.
+    await Promise.all([callback(), callback()]);
+
+    // The advisory lock ensures only one call wins — exactly one POST /tests.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // The winning replica must have committed last_run_at.
+    const { rows } = await pool.query(
+      'SELECT last_run_at FROM schedules WHERE id = $1',
+      [id]
+    );
+    expect(rows[0].last_run_at).not.toBeNull();
+  });
+});
+
+// ─── X-Internal-Key header ────────────────────────────────────────────────────
+
 describe('triggerSchedule — X-Internal-Key header (regression)', () => {
   const originalInternalKey = process.env.INTERNAL_API_KEY;
 
