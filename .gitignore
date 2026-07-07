@@ -34,3 +34,6 @@ agents/TEMP/
 
 # Rosetta workflow plans — internal planning artifacts, not project docs
 plans/
+
+# Local working notes — not a project artifact for public consumption
+TODO.md

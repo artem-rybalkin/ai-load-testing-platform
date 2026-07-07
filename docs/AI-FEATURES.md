@@ -356,7 +356,7 @@ fencing adds no value.
 
 ### Model configuration & multi-provider fallback
 
-Gemini is the default provider, but every AI call site resolves its model/provider through a pluggable abstraction (`generateAIText()` in `@alt/shared`) rather than calling the Gemini SDK directly, so OpenAI or Anthropic can serve as an alternate primary or fallback (AI-15, see root [`TODO.md`](../TODO.md) for delivery history):
+Gemini is the default provider, but every AI call site resolves its model/provider through a pluggable abstraction (`generateAIText()` in `@alt/shared`) rather than calling the Gemini SDK directly, so OpenAI or Anthropic can serve as an alternate primary or fallback (AI-15):
 
 ```bash
 GEMINI_MODEL=gemini-3.1-flash-lite          # default Gemini model
