@@ -129,7 +129,7 @@ function RecentRuns({ recent }: { recent: TestResult[] }) {
       {completed.map((r, i) => {
         const metricVal = r.metrics?.type === 'backend'
           ? `${Math.round(r.metrics.p95ResponseTime)}ms`
-          : r.metrics?.type === 'client'
+          : r.metrics?.type === 'client' && r.metrics.lcp !== undefined
           ? `${Math.round(r.metrics.lcp)}ms`
           : '—';
         const arrow = r.perf_status === 'passed' ? { sym: '↑', cls: 'text-green-fg' } : r.perf_status === 'failed' ? { sym: '↓', cls: 'text-red-fg' } : { sym: '→', cls: 'text-amber-fg' };

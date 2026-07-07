@@ -18,7 +18,9 @@ interface ResourceBreakdown {
 }
 
 interface ClientMetrics {
-  lcp: number; fcp: number; ttfb: number; fid: number; cls: number;
+  // lcp/fcp/ttfb/cls are undefined when their PerformanceObserver never fired
+  // (e.g. a non-paintable response) — treated as "unavailable", not a fake 0.
+  lcp?: number; fcp?: number; ttfb?: number; fid: number; cls?: number;
   inp?: number; tbt?: number; tti?: number;
   jsErrors?: number; longTaskCount?: number; domNodeCount?: number; pageLoadCount?: number;
   resourceBreakdown?: ResourceBreakdown;
@@ -117,14 +119,15 @@ const TOOLTIP_STYLE = {
 };
 
 export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
-  // INP is the current Core Web Vital (replaced FID March 2024); include both in radar
-  const radarData = [
-    { metric: 'LCP',  score: Math.max(0, 100 - (metrics.lcp  / 4000) * 100) },
-    { metric: 'FCP',  score: Math.max(0, 100 - (metrics.fcp  / 3000) * 100) },
-    { metric: 'TTFB', score: Math.max(0, 100 - (metrics.ttfb / 1800) * 100) },
-    { metric: 'INP',  score: metrics.inp != null ? Math.max(0, 100 - (metrics.inp / 500) * 100) : Math.max(0, 100 - (metrics.fid / 300) * 100) },
-    { metric: 'CLS',  score: Math.max(0, 100 - (metrics.cls  / 0.25) * 100) },
-  ];
+  // INP is the current Core Web Vital (replaced FID March 2024); include both in radar.
+  // A metric that never fired (undefined) is omitted rather than scored as a fake 0
+  // (which would otherwise render as a perfect 100 on the radar/overall score).
+  const radarData: Array<{ metric: string; score: number }> = [];
+  if (metrics.lcp !== undefined) radarData.push({ metric: 'LCP', score: Math.max(0, 100 - (metrics.lcp / 4000) * 100) });
+  if (metrics.fcp !== undefined) radarData.push({ metric: 'FCP', score: Math.max(0, 100 - (metrics.fcp / 3000) * 100) });
+  if (metrics.ttfb !== undefined) radarData.push({ metric: 'TTFB', score: Math.max(0, 100 - (metrics.ttfb / 1800) * 100) });
+  radarData.push({ metric: 'INP', score: metrics.inp != null ? Math.max(0, 100 - (metrics.inp / 500) * 100) : Math.max(0, 100 - (metrics.fid / 300) * 100) });
+  if (metrics.cls !== undefined) radarData.push({ metric: 'CLS', score: Math.max(0, 100 - (metrics.cls / 0.25) * 100) });
   const overallScore = Math.round(radarData.reduce((s, d) => s + d.score, 0) / radarData.length);
   const lh = metrics.lighthouseScore;
 
@@ -174,10 +177,10 @@ export default function ClientChart({ metrics }: { metrics: ClientMetrics }) {
       <div>
         <span className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase block mb-2.5">Core Web Vitals</span>
         <div className="grid grid-cols-2 gap-2.5">
-          <VitalCard label="LCP"  value={metrics.lcp}  unit="ms" metricKey="lcp" />
-          <VitalCard label="FCP"  value={metrics.fcp}  unit="ms" metricKey="fcp" />
-          <VitalCard label="TTFB" value={metrics.ttfb} unit="ms" metricKey="ttfb" />
-          <VitalCard label="CLS"  value={metrics.cls}  unit=""   metricKey="cls" />
+          {metrics.lcp !== undefined && <VitalCard label="LCP"  value={metrics.lcp}  unit="ms" metricKey="lcp" />}
+          {metrics.fcp !== undefined && <VitalCard label="FCP"  value={metrics.fcp}  unit="ms" metricKey="fcp" />}
+          {metrics.ttfb !== undefined && <VitalCard label="TTFB" value={metrics.ttfb} unit="ms" metricKey="ttfb" />}
+          {metrics.cls !== undefined && <VitalCard label="CLS"  value={metrics.cls}  unit=""   metricKey="cls" />}
           {metrics.inp != null && <VitalCard label="INP" value={metrics.inp} unit="ms" metricKey="inp" />}
           {metrics.tbt != null && <VitalCard label="TBT" value={metrics.tbt} unit="ms" metricKey="tbt" />}
           {metrics.fid > 0 && <VitalCard label="FID (legacy)" value={metrics.fid} unit="ms" metricKey="fid" />}
