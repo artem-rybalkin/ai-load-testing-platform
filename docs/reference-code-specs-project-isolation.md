@@ -156,7 +156,7 @@ This is the core isolation predicate. Used in every resource query in `app.ts`.
 | `GET /results/:testId/report.pdf` | **RESOLVED** — now filtered, `routes/results.ts:407-420` |
 | `GET /webhooks (secret)` | `secret` column excluded from SELECT — returns only `id, url, events, format, created_at` |
 
-**Still an open gap, not covered by the table above:** `GET /system/ai-status` (`routes/system.ts:42-59`) queries `test_results` across all teams with no `project_id` filter.
+**Formerly an open gap, now RESOLVED (2026-07-07):** `GET /system/ai-status` (`routes/system.ts:42-61`) used to query `test_results` across all teams with no `project_id` filter, and was also unauthenticated (see Section 8's `publicPaths` correction). Both are fixed — it now requires normal auth and filters on `project_id`.
 
 ---
 
@@ -205,7 +205,7 @@ export const createSchema = async (p: Pool): Promise<void>
 
 Both api-service and results-service support a global `API_KEYS` env var (comma-split, trimmed, filtered for empties at startup) checked against the `x-api-key` header. For the exact code, see `docs/original-code-specs-auth-tenancy.md`: Section B.3 for the api-service hook (`services/api-service/src/index.ts:89-149`), and Section A.3 for the results-service check (`services/results-service/src/app.ts:77-183`).
 
-**Difference (updated):** both services now run their API key check(s) inline inside a single always-registered `onRequest` hook, rather than api-service using a separate conditionally-registered hook as before. api-service's hook still only exempts `/health`; results-service's hook still exempts a much larger set (all `/auth/*` routes, `/health`, `/system/ai-status`, `/ws`, and the internal worker-callback paths/suffixes).
+**Difference (updated):** both services now run their API key check(s) inline inside a single always-registered `onRequest` hook, rather than api-service using a separate conditionally-registered hook as before. api-service's hook still only exempts `/health`; results-service's hook exempts all `/auth/*` routes, `/health`, `/ws`, and the internal worker-callback paths/suffixes. **Correction note (2026-07-07):** `/system/ai-status` was removed from results-service's exemption set — it used to be listed here alongside `/health`/`/ws` but now requires normal auth (see `original-code-specs-auth-tenancy.md` A-U7).
 
 **UNKNOWN (still accurate):** in both services, the API key check(s) run inside the same `onRequest` hook as the session check, API key first. If `API_KEYS` (and, on results-service, no per-team key matches) is empty/absent, the API key block is skipped entirely and the session check runs.
 

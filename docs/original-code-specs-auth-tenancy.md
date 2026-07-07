@@ -89,7 +89,7 @@ app.addHook('onRequest', async (request, reply) => { ... })
 
 **Execution order:**
 1. Strip query string; if URL starts with `/auth/` → `return` (all five auth routes exempt; A.4).
-2. If URL is in `publicPaths` (`/health`, `/system/ai-status`, `/ws`) → `return`.
+2. If URL is in `publicPaths` (`/health`, `/ws`) → `return`. **Correction note (2026-07-07):** `/system/ai-status` was removed from this set — it now requires normal session/API-key auth like any other route (fix for A-U7 below).
 3. If URL is `/system/ai-provider` and method is `GET` → `return` (read-only, polled by ai-service with no session; `PUT` still requires admin — enforced in the handler).
 4. If `isInternalCallback(url, method)` is true → check `X-Internal-Key` header against `INTERNAL_API_KEY` (401 on mismatch when configured; no-op when `INTERNAL_API_KEY` is empty) → `return` either way.
 5. Per-team API key: if `x-api-key` header is present and not one of the global `API_KEYS`, hash it and look it up in `team_api_keys`. On a hit, sets `request.user = null`, `request.projectId = <team_id>`, `request.role = 'admin'`, `request.orgId = null`, `request.orgRole = null`, bumps `last_used_at` (fire-and-forget), and `return`s — this bypasses the global `API_KEYS`/session checks entirely for that one request.
@@ -104,8 +104,9 @@ app.addHook('onRequest', async (request, reply) => { ... })
 
 Public paths (always exempt from all auth):
 ```typescript
-const publicPaths = new Set(['/health', '/system/ai-status', '/ws']);
+const publicPaths = new Set(['/health', '/ws']);
 ```
+**Correction note (2026-07-07):** `/system/ai-status` used to be in this set; see A-U7's fix note in A.8 below.
 
 Internal callback paths/suffixes (server-to-server; gated on `X-Internal-Key`, not session/cookie):
 ```typescript
@@ -297,7 +298,7 @@ export const createSchema = async (p: Pool): Promise<void>
 - `GET /results/:testId/live` (`results.ts:325-343`) — filtered via `LEFT JOIN test_results tr ON tr.test_id = lm.test_id` + `tr.project_id = $2::uuid`, since `live_metrics` itself has no `project_id` column (A.5, A-U1).
 - `GET /results/:testId/report.pdf` (`results.ts:407-420`) — filtered.
 
-**Remaining unfiltered read that IS still a gap:** `GET /system/ai-status` (`routes/system.ts:42-59`) queries `test_results` across all teams with no project filter — see A-U7 in A.8.
+**Formerly-unfiltered read, now fixed (2026-07-07):** `GET /system/ai-status` (`routes/system.ts:42-59`) used to query `test_results` across all teams with no project filter — see A-U7 in A.8, now resolved.
 
 ---
 
@@ -342,7 +343,7 @@ Covers the expanded `routes/results.ts`/`routes/resources.ts`/`routes/workspaces
 | A-U4 | Outdated | This claim ("no server-side session revocation") described the old HMAC-cookie scheme and is no longer accurate. The current opaque-token scheme supports server-side revocation via `revokeSession` (`POST /auth/logout`), which sets `sessions.revoked_at`; `getSession`/`getApiSession` exclude revoked rows on every lookup. See Section A.9. | `services/results-service/src/session.ts:43-46`, `routes/auth.ts:145` |
 | A-U5 | Unknown | `findOrCreateProject` is now dead code — it is exported from `db.ts` but has no callers anywhere in `services/`. `POST /auth/register` does its own plain `INSERT` + manual `23505` handling instead of calling it (A.5, A.4). | `db.ts:427-433`, `routes/auth.ts:60-74` |
 | A-U6 | Unknown | `GET /auth/me` in dev mode ignores any cookie present and always returns the hardcoded `DEV_USER` constant. | `routes/auth.ts:151-152`, `routes/helpers.ts:557-565` |
-| A-U7 | Unknown | `GET /system/ai-status` queries `test_results` with no `project_id` filter — returns status messages from all teams regardless of the caller's session. Still an open gap; unlike the baseline/PDF/live endpoints (A.6), this one was not fixed. | `routes/system.ts:42-59` |
+| A-U7 | **Resolved (2026-07-07)** | Originally: `GET /system/ai-status` was unauthenticated (in `publicPaths`) and queried `test_results` with no `project_id` filter — returned status messages from all teams regardless of the caller's session. Verified fixed: removed from `publicPaths` (now requires normal auth) and the query now filters on `project_id`. | `routes/system.ts:42-61`, `app.ts` (`publicPaths`) |
 | A-U8 | Unknown | The per-team API key lookup in the `onRequest` hook swallows DB errors silently (bare `catch {}`, falls through to global-key/session checks) rather than surfacing them, which could mask a genuine `team_api_keys` misconfiguration as "key not recognized." | `app.ts:112-114` |
 
 ---
@@ -736,7 +737,7 @@ Used only in `POST /recordings/start` when `targetUrl` is provided in the body (
 |----|------|-------------|----------|
 | E-U1 | Unknown | Still no access-control isolation. `POST /recordings/start` now accepts and stores a `teamId` on the session (E.3), but no route checks it — any client with a valid API key (or no key, if `API_KEYS` is unset) can read/stop/delete any session by ID regardless of `teamId`. | `index.ts:55-64, 78-91` |
 | E-U2 | Unknown | Completed results are stored in module-level Map with 10-minute TTL (`index.ts:24-39`). Lost on process restart. No DB persistence. | `index.ts:24-39` |
-| E-U3 | Unknown | SSRF validation (now `packages/shared`'s `validateSsrfSafeUrl`, E.4) applies only to the initial `targetUrl` in `POST /recordings/start`. Browser CDP can navigate anywhere once launched. | `index.ts:93-99` |
+| E-U3 | **Resolved (2026-07-06)** | Originally: SSRF validation (`packages/shared`'s `validateSsrfSafeUrl`, E.4) applied only to the initial `targetUrl` in `POST /recordings/start` — browser CDP could navigate anywhere once launched. Verified fixed: `page.setRequestInterception(true)` + `createSsrfInterceptHandler()` now re-validates every subsequent request/redirect the page makes, aborting any that fail the check. | `recorder.ts` (`createSsrfInterceptHandler`) |
 
 ---
 
