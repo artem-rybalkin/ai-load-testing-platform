@@ -82,13 +82,13 @@ interface BackendPromptMetrics {
 
 interface ClientPromptMetrics {
   type: 'client';
-  lcpMs: number;
-  fcpMs: number;
-  ttfbMs: number;
+  lcpMs?: number;
+  fcpMs?: number;
+  ttfbMs?: number;
   fidMs: number;
   inpMs?: number;
   tbtMs?: number;
-  clsScore: number;
+  clsScore?: number;
   lighthousePerformance?: number;
   lighthouseAccessibility?: number;
 }
@@ -135,11 +135,14 @@ const buildPayload = (ctx: InsightsContext): AnalysisPromptPayload => {
     const m = ctx.metrics as ClientMetrics;
     metrics = {
       type: 'client',
-      lcpMs:  Math.round(m.lcp),
-      fcpMs:  Math.round(m.fcp),
-      ttfbMs: Math.round(m.ttfb),
       fidMs:  Math.round(m.fid),
-      clsScore: Math.round(m.cls * 1000) / 1000,
+      // lcp/fcp/ttfb/cls coalesce to undefined (not 0) when their PerformanceObserver
+      // never fired — omit them here too rather than feeding the LLM a fake "perfect"
+      // score for a metric that was never actually measured.
+      ...(m.lcp !== undefined ? { lcpMs: Math.round(m.lcp) } : {}),
+      ...(m.fcp !== undefined ? { fcpMs: Math.round(m.fcp) } : {}),
+      ...(m.ttfb !== undefined ? { ttfbMs: Math.round(m.ttfb) } : {}),
+      ...(m.cls !== undefined ? { clsScore: Math.round(m.cls * 1000) / 1000 } : {}),
       ...(m.inp !== undefined ? { inpMs: Math.round(m.inp) } : {}),
       ...(m.tbt !== undefined ? { tbtMs: Math.round(m.tbt) } : {}),
       ...(m.lighthouseScore ? {
@@ -179,12 +182,15 @@ const formatMetrics = (p: AnalysisPromptPayload): string => {
     return lines.join('\n');
   } else {
     const m = p.metrics;
-    const lines = [
-      `LCP: ${m.lcpMs}ms (good <2500, needs-improvement <4000, poor ≥4000)`,
-      `FCP: ${m.fcpMs}ms (good <1800, needs-improvement <3000, poor ≥3000)`,
-      `TTFB: ${m.ttfbMs}ms (good <800, needs-improvement <1800, poor ≥1800)`,
-      `CLS: ${m.clsScore} (good <0.1, needs-improvement <0.25, poor ≥0.25)`,
-    ];
+    const lines: string[] = [];
+    if (m.lcpMs !== undefined)
+      lines.push(`LCP: ${m.lcpMs}ms (good <2500, needs-improvement <4000, poor ≥4000)`);
+    if (m.fcpMs !== undefined)
+      lines.push(`FCP: ${m.fcpMs}ms (good <1800, needs-improvement <3000, poor ≥3000)`);
+    if (m.ttfbMs !== undefined)
+      lines.push(`TTFB: ${m.ttfbMs}ms (good <800, needs-improvement <1800, poor ≥1800)`);
+    if (m.clsScore !== undefined)
+      lines.push(`CLS: ${m.clsScore} (good <0.1, needs-improvement <0.25, poor ≥0.25)`);
     if (m.inpMs !== undefined)
       lines.push(`INP: ${m.inpMs}ms (good <200, needs-improvement <500, poor ≥500)`);
     if (m.tbtMs !== undefined)
