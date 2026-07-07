@@ -561,7 +561,12 @@ describe('performance', () => {
 
     // All 10 extract rules should be applied to the source step.
     expect(Object.keys(result[0].extract ?? {})).toHaveLength(10);
-    expect(elapsed).toBeLessThan(100);
+    // Budget is intentionally generous (not a tight perf benchmark) — this only
+    // needs to catch an accidental O(n²)-type regression, not measure exact
+    // timing. A tight 100ms budget flaked repeatedly on shared CI runners under
+    // --coverage instrumentation (observed 300-400ms there for legitimately
+    // correct, unchanged code).
+    expect(elapsed).toBeLessThan(1500);
   });
 });
 

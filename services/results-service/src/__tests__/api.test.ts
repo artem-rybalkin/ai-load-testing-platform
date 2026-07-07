@@ -1154,7 +1154,12 @@ describe('GET /results/:testId/live', () => {
     }
     expect(points[0].stepMetrics).toHaveLength(5);
     expect(points[0].stepMetrics[0].name).toBe('Step 1');
-    expect(elapsedMs).toBeLessThan(500);
+    // Budget is intentionally generous (not a tight perf benchmark) — this
+    // includes a real Postgres round-trip and only needs to catch an
+    // accidental O(n²)-type regression, not measure exact timing. A tight
+    // 500ms budget flaked on shared CI runners under DB/CPU contention from
+    // the rest of the suite running in parallel.
+    expect(elapsedMs).toBeLessThan(2000);
   });
 
   it('downsamples an ever-growing point history to a bounded size, keeping the run\'s full span', async () => {
