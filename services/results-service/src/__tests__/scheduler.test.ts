@@ -224,8 +224,22 @@ describe('triggerSchedule — multi-replica leader election', () => {
 
     const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
 
-    // Fire both "replicas" simultaneously.
-    await Promise.all([callback(), callback()]);
+    // Pin Date so both "replicas" compute the identical fire_window lock key —
+    // triggerSchedule reads new Date() synchronously before its first await, so
+    // in practice both calls virtually always land in the same UTC minute
+    // anyway, but under heavy parallel-suite load (e.g. full-coverage CI runs)
+    // scheduling jitter between the two synchronous callback() invocations can
+    // occasionally straddle a real minute boundary, which would make both
+    // "replicas" legitimately win separate locks and flake this assertion.
+    // Only `Date` is faked — setTimeout/real async I/O (the Postgres queries
+    // this test depends on) are untouched.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Fire both "replicas" simultaneously.
+      await Promise.all([callback(), callback()]);
+    } finally {
+      vi.useRealTimers();
+    }
 
     // The advisory lock ensures only one call wins — exactly one POST /tests.
     expect(mockFetch).toHaveBeenCalledTimes(1);
