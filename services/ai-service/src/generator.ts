@@ -392,17 +392,13 @@ export const compareDescriptions = async (
   storedDescription: string,
   projectId?: string | null
 ): Promise<'REUSE' | 'REGENERATE'> => {
-  const prompt = `You are a load test script classifier.
+  const prompt = `You are a load test script classifier. ${USER_DATA_INSTRUCTION}
 
 Stored description (used to generate the existing k6 script):
-"""
-${storedDescription}
-"""
+${fenceUserContent('stored_description', storedDescription)}
 
 New description (what the user now wants to test):
-"""
-${newDescription}
-"""
+${fenceUserContent('new_description', newDescription)}
 
 Decide whether the existing script still satisfies the new description.
 - REUSE: the test scenario, load shape, and key requirements are equivalent or compatible. Minor wording differences are fine.

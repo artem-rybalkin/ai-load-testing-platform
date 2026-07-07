@@ -175,15 +175,18 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
       if (updates.thresholds !== undefined) { sets.push(`thresholds = $${i++}`); vals.push(JSON.stringify(updates.thresholds)); }
       if (sets.length === 0) return reply.code(400).send({ error: 'No fields to update' });
 
+      const projectId = request.projectId ?? null;
+
       if (updates.enabled === true) {
-        const { rows: existingRows } = await pool.query<{ enabled: boolean }>(`SELECT enabled FROM schedules WHERE id = $1`, [id]);
+        const { rows: existingRows } = await pool.query<{ enabled: boolean }>(
+          `SELECT enabled FROM schedules WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+          [id, projectId],
+        );
         if (existingRows.length > 0 && !existingRows[0].enabled) {
           const quotaError = await checkScheduleQuota(pool, request.projectId);
           if (quotaError) return reply.code(429).send({ error: quotaError });
         }
       }
-
-      const projectId = request.projectId ?? null;
       vals.push(id);
       vals.push(projectId);
       const { rows } = await pool.query(`UPDATE schedules SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING *`, vals);

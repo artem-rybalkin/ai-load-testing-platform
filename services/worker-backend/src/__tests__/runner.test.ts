@@ -938,17 +938,19 @@ describe('runK6Test — write failure should clean up runDir (regression finding
     setupFs();
   });
 
-  it.fails('write failure should remove the runDir even when writeFile rejects (currently leaks)', async () => {
+  it('write failure should remove the runDir even when writeFile rejects (currently leaks)', async () => {
     const { runK6Test } = await import('../runner');
 
     // Make the first writeFile call (script.js) reject, simulating disk-full or EACCES.
     // setupFs() sets the default to resolve; mockRejectedValueOnce overrides the first call only.
     mockWriteFile.mockRejectedValueOnce(new Error('ENOSPC: no space left on device'));
 
-    // validateScript (spawn) is never reached because writeFile fails first —
-    // include a stub anyway so mockSpawn state stays consistent.
-    const validate = makeProc();
-    mockSpawn.mockReturnValueOnce(validate);
+    // validateScript (spawn) is never reached because writeFile fails first — no
+    // mockSpawn queueing needed here. (A stray mockReturnValueOnce() used to sit
+    // here "just in case"; since spawn is never actually called in this test, it
+    // was never consumed and silently leaked into the next test's spawn queue,
+    // shifting its validate/run objects by one and starving its readAndPost of
+    // a real process to fire against.)
 
     // runK6Test must reject (the Promise.all throws)
     await expect(
@@ -993,7 +995,7 @@ describe('readAndPost — mid-line split silently drops data point (regression f
     vi.useRealTimers();
   });
 
-  it.fails('a data point split across two poll ticks should not be lost (currently dropped)', async () => {
+  it('a data point split across two poll ticks should not be lost (currently dropped)', async () => {
     const { runK6Test } = await import('../runner');
     const validate = makeProc();
     const run      = makeProc();

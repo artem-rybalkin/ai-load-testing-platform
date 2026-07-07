@@ -281,19 +281,16 @@ describe('CORS headers', () => {
     }
   });
 
-  // Regression #3 (Low): "ALLOWED_ORIGIN defaults to '*' while cookies use credentials: true"
+  // Regression #3 (Low, fixed): "ALLOWED_ORIGIN defaults to '*' while cookies use credentials: true"
   //
-  // This is a documentation-via-test of current behavior, not a bug reproduction:
-  // when ALLOWED_ORIGIN is unset the server responds with Access-Control-Allow-Origin: *
-  // AND Access-Control-Allow-Credentials: true simultaneously. Browsers reject that
-  // combination (spec §3.2.5 — wildcard is incompatible with credentials), so this
-  // is not independently exploitable in a real browser session. However the
-  // misconfiguration should be fixed at deploy time by requiring ALLOWED_ORIGIN.
+  // Fix applied: when ALLOWED_ORIGIN is unset the server now responds with
+  // Access-Control-Allow-Origin: * but WITHOUT Access-Control-Allow-Credentials: true.
+  // Browsers reject the wildcard+credentials combination (spec §3.2.5), so the fix
+  // removes that misconfiguration without changing the wildcard-origin behavior itself.
   //
-  // This test PASSES because it documents existing behavior (no it.fails wrapper).
-  // When the config-hardening fix ships (e.g. throw on missing ALLOWED_ORIGIN, or
-  // suppress the Credentials header when origin is '*'), update or remove this test.
-  it('responds with Access-Control-Allow-Origin: * when ALLOWED_ORIGIN is not set (regression #3)', async () => {
+  // The wildcard origin is still returned (documented by the assertion below) because
+  // the safe production config remains "set ALLOWED_ORIGIN to your app domain".
+  it('responds with Access-Control-Allow-Origin: * and no credentials header when ALLOWED_ORIGIN is not set (regression #3, fixed)', async () => {
     const orig = process.env.ALLOWED_ORIGIN;
     delete process.env.ALLOWED_ORIGIN;
     const app2 = await buildApp();
@@ -304,9 +301,10 @@ describe('CORS headers', () => {
         url: '/health',
         headers: { Origin: 'https://attacker.example.com' },
       });
-      // Documents the unfixed default: wildcard origin is returned even though
-      // credentials: true is also configured. Fix: set ALLOWED_ORIGIN in production.
+      // Wildcard origin is still returned — safe production config is to set ALLOWED_ORIGIN.
       expect(res.headers['access-control-allow-origin']).toBe('*');
+      // Fix: credentials header must NOT be true when origin is wildcard.
+      expect(res.headers['access-control-allow-credentials']).not.toBe('true');
     } finally {
       if (orig !== undefined) process.env.ALLOWED_ORIGIN = orig;
       await app2.close();

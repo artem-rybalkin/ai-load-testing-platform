@@ -32,11 +32,12 @@ vi.mock('puppeteer-core', () => ({ default: {} }));
 
 // ─── Imports (after mocks so vi.mock applies first) ──────────────────────────
 
-import { detectCorrelations } from '../correlator';
+import { detectCorrelations, resetCorrelatorRateLimited } from '../correlator';
 import * as correlatorModule from '../correlator';
 import { toFlowSteps, createSsrfInterceptHandler } from '../recorder';
 import { validateRecorderUrl } from '../index';
 import { validateSsrfSafeUrl } from '@alt/shared';
+import { SENSITIVE_PATHS } from '../logger';
 import type { RecordedRequest, FlowStep } from '@alt/shared';
 
 // ─── Helper: get the generateAIText mock from the mocked @alt/shared ─────────
@@ -72,6 +73,9 @@ const makeStep = (name: string, url: string): FlowStep => ({
 
 beforeEach(async () => {
   process.env.GEMINI_API_KEY = 'test-key';
+  // Finding #5: reset the rate-limited flag before each test so that one test's
+  // rate-limit side-effect does not bleed into the next test's assertions.
+  resetCorrelatorRateLimited();
   const mock = await getMock();
   mock.mockReset();
   mock.mockResolvedValue('{"correlations":[]}');
@@ -328,7 +332,7 @@ describe('Finding #4 — correlations mis-attached when a 5xx request is in the 
 // the _completed result that finishSession stores and the UI reads.
 
 describe('Finding #5 — correlatorRateLimited global singleton race', () => {
-  it.fails('a successful session does not clobber a rate-limited session\'s flag', async () => {
+  it('a successful session does not clobber a rate-limited session\'s flag', async () => {
     const mock = await getMock();
 
     // Control execution order:
@@ -382,7 +386,7 @@ describe('Finding #5 — correlatorRateLimited global singleton race', () => {
 // /health Gemini status for an unrelated transient error.
 
 describe('Finding #6 — unanchored 429 substring match misclassifies unrelated errors', () => {
-  it.fails('error "request failed after 3429ms" is not classified as a rate limit', async () => {
+  it('error "request failed after 3429ms" is not classified as a rate limit', async () => {
     const mock = await getMock();
 
     // Run a success first to guarantee the flag starts false regardless of other
@@ -419,7 +423,7 @@ describe('Finding #6 — unanchored 429 substring match misclassifies unrelated 
 // body, it will appear in plaintext — the redact list provides no protection.
 
 describe('Finding #7 — Pino redact list covers no recorder-specific fields', () => {
-  it.fails('logger redact paths include recorder-specific sensitive fields', () => {
+  it('logger redact paths include recorder-specific sensitive fields', () => {
     // Recreate the exact logger configuration from logger.ts using a captured
     // stream so we can inspect what reaches the log output.
     const logLines: string[] = [];
@@ -434,9 +438,9 @@ describe('Finding #7 — Pino redact list covers no recorder-specific fields', (
       {
         level: 'info',
         base: { service: 'recorder-service' },
-        // These are the CURRENT sensitive paths from logger.ts —
-        // none of them are relevant to recorder-service's domain.
-        redact: { paths: ['envVars', 'testData', 'csvData'], censor: '[REDACTED]' },
+        // Use the actual SENSITIVE_PATHS exported from logger.ts so this test
+        // always reflects the live configuration (Finding #7 fix).
+        redact: { paths: SENSITIVE_PATHS, censor: '[REDACTED]' },
       },
       dest,
     );

@@ -42,8 +42,9 @@ export async function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool;
   });
 
   // ── GET /system/ai-status ─────────────────────────────────────────────────
-  app.get('/system/ai-status', async () => {
+  app.get('/system/ai-status', async (request) => {
     try {
+      const projectId = request.projectId ?? null;
       const { rows } = await pool.query(
         `SELECT status_message, created_at FROM test_results
          WHERE created_at > NOW() - INTERVAL '2 hours'
@@ -52,7 +53,9 @@ export async function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool;
              OR status_message ILIKE '%generation failed after%'
              OR status_message ILIKE '%gemini quota exceeded%'
              OR status_message ILIKE '%gemini rate limit%')
+           AND ($1::uuid IS NULL OR project_id = $1::uuid)
          ORDER BY created_at DESC LIMIT 1`,
+        [projectId],
       );
       if (rows.length === 0) return { quotaExceeded: false };
       return { quotaExceeded: true, message: rows[0].status_message as string, since: rows[0].created_at as string };

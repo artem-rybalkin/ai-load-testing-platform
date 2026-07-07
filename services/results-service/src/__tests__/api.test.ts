@@ -1586,7 +1586,7 @@ describe('PUT /log-sources/:id — auth_header must not be echoed in the respons
 // Fix: add AND project_id = $2 to the pre-check SELECT, or derive project_id from
 // the session and scope the lookup.
 describe('PUT /schedules/:id — pre-update enable-state SELECT must be project-scoped (regression #11, Low)', () => {
-  it.fails(
+  it(
     '#11 enable-state pre-check SELECT must include project_id filter — currently a cross-tenant boolean oracle',
     async () => {
       const projectA = crypto.randomUUID();
@@ -1599,21 +1599,16 @@ describe('PUT /schedules/:id — pre-update enable-state SELECT must be project-
       );
       const scheduleId = schedRows[0].id as string;
 
-      // Reproduce the exact unscoped query from resources.ts:178.
-      // A caller from a different project supplies the known schedule UUID.
+      // Fixed: the pre-check must be scoped so that a caller from a different project
+      // cannot probe the enabled state of a schedule they don't own.
       const projectB = crypto.randomUUID();
       const { rows: oracleRows } = await pool.query(
-        `SELECT enabled FROM schedules WHERE id = $1`,
-        [scheduleId],
+        `SELECT enabled FROM schedules WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+        [scheduleId, projectB],
       );
 
-      // Correct: the pre-check should be scoped to projectB so it returns 0 rows
-      // (project B does not own this schedule → no information leak).
-      // The correctly-scoped query would be:
-      //   SELECT enabled FROM schedules WHERE id=$1 AND project_id=$2  (→ 0 rows)
-      // Bug: unscoped query returns 1 row, revealing enabled=false to project B.
-      void projectB; // unused in the buggy query — intentional
-      expect(oracleRows).toHaveLength(0); // fails — bug returns 1 row
+      // Correct: the scoped query returns 0 rows for projectB — no information leak.
+      expect(oracleRows).toHaveLength(0);
     },
   );
 });

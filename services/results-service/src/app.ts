@@ -37,7 +37,10 @@ export const buildApp = async (
   const app = Fastify({ logger: opts.logger ?? false });
 
   const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
-  await app.register(cors, { origin: allowedOrigin, credentials: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] });
+  // Do not send credentials header when origin is wildcard — browsers reject
+  // the wildcard+credentials combination (CORS spec §3.2.5), and omitting
+  // credentials: true when origin is '*' removes the misconfiguration risk.
+  await app.register(cors, { origin: allowedOrigin, credentials: allowedOrigin !== '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] });
   await app.register(cookie);
 
   // Attach WebSocket server to Fastify's underlying http.Server.
@@ -49,7 +52,7 @@ export const buildApp = async (
   const internalApiKey = process.env.INTERNAL_API_KEY || '';
 
   // Endpoints that bypass all HTTP auth entirely (health checks, UI websocket)
-  const publicPaths = new Set(['/health', '/system/ai-status', '/ws']);
+  const publicPaths = new Set(['/health', '/ws']);
 
   // Server-to-server callbacks from api-service/workers/ai-service (no cookie).
   // Gated by INTERNAL_API_KEY (X-Internal-Key header) when configured; empty =

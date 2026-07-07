@@ -124,20 +124,15 @@ test.describe('Webhook creation silent failure', () => {
 
 test.describe('Results list stuck on Loading forever', () => {
   test('shows an error/retry state instead of loading forever when the fetch fails', async ({ page }) => {
-    test.fail();
-
-    // getResults() -> refresh() has no try/catch and no .catch() at the call
-    // site — a rejected fetch leaves `loading` stuck at `true` forever.
+    // refresh() now wraps getResults in try/catch/finally — a rejected fetch
+    // transitions out of the loading state instead of hanging forever.
     // route.abort() makes the underlying fetch() reject with a network error.
     await page.route('**/data/results?*', (route) => route.abort('failed'));
 
     await page.goto('/results');
 
-    // Desired: the page settles into an error/retry state within a
-    // reasonable window. Currently: it stays on "Loading…" indefinitely —
-    // assert it's still showing the loading skeleton well past when a
-    // real request would have settled, proving `setLoading(false)` is
-    // never reached.
+    // The page must settle into an error state within a reasonable window —
+    // the "Loading…" skeleton must not remain visible once the request settles.
     await page.waitForTimeout(8_000);
     await expect(page.getByText(/loading/i)).not.toBeVisible();
   });

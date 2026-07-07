@@ -700,7 +700,7 @@ describe('regression: message-only 429 rate-limit detection (finding #2)', () =>
 // ─── Regression: compareDescriptions prompt injection gap (Finding #4) ────────
 
 describe("regression: compareDescriptions prompt missing fenceUserContent (finding #4)", () => {
-  it.fails(
+  it(
     'compareDescriptions prompt wraps both descriptions in <user_data> fence (currently interpolated raw)',
     async () => {
       const fn = await getMockFn();

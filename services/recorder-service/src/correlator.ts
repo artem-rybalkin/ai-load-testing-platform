@@ -346,8 +346,29 @@ function applyCorrelations(
   return result;
 }
 
-/** Last time the correlator hit a Gemini rate limit — reset when a call succeeds. */
+/** True if any session hit a Gemini rate limit recently. A concurrent session's
+ *  success must not clobber this back to false (the original racy-singleton bug —
+ *  session A finishing successfully while session B is still rate-limited used to
+ *  silently hide B's failure). Instead of resetting on every success, the flag
+ *  self-clears after RATE_LIMIT_STICKY_MS so /health doesn't stay "rate_limited"
+ *  forever once the underlying issue clears. */
 export let correlatorRateLimited = false;
+const RATE_LIMIT_STICKY_MS = 60_000;
+let rateLimitExpiry: ReturnType<typeof setTimeout> | null = null;
+
+const markRateLimited = (): void => {
+  correlatorRateLimited = true;
+  if (rateLimitExpiry) clearTimeout(rateLimitExpiry);
+  rateLimitExpiry = setTimeout(() => { correlatorRateLimited = false; }, RATE_LIMIT_STICKY_MS);
+  rateLimitExpiry.unref?.();
+};
+
+/** Reset the rate-limited flag immediately — used by tests so one test's rate-limit
+ *  doesn't bleed into the next. */
+export function resetCorrelatorRateLimited(): void {
+  correlatorRateLimited = false;
+  if (rateLimitExpiry) { clearTimeout(rateLimitExpiry); rateLimitExpiry = null; }
+}
 
 /** Analyse all captured domains and suggest ignore patterns for next recording. */
 export async function suggestIgnorePatterns(requests: RecordedRequest[], teamId?: string | null): Promise<string[]> {
@@ -504,14 +525,16 @@ export async function detectCorrelations(
     // (which may be shorter when toFlowSteps dropped 5xx responses).
     const indexMap = buildIndexMap(requests, steps);
     const enriched = applyCorrelations(requests, steps, parsed.correlations, indexMap);
-    correlatorRateLimited = false;
+    // Finding #5: do NOT reset correlatorRateLimited here. A success in session A must
+    // not clobber the rate-limited flag set by a concurrent session B that is still in
+    // the catch block. Callers reset the flag explicitly via resetCorrelatorRateLimited().
     log.info({ correlationCount: parsed.correlations.length }, 'Correlation detection complete');
     return enriched;
   } catch (err) {
     const msg = (err as Error).message ?? '';
     const status = (err as { status?: number }).status;
-    if (status === 429 || msg.includes('429') || msg.includes('quota')) {
-      correlatorRateLimited = true;
+    if (status === 429 || /\b429\b/.test(msg) || msg.includes('quota')) {
+      markRateLimited();
       log.warn('AI provider rate limited during correlation detection');
     } else {
       log.warn({ err }, 'Correlation detection failed — returning steps without extraction rules');

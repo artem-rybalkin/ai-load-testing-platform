@@ -25,7 +25,7 @@ declare module 'fastify' {
 // duration quota check).
 export const parseDurationSeconds = (d: string | number): number | null => {
   if (typeof d === 'number') return Number.isFinite(d) ? Math.round(d) : null;
-  const re = /(\d+(?:\.\d+)?)\s*(h|m|s|ms)/gi;
+  const re = /(\d+(?:\.\d+)?)\s*(h|ms|m|s)/gi;
   let total = 0;
   let matched = false;
   let m: RegExpExecArray | null;
@@ -68,7 +68,10 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
   await app.register(cors, {
     origin: allowedOrigin,
-    credentials: true,
+    // Do not send credentials header when origin is wildcard — browsers reject
+    // the wildcard+credentials combination (CORS spec §3.2.5), and omitting
+    // credentials: true when origin is '*' removes the misconfiguration risk.
+    credentials: allowedOrigin !== '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
   await app.register(cookie);

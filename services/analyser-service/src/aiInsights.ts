@@ -303,16 +303,22 @@ export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsigh
         const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
         const parsed = JSON.parse(cleaned) as AiInsights;
 
-        // Validate required fields
+        // Validate required fields — normalise severity to lowercase so a model
+        // that returns "Critical" (PascalCase) is still accepted rather than
+        // silently discarded.
+        const normalizedSeverity = typeof parsed.severity === 'string'
+          ? (parsed.severity.toLowerCase() as AiInsights['severity'])
+          : parsed.severity;
+
         if (
           typeof parsed.narrative === 'string' &&
           Array.isArray(parsed.anomalies) &&
           Array.isArray(parsed.rootCauses) &&
           Array.isArray(parsed.recommendations) &&
-          ['critical', 'warning', 'info'].includes(parsed.severity)
+          ['critical', 'warning', 'info'].includes(normalizedSeverity)
         ) {
           log.info({ attempt }, 'AI insights generated');
-          return { insights: parsed, rateLimited: false };
+          return { insights: { ...parsed, severity: normalizedSeverity }, rateLimited: false };
         }
 
         log.warn({ attempt, parsed }, 'AI insights response had unexpected shape');
@@ -321,7 +327,7 @@ export const generateAiInsights = async (ctx: InsightsContext): Promise<AiInsigh
         const msg = (err as Error).message ?? '';
         const status = (err as { status?: number }).status;
 
-        if (status === 429 || msg.includes('429') || msg.includes('quota')) {
+        if (status === 429 || /\b429\b/.test(msg) || msg.includes('quota')) {
           log.warn({ attempt }, 'AI provider rate limited — skipping AI insights');
           return { insights: null, rateLimited: true };
         }

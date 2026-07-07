@@ -187,6 +187,10 @@ const summarizeHar = (harJson: string): string => {
   }
 };
 
+/** Escape a string for safe use inside an XML attribute value. */
+const escapeXmlAttr = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 /**
  * Process all chat attachments and return a combined context string for the prompt.
  * Swagger URLs are fetched server-side; other types are summarised/truncated.
@@ -197,16 +201,17 @@ export const processAttachments = async (attachments: ChatAttachment[]): Promise
   const parts: string[] = [];
 
   for (const att of attachments) {
+    const filename = att.filename ? escapeXmlAttr(att.filename) : null;
     if (att.type === 'swagger_url') {
       const summary = await fetchAndSummarizeSwagger(att.content);
-      parts.push(`<swagger_spec${att.filename ? ` file="${att.filename}"` : ''}>\n${summary}\n</swagger_spec>`);
+      parts.push(`<swagger_spec${filename ? ` file="${filename}"` : ''}>\n${summary}\n</swagger_spec>`);
     } else if (att.type === 'har') {
       const summary = redactPII(summarizeHar(att.content));
-      parts.push(`<har_recording${att.filename ? ` file="${att.filename}"` : ''}>\n${summary}\n</har_recording>`);
+      parts.push(`<har_recording${filename ? ` file="${filename}"` : ''}>\n${summary}\n</har_recording>`);
     } else if (att.type === 'documentation') {
-      parts.push(`<documentation${att.filename ? ` file="${att.filename}"` : ''}>\n${att.content.slice(0, CONTEXT_CHAR_CAP)}\n</documentation>`);
+      parts.push(`<documentation${filename ? ` file="${filename}"` : ''}>\n${att.content.slice(0, CONTEXT_CHAR_CAP)}\n</documentation>`);
     } else if (att.type === 'codebase') {
-      parts.push(`<codebase${att.filename ? ` file="${att.filename}"` : ''}>\n${att.content.slice(0, CONTEXT_CHAR_CAP)}\n</codebase>`);
+      parts.push(`<codebase${filename ? ` file="${filename}"` : ''}>\n${att.content.slice(0, CONTEXT_CHAR_CAP)}\n</codebase>`);
     }
   }
 

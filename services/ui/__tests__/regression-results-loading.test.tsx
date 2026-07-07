@@ -3,32 +3,18 @@
  * Regression test for TODO finding #4 (Low):
  * "UI: /results list page can get stuck on 'Loading…' forever"
  *
- * Root cause: `refresh()` in app/results/page.tsx:97-102 is an async function
- * with no try/catch.  It is called from a useEffect with no .catch() chained:
+ * Root cause: `refresh()` in app/results/page.tsx was an async function
+ * with no try/catch.  It was called from a useEffect with no .catch() chained:
  *
  *   useEffect(() => { ...; refresh(); }, [activeWorkspaceId]);
  *
  * When getResults rejects (network error, 5xx, etc.) the awaited Promise
- * inside refresh() rejects and propagates out of refresh() uncaught.
- * `setLoading(false)` is never reached, so the spinner stays on screen forever.
+ * inside refresh() rejected and propagated out of refresh() uncaught.
+ * `setLoading(false)` was never reached, so the spinner stayed on screen forever.
  *
- * --- Why the mock uses a pending-forever promise, not mockRejectedValue ---
- * Both a rejection AND an eternal pending demonstrate the same defect:
- * `setLoading(false)` is placed after `await getResults(...)` with no
- * try/catch/finally, so any non-resolving getResults keeps loading=true.
- *
- * Using mockRejectedValue causes refresh() to create an unhandled rejection at
- * the Node.js process level (because useEffect calls refresh() without .catch()).
- * Vitest captures process-level unhandledRejection events independently of
- * jsdom's window event, so window.addEventListener('unhandledrejection', ...)
- * cannot suppress it.  A pending-forever promise avoids the noise completely
- * while proving the same root cause.
- *
- * --- it.fails semantics ---
- *   - Bug PRESENT  → loading stays true, waitFor times out, assertion throws
- *                    → it.fails reports PASS (CI green).
- *   - Bug FIXED    → setLoading(false) called in a catch/finally, loading clears,
- *                    assertion passes → it.fails flips to red (remove wrapper).
+ * Fix: refresh() now wraps the fetch in try/catch/finally — setLoading(false)
+ * is called unconditionally in the finally block, and a minimal error state
+ * is set in the catch block so the user sees a message instead of a spinner.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
@@ -85,25 +71,19 @@ afterEach(() => cleanup());
 // Finding #4 regression
 // ---------------------------------------------------------------------------
 
-describe('Finding #4 — ResultsPage stuck on Loading… when getResults never resolves', () => {
-  it.fails(
-    'loading spinner clears when getResults hangs (never resolves — missing try/catch/finally)',
+describe('Finding #4 — ResultsPage stuck on Loading… when getResults rejects', () => {
+  it(
+    'loading spinner clears when getResults rejects (try/catch/finally present)',
     async () => {
-      // A pending-forever promise simulates getResults hanging (network stall,
-      // slow response, or — identically from refresh()'s perspective — a
-      // rejection that propagates uncaught through the missing try/catch.
-      // In both cases setLoading(false) is never reached.
-      mockGetResults.mockReturnValue(new Promise(() => {}));
+      // A rejected promise simulates a network error or non-2xx response.
+      // refresh() now catches the rejection in a try/catch/finally and calls
+      // setLoading(false) unconditionally — the spinner must disappear.
+      mockGetResults.mockRejectedValue(new Error('network error'));
 
       render(<ResultsPage />);
 
-      // Desired behaviour: the component detects that getResults did not resolve
-      // within a reasonable time (or rejected) and clears the loading state so
-      // the user is not permanently stuck on the spinner.
-      //
-      // Bug behaviour: refresh() has no try/catch/finally, so setLoading(false)
-      // is only reachable on the happy path.  The "Loading…" text stays on
-      // screen forever; this waitFor times out → assertion throws → it.fails = PASS.
+      // Desired behaviour: the component transitions out of the loading state
+      // and shows an error message instead of the infinite spinner.
       await waitFor(
         () => expect(screen.queryByText('Loading…')).not.toBeInTheDocument(),
         { timeout: 500 },

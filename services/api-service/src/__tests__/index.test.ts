@@ -757,10 +757,10 @@ describe('RBAC — viewer role not enforced on mutating routes (regression #1/#2
 // The fix is to reorder the alternation to put "ms" before "m": `(h|ms|m|s)`.
 
 describe('parseDurationSeconds — ms unit misparsing regression (#4)', () => {
-  // it.fails: currently parseDurationSeconds('500ms') returns 30000 (minutes),
-  // not 0.5 (seconds). When the regex is fixed, this test will pass and
-  // it.fails will flip to a test failure — signal to unwrap it.
-  it.fails('"500ms" should parse to 0.5 seconds (bug: regex matches "m" before "ms", returns 30000)', () => {
-    expect(parseDurationSeconds('500ms')).toBe(0.5);
+  // Fixed: regex reordered to `(h|ms|m|s)` so "ms" is matched before "m".
+  // 500ms = 0.5 s, which Math.round rounds to 1. Before the fix the regex
+  // matched 'm' (minutes) first and returned Math.round(500 * 60) = 30000.
+  it('"500ms" should parse to 1 second (500 ms rounded, not 30000 s from the "m" unit bug)', () => {
+    expect(parseDurationSeconds('500ms')).toBe(1);
   });
 });

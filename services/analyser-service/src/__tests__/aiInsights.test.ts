@@ -387,7 +387,7 @@ describe('generateAiInsights — known-bug regressions', () => {
   // of the attempt < 2 retry path used for exceptions, discarding an otherwise
   // fully-usable insight. The fix: normalise with .toLowerCase() before the
   // includes() check.
-  it.fails(
+  it(
     'accepts mixed-case severity values (e.g. "Critical") instead of discarding the insight',
     async () => {
       const mock = await getMockFn();

@@ -85,6 +85,7 @@ export default function ResultsPage() {
   const { activeWorkspaceId } = useWorkspace();
   const [results, setResults] = useState<TestResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -95,10 +96,16 @@ export default function ResultsPage() {
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = async () => {
-    const data = await getResults(undefined, 50, activeWorkspaceId);
-    setResults(data.results || []);
-    setNextBefore(data.nextBefore ?? null);
-    setLoading(false);
+    setError('');
+    try {
+      const data = await getResults(undefined, 50, activeWorkspaceId);
+      setResults(data.results || []);
+      setNextBefore(data.nextBefore ?? null);
+    } catch {
+      setError('Failed to load results');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadMore = async () => {
@@ -193,6 +200,10 @@ export default function ResultsPage() {
 
         {loading ? (
           <div className="bg-surface border border-border rounded-card p-8 text-center text-[13px] text-tx-4">Loading…</div>
+        ) : error ? (
+          <div className="bg-surface border border-border rounded-card p-8 text-center">
+            <p className="text-red-fg text-[12px]">{error}</p>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="bg-surface border border-border rounded-card p-8 text-center">
             <p className="text-tx-4 text-[13px]">{results.length === 0 ? 'No results yet' : 'No results match your filters'}</p>

@@ -103,20 +103,22 @@ export const runK6Test = async (
   const scriptPath = path.join(runDir, 'script.js');
   const jsonPath   = path.join(runDir, 'live.json');
 
-  await Promise.all([
-    writeFile(scriptPath, script),
-    testData && testData.length > 0
-      ? writeFile(path.join(runDir, 'data.json'), JSON.stringify(testData))
-      : Promise.resolve(),
-    csvData
-      ? writeFile(path.join(runDir, 'data.csv'), Buffer.from(csvData, 'base64'))
-      : Promise.resolve(),
-  ]);
+  try {
+    await Promise.all([
+      writeFile(scriptPath, script),
+      testData && testData.length > 0
+        ? writeFile(path.join(runDir, 'data.json'), JSON.stringify(testData))
+        : Promise.resolve(),
+      csvData
+        ? writeFile(path.join(runDir, 'data.csv'), Buffer.from(csvData, 'base64'))
+        : Promise.resolve(),
+    ]);
 
-  await validateScript(scriptPath).catch(async (err) => {
+    await validateScript(scriptPath);
+  } catch (err) {
     await rm(runDir, { recursive: true, force: true }).catch(() => {});
     throw err;
-  });
+  }
 
   return new Promise((resolve, reject) => {
     const envArgs = Object.entries(envVars ?? {})
@@ -146,6 +148,7 @@ export const runK6Test = async (
     const stdoutTail = makeTailBuffer(64 * 1_024);
     const stderrTail = makeTailBuffer(64 * 1_024);
     let fileOffset = 0;
+    let partialLine = '';
 
     const logLines: string[] = [];
     let logBytes = 0;
@@ -178,7 +181,10 @@ export const runK6Test = async (
           const buf = Buffer.allocUnsafe(size - fileOffset);
           await fh.read(buf, 0, buf.length, fileOffset);
           fileOffset = size;
-          const newLines = buf.toString('utf-8').split('\n').filter(l => l.trim());
+          const text = partialLine + buf.toString('utf-8');
+          const parts = text.split('\n');
+          partialLine = parts.pop() ?? '';
+          const newLines = parts.filter(l => l.trim());
           const agg = aggregateWindow(newLines, liveWindowSec);
           if (agg) await ctx?.postLiveMetric(testId, { timestamp: new Date().toISOString(), ...agg });
         } finally {
