@@ -193,7 +193,7 @@ export const runK6Test = async (
       } catch { /* file may not exist yet */ }
     };
 
-    const liveInterval = setInterval(readAndPost, liveIntervalMs);
+    const liveInterval = setInterval(() => { void readAndPost(); }, liveIntervalMs);
 
     const maxDurationMs  = ctx?.maxDurationMs  ?? parseInt(process.env.K6_MAX_DURATION_MS ?? '600000');
     const gracePeriodMs  = ctx?.gracePeriodMs  ?? GRACE_PERIOD_MS;
@@ -204,47 +204,51 @@ export const runK6Test = async (
       setTimeout(() => { if (ctx?.runningTests.has(testId)) k6.kill('SIGKILL'); }, gracePeriodMs);
     }, maxDurationMs);
 
-    k6.on('close', async (code) => {
-      clearInterval(liveInterval);
-      clearTimeout(killTimer);
-      ctx?.runningTests.delete(testId);
-      logBatcher.flush();
-      await readAndPost();
+    k6.on('close', (code) => {
+      void (async (): Promise<void> => {
+        clearInterval(liveInterval);
+        clearTimeout(killTimer);
+        ctx?.runningTests.delete(testId);
+        logBatcher.flush();
+        await readAndPost();
 
-      const jsonContent = await readFile(jsonPath, 'utf-8').catch(() => '');
-      await rm(runDir, { recursive: true, force: true }).catch(() => {});
+        const jsonContent = await readFile(jsonPath, 'utf-8').catch(() => '');
+        await rm(runDir, { recursive: true, force: true }).catch(() => {});
 
-      if (code !== 0 && code !== 99) {
-        log.warn({ testId, code }, 'k6 exited with non-zero code — parsing partial output');
-      }
+        if (code !== 0 && code !== 99) {
+          log.warn({ testId, code }, 'k6 exited with non-zero code — parsing partial output');
+        }
 
-      const output = stdoutTail.toString() + stderrTail.toString();
-      const metrics = parseK6Output(output);
-      const { statusCodes, errorBreakdown, stepMetrics } = parseK6JsonOutput(jsonContent);
-      metrics.statusCodes    = statusCodes;
-      metrics.errorBreakdown = errorBreakdown;
-      if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
+        const output = stdoutTail.toString() + stderrTail.toString();
+        const metrics = parseK6Output(output);
+        const { statusCodes, errorBreakdown, stepMetrics } = parseK6JsonOutput(jsonContent);
+        metrics.statusCodes    = statusCodes;
+        metrics.errorBreakdown = errorBreakdown;
+        if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
 
-      if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
-        const e = Object.assign(
-          new Error(`k6 exited with code ${code}: ${stderrTail.toString().slice(-500)}`),
-          { partialLog: logLines.join('\n') },
-        );
-        reject(e);
-        return;
-      }
+        if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
+          const e = Object.assign(
+            new Error(`k6 exited with code ${code}: ${stderrTail.toString().slice(-500)}`),
+            { partialLog: logLines.join('\n') },
+          );
+          reject(e);
+          return;
+        }
 
-      resolve({ metrics, executionLog: logLines.join('\n') });
+        resolve({ metrics, executionLog: logLines.join('\n') });
+      })();
     });
 
-    k6.on('error', async (err) => {
-      clearInterval(liveInterval);
-      clearTimeout(killTimer);
-      ctx?.runningTests.delete(testId);
-      logBatcher.flush();
-      await rm(runDir, { recursive: true, force: true }).catch(() => {});
-      (err as Error & { partialLog?: string }).partialLog = logLines.join('\n');
-      reject(err);
+    k6.on('error', (err) => {
+      void (async (): Promise<void> => {
+        clearInterval(liveInterval);
+        clearTimeout(killTimer);
+        ctx?.runningTests.delete(testId);
+        logBatcher.flush();
+        await rm(runDir, { recursive: true, force: true }).catch(() => {});
+        (err as Error & { partialLog?: string }).partialLog = logLines.join('\n');
+        reject(err);
+      })();
     });
   });
 };

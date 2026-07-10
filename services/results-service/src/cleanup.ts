@@ -16,7 +16,7 @@ export const runStaleCleanup = async (
   runningFixed: number; pendingFixed: number; liveMetricsDeleted: number; testResultsDeleted: number;
   sessionsDeleted: number; auditLogDeleted: number;
 }> => {
-  const { rows: running } = await pool.query(
+  const { rows: running } = await pool.query<{ test_id: string }>(
     `UPDATE test_results SET status = 'failed', status_message = 'Test timed out and was marked as failed'
      WHERE status = 'running'
        AND started_at < NOW() - ($1 || ' minutes')::INTERVAL
@@ -24,7 +24,7 @@ export const runStaleCleanup = async (
     [runningMinutes]
   );
 
-  const { rows: pending } = await pool.query(
+  const { rows: pending } = await pool.query<{ test_id: string }>(
     `UPDATE test_results SET status = 'failed', status_message = 'Test timed out and was marked as failed'
      WHERE status = 'pending'
        AND created_at < NOW() - ($1 || ' minutes')::INTERVAL
@@ -42,7 +42,7 @@ export const runStaleCleanup = async (
 
   let testResultsDeleted = 0;
   if (Number.isFinite(TEST_RESULTS_RETENTION_DAYS) && TEST_RESULTS_RETENTION_DAYS > 0) {
-    const { rows: expired } = await pool.query(
+    const { rows: expired } = await pool.query<{ test_id: string }>(
       `DELETE FROM test_results WHERE created_at < NOW() - ($1 || ' days')::INTERVAL RETURNING test_id`,
       [TEST_RESULTS_RETENTION_DAYS]
     );
@@ -94,12 +94,14 @@ export const runStaleCleanup = async (
 };
 
 export const startStaleCleanup = (pool: Pool, runningMinutes: number, pendingMinutes: number): void => {
-  setInterval(async () => {
-    try {
-      await runStaleCleanup(pool, runningMinutes, pendingMinutes);
-    } catch (err) {
-      log.error({ err: (err as Error).message }, 'Stale test cleanup failed');
-    }
+  setInterval(() => {
+    void (async (): Promise<void> => {
+      try {
+        await runStaleCleanup(pool, runningMinutes, pendingMinutes);
+      } catch (err) {
+        log.error({ err: (err as Error).message }, 'Stale test cleanup failed');
+      }
+    })();
   }, CLEANUP_INTERVAL_MS);
 
   log.info({ staleRunningMinutes: runningMinutes, stalePendingMinutes: pendingMinutes }, 'Stale test cleanup started');

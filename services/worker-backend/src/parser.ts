@@ -69,14 +69,14 @@ const parseK6All = (jsonContent: string): {
   for (const line of jsonContent.split('\n')) {
     if (!line.trim()) continue;
     try {
-      const obj = JSON.parse(line);
+      const obj = JSON.parse(line) as K6JsonPoint;
       if (obj.type !== 'Point') continue;
 
-      const rawGroup: string = obj.data?.tags?.group ?? '';
+      const rawGroup: string = obj.data.tags?.group ?? '';
       const groupName = rawGroup && rawGroup !== '::' ? rawGroup.replace(/^::/, '') : null;
 
       if (obj.metric === 'http_reqs') {
-        const status: string = obj.data?.tags?.status ?? '';
+        const status: string = obj.data.tags?.status ?? '';
         if (status) {
           statusCodes[status] = (statusCodes[status] ?? 0) + 1;
           const code = parseInt(status, 10);
@@ -93,13 +93,13 @@ const parseK6All = (jsonContent: string): {
       }
 
       if (obj.metric === 'http_req_failed') {
-        if (obj.data?.value === 1) {
-          const errorCode: string = obj.data?.tags?.error_code ?? '';
+        if (obj.data.value === 1) {
+          const errorCode: string = obj.data.tags?.error_code ?? '';
           const code = parseInt(errorCode, 10);
           if (code >= 1020 && code < 1030) breakdown.timeout++;
           else if (code === 1210) breakdown.timeout++;
           else if ((code >= 1010 && code < 1020) || code === 1050) breakdown.networkError++;
-          else if (errorCode && !obj.data?.tags?.status) breakdown.networkError++;
+          else if (errorCode && !obj.data.tags?.status) breakdown.networkError++;
         }
         if (groupName) (failedByGroup[groupName] ??= []).push(obj.data.value);
       }
@@ -162,7 +162,7 @@ export const aggregateWindow = (lines: string[], windowSec: number = LIVE_WINDOW
 
   for (const line of lines) {
     try {
-      const obj: K6JsonPoint = JSON.parse(line);
+      const obj = JSON.parse(line) as K6JsonPoint;
       if (obj.type !== 'Point') continue;
       const rawGroup = obj.data.tags?.group ?? '';
       const groupName = rawGroup && rawGroup !== '::' ? rawGroup.replace(/^::/, '') : null;

@@ -5,6 +5,19 @@ import { TestType, TestScript, BackendTestOptions, FlowStep } from '@alt/shared'
 import { buildK6Options, replaceK6Options } from './options';
 import { log } from './logger';
 
+interface TestScriptRow {
+  id: string;
+  target_url: string;
+  test_type: string;
+  script: string;
+  description: string | null;
+  used_count: number;
+  created_at: Date;
+  updated_at: Date;
+  project_id: string | null;
+  workspace_id: string | null;
+}
+
 const canonicalStep = (s: FlowStep): unknown => ({
   name: s.name, url: s.url, method: s.method,
   ...(s.body    !== undefined ? { body: s.body }       : {}),
@@ -35,7 +48,7 @@ export const findExistingScript = async (
 ): Promise<TestScript | null> => {
   const lookupKey = cacheKey ?? targetUrl;
   const lookupType = testType === 'flow' ? 'backend' : testType;
-  const { rows } = await dbPool.query(
+  const { rows } = await dbPool.query<TestScriptRow>(
     `SELECT * FROM test_scripts WHERE target_url = $1 AND test_type = $2
        AND ($3::uuid IS NULL OR project_id = $3::uuid)`,
     [lookupKey, lookupType, projectId ?? null]
@@ -54,11 +67,11 @@ export const findExistingScript = async (
   return {
     id: rows[0].id,
     targetUrl: rows[0].target_url,
-    testType: rows[0].test_type,
+    testType: rows[0].test_type as TestType,
     script,
     description: rows[0].description ?? null,
     usedCount: rows[0].used_count,
-    createdAt: rows[0].created_at,
-    updatedAt: rows[0].updated_at
+    createdAt: rows[0].created_at.toISOString(),
+    updatedAt: rows[0].updated_at.toISOString()
   };
 };

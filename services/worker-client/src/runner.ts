@@ -107,16 +107,20 @@ export const runClientTest = async (
 
   runningBrowsers.set(test.id, browser);
   let killTimerFired = false;
-  const killTimer = setTimeout(async () => {
-    killTimerFired = true;
-    log.warn({ testId: test.id, maxMs: maxDurationMs }, 'Puppeteer test exceeded max duration, closing browser');
-    await browser.close().catch(() => {});
+  const killTimer = setTimeout(() => {
+    void (async (): Promise<void> => {
+      killTimerFired = true;
+      log.warn({ testId: test.id, maxMs: maxDurationMs }, 'Puppeteer test exceeded max duration, closing browser');
+      await browser.close().catch(() => {});
+    })();
   }, maxDurationMs);
 
-  browser.on('targetcreated', async (target) => {
-    const newPage = await (target as { page(): Promise<{ evaluateOnNewDocument(s: string): Promise<void> } | null> })
-      .page().catch(() => null);
-    if (newPage) await newPage.evaluateOnNewDocument(NAME_POLYFILL).catch(() => {});
+  browser.on('targetcreated', (target) => {
+    void (async (): Promise<void> => {
+      const newPage = await (target as { page(): Promise<{ evaluateOnNewDocument(s: string): Promise<void> } | null> })
+        .page().catch(() => null);
+      if (newPage) await newPage.evaluateOnNewDocument(NAME_POLYFILL).catch(() => {});
+    })();
   });
   for (const existingPage of await browser.pages()) {
     await existingPage.evaluateOnNewDocument(NAME_POLYFILL).catch(() => {});
@@ -140,7 +144,7 @@ export const runClientTest = async (
       let sessionJsErrors = 0;
       page.on('pageerror', (err) => {
         sessionJsErrors++;
-        addLog('ERROR', `[session ${i + 1}] pageerror: ${(err as Error).message}`);
+        addLog('ERROR', `[session ${i + 1}] pageerror: ${err.message}`);
       });
       page.on('console', (msg: { type(): string; text(): string }) => {
         const t = msg.type();

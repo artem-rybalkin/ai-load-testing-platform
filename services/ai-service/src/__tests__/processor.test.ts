@@ -246,7 +246,7 @@ describe('processAiRequest — DLQ routing after MAX_RETRIES', () => {
   beforeEach(() => { vi.unstubAllGlobals(); });
 
   it('routes to ai-requests.dlq and marks test failed after MAX_RETRIES', async () => {
-    const { channel, msg, deps, mockFetch } = makeDeps({
+    const { channel, deps, mockFetch } = makeDeps({
       generateScript: vi.fn().mockRejectedValue(new Error('Gemini 429')),
     });
     const exhaustedMsg = makeMsg({ 'x-retry-count': MAX_RETRIES });

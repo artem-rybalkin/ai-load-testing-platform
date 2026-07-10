@@ -19,7 +19,6 @@ export function shutdownTracing(): Promise<void> {
   if (!sdkInstance) return Promise.resolve();
   if (!shutdownPromise) {
     shutdownPromise = sdkInstance.shutdown().catch((err: unknown) => {
-      // eslint-disable-next-line no-console
       console.error('[tracing] shutdown failed:', err);
     });
   }
@@ -37,12 +36,16 @@ export function shutdownTracing(): Promise<void> {
 export function initTracing(withLangfuse = false): void {
   if (process.env.OTEL_SDK_DISABLED === 'true') return;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { NodeSDK } = require('@opentelemetry/sdk-node');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumentations-node');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http');
+    // require() (not a static import) so a missing OTel package degrades gracefully
+    // via the catch block below instead of crashing the service at module-load time.
+    // Typed via `as typeof import(...)` so this stays fully type-checked without a
+    // static import forcing the package to be present.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-extraneous-dependencies
+    const { NodeSDK } = require('@opentelemetry/sdk-node') as typeof import('@opentelemetry/sdk-node');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-extraneous-dependencies
+    const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumentations-node') as typeof import('@opentelemetry/auto-instrumentations-node');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-extraneous-dependencies
+    const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http') as typeof import('@opentelemetry/exporter-trace-otlp-http');
 
     const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318';
     const exporter = new OTLPTraceExporter({ url: `${endpoint}/v1/traces` });
@@ -54,16 +57,16 @@ export function initTracing(withLangfuse = false): void {
       // `spanProcessors` is omitted entirely — passing `spanProcessors: []` alongside `traceExporter`
       // silently drops Tempo export (verified empirically). So Tempo's exporter is wrapped in its
       // own explicit BatchSpanProcessor here instead of using the `traceExporter` key at all.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base');
-      const spanProcessors: unknown[] = [new BatchSpanProcessor(exporter)];
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-extraneous-dependencies
+      const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base') as typeof import('@opentelemetry/sdk-trace-base');
+      const spanProcessors: import('@opentelemetry/sdk-trace-base').SpanProcessor[] = [new BatchSpanProcessor(exporter)];
 
       // Langfuse — LLM-call tracing for generateAIText() (@alt/shared). Additive: only registered
       // when both keys are set; Tempo export above is unaffected either way.
       if (process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY) {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { LangfuseSpanProcessor } = require('@langfuse/otel');
+          // eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-extraneous-dependencies
+          const { LangfuseSpanProcessor } = require('@langfuse/otel') as typeof import('@langfuse/otel');
           spanProcessors.push(new LangfuseSpanProcessor());
         } catch (err: unknown) {
           if ((err as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw err;

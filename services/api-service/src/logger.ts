@@ -1,3 +1,6 @@
+// pino is a hoisted root dependency shared by all services (logging is
+// cross-cutting) — the rule only checks this service's own nearest package.json.
+// eslint-disable-next-line import/no-extraneous-dependencies
 import pino from 'pino';
 
 // Redact sensitive fields that appear in EnrichedTestRequest / TestRequest to prevent

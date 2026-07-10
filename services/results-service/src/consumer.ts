@@ -1,6 +1,9 @@
 import amqplib from 'amqplib';
 import { createHmac } from 'crypto';
 import { Pool } from 'pg';
+// @opentelemetry/api is a hoisted root dependency shared by all tracing-instrumented
+// services — the rule only checks this service's own nearest package.json.
+// eslint-disable-next-line import/no-extraneous-dependencies
 import { trace } from '@opentelemetry/api';
 
 import { TestResult, BackendMetrics, ClientMetrics, AnalysisResult, connectWithBackoff, TestResultSchema, fetchSsrfSafe, internalHeaders } from '@alt/shared';
@@ -44,7 +47,7 @@ const callAnalyserService = async (
       }).catch(() => {});
     }
     const { geminiRateLimited: _, ...analysis } = body;
-    return analysis as AnalysisResult;
+    return analysis;
   } catch {
     return null;
   }
@@ -152,7 +155,7 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
   const projectId = result.projectId ?? null;
 
   // 1. Fetch previous metrics (read-only — no pg client held during slow analyser call)
-  const { rows: prevRows } = await p.query(
+  const { rows: prevRows } = await p.query<{ metrics: BackendMetrics | ClientMetrics }>(
     `SELECT metrics FROM test_results
      WHERE target_url = $1
        AND type = $2
@@ -171,15 +174,15 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
     result.testId,
     result.targetUrl,
     result.metrics.type,
-    result.metrics as BackendMetrics | ClientMetrics,
-    previousMetrics as BackendMetrics | ClientMetrics | null,
+    result.metrics,
+    previousMetrics,
     result.thresholds,
     result.startedAt ?? null,
     result.completedAt ?? null,
     projectId,
   ) ?? analyzeResult(
-    result.metrics as BackendMetrics | ClientMetrics,
-    previousMetrics as BackendMetrics | ClientMetrics | null,
+    result.metrics,
+    previousMetrics,
     result.thresholds
   );
 
@@ -246,6 +249,9 @@ const scheduleReconnect = (deps: { pool?: Pool } = {}): void => {
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ reconnect failed — retrying'),
   }).then(() => {
     reconnecting = false;
+  }).catch((err: unknown) => {
+    reconnecting = false;
+    log.error({ err: (err as Error).message }, 'RabbitMQ reconnect loop exited unexpectedly');
   });
 };
 
@@ -263,7 +269,7 @@ export const startConsumer = async (deps: { pool?: Pool } = {}): Promise<void> =
   });
 
   connection.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+    log.error({ err: err.message }, 'RabbitMQ connection error');
   });
   connection.on('close', () => {
     log.warn('RabbitMQ connection closed — reconnecting');
@@ -273,18 +279,22 @@ export const startConsumer = async (deps: { pool?: Pool } = {}): Promise<void> =
 
   const channel = await connection.createChannel();
   channel.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    log.error({ err: err.message }, 'RabbitMQ channel error');
     consumerConnected = false;
   });
 
   await channel.assertQueue(QUEUE, { durable: true });
   await channel.assertQueue(DLQ,   { durable: true });
-  channel.prefetch(1);
+  await channel.prefetch(1);
 
   consumerConnected = true;
   log.info({ queue: QUEUE }, 'Results-service consumer listening');
 
-  channel.consume(QUEUE, async (msg) => {
+  // async callback intentional — the whole body is wrapped in its own try/catch
+  // (never actually rejects) and tests capture this handler directly via
+  // channel.consume.mock.calls[0][1] and await it to synchronize with the real work.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  await channel.consume(QUEUE, async (msg) => {
     if (!msg) return;
 
     let result: TestResult;

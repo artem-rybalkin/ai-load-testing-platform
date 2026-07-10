@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 
-import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, FlowStep, TeamRole, internalHeaders } from '@alt/shared';
+import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, TeamRole, internalHeaders } from '@alt/shared';
 import { shutdownTracing } from '@alt/tracing';
 import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
 import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount, pool } from './scripts';
@@ -220,7 +220,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       }
 
       const backendOpts = type === 'backend' ? (options as BackendTestOptions) : undefined;
-      const flowCacheKey = (type === 'flow' && steps?.length) ? stepsToKey(steps as FlowStep[]) : undefined;
+      const flowCacheKey = (type === 'flow' && steps?.length) ? stepsToKey(steps) : undefined;
 
       const test: EnrichedTestRequest = {
         id: crypto.randomUUID(),
@@ -289,7 +289,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         try {
           await publishTest(test, skipAI);
         } catch (err) {
-          postMessage(`Test could not be queued — message broker unavailable. Restart the api-service when RabbitMQ recovers. (${(err as Error).message})`);
+          void postMessage(`Test could not be queued — message broker unavailable. Restart the api-service when RabbitMQ recovers. (${(err as Error).message})`);
           throw err;
         }
       };
@@ -301,7 +301,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         }
         test.generatedScript = customScript;
         await tryPublish(true);
-        warnIfNoWorker();
+        void warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
 
@@ -310,7 +310,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       if (!existingScript) {
         // Cache miss — generate new script
         await tryPublish(false);
-        warnIfNoWorker();
+        void warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
 
@@ -322,7 +322,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         test.scriptId = existingScript.id;
         test.reusedScript = true;
         await tryPublish(true);
-        warnIfNoWorker();
+        void warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: true, scriptUsedCount: existingScript.usedCount };
       }
 
@@ -332,7 +332,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       test.cachedScriptDescription = existingScript.description;
       test.scriptId = existingScript.id;
       await tryPublish(false);
-      warnIfNoWorker();
+      void warnIfNoWorker();
       return { success: true, test: safeTestResponse(test), scriptReused: false };
     }
   );
@@ -353,7 +353,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         body: JSON.stringify({ projectId: request.projectId ?? null }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body: unknown = await res.json().catch(() => ({}));
         return reply.code(res.status).send(body);
       }
 
@@ -394,5 +394,5 @@ async function shutdown(signal: string): Promise<void> {
 if (!process.env.VITEST) {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT',  () => void shutdown('SIGINT'));
-  start();
+  void start();
 }

@@ -257,7 +257,7 @@ const FLOW_PROMPT = (test: TestRequest): string => {
   const csvColumns = test.csvData
     ? (((): string[] | null => {
         try {
-          const firstLine = Buffer.from(test.csvData!, 'base64').toString('utf-8').split('\n')[0];
+          const firstLine = Buffer.from(test.csvData, 'base64').toString('utf-8').split('\n')[0];
           return firstLine.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
         } catch { return null; }
       })())

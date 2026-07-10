@@ -93,13 +93,13 @@ const triggerSchedule = async (pool: Pool, schedule: Schedule): Promise<void> =>
 
 const registerSchedule = (pool: Pool, schedule: Schedule): void => {
   if (activeTasks.has(schedule.id)) {
-    activeTasks.get(schedule.id)!.stop();
+    void activeTasks.get(schedule.id)!.stop();
   }
   const task = cron.schedule(schedule.cron, () => triggerSchedule(pool, schedule), {
     name: schedule.id,
     noOverlap: true,
   });
-  if (!schedule.enabled) task.stop();
+  if (!schedule.enabled) void task.stop();
   activeTasks.set(schedule.id, task);
   log.info({ scheduleId: schedule.id, name: schedule.name, cron: schedule.cron }, 'Schedule registered');
 };
@@ -113,7 +113,7 @@ export const startScheduler = async (pool: Pool): Promise<void> => {
 export const reloadSchedule = async (pool: Pool, id: string): Promise<void> => {
   const { rows } = await pool.query<Schedule>(`SELECT * FROM schedules WHERE id = $1`, [id]);
   if (rows.length === 0) {
-    activeTasks.get(id)?.stop();
+    void activeTasks.get(id)?.stop();
     activeTasks.delete(id);
     return;
   }
@@ -121,6 +121,6 @@ export const reloadSchedule = async (pool: Pool, id: string): Promise<void> => {
 };
 
 export const removeSchedule = (id: string): void => {
-  activeTasks.get(id)?.stop();
+  void activeTasks.get(id)?.stop();
   activeTasks.delete(id);
 };

@@ -25,7 +25,7 @@ const setupConnection = async (url: string): Promise<void> => {
   const connection = await amqplib.connect(url);
 
   connection.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+    log.error({ err: err.message }, 'RabbitMQ connection error');
   });
   connection.on('close', () => {
     log.warn('RabbitMQ connection closed — reconnecting');
@@ -35,7 +35,7 @@ const setupConnection = async (url: string): Promise<void> => {
 
   channel = await connection.createConfirmChannel();
   channel.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    log.error({ err: err.message }, 'RabbitMQ channel error');
     channel = null;
   });
 
@@ -55,6 +55,9 @@ const scheduleReconnect = (url: string): void => {
   }).then(() => {
     reconnecting = false;
     log.info('Reconnected to RabbitMQ');
+  }).catch((err: unknown) => {
+    reconnecting = false;
+    log.error({ err: (err as Error).message }, 'RabbitMQ reconnect loop exited unexpectedly');
   });
 };
 

@@ -17,7 +17,6 @@ import {
   buildEnglishPrompt,
   buildSwaggerPrompt,
   buildContextPrompt,
-  buildChatParsePrompt,
   isValidChatParseResponse,
   processAttachments,
   CHAT_HISTORY_LIMIT,
@@ -351,7 +350,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
 
       let thresholds: SLOThresholds;
       try {
-        thresholds = JSON.parse(thresholdsRaw);
+        thresholds = JSON.parse(thresholdsRaw) as SLOThresholds;
       } catch {
         return reply.code(400).send({ error: 'thresholds must be valid JSON' });
       }
@@ -495,7 +494,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
         let parsed: Record<string, unknown>;
-        try { parsed = JSON.parse(match[0]); } catch {
+        try { parsed = JSON.parse(match[0]) as Record<string, unknown>; } catch {
           return reply.code(500).send({ error: 'AI returned unexpected response' });
         }
 

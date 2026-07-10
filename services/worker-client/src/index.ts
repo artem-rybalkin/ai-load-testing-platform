@@ -81,6 +81,9 @@ const scheduleReconnect = (): void => {
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ reconnect failed — retrying'),
   }).then(() => {
     reconnecting = false;
+  }).catch((err: unknown) => {
+    reconnecting = false;
+    log.error({ err: (err as Error).message }, 'RabbitMQ reconnect loop exited unexpectedly');
   });
 };
 
@@ -95,7 +98,7 @@ export const start = async (): Promise<void> => {
   const conn = connection;
 
   conn.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+    log.error({ err: err.message }, 'RabbitMQ connection error');
   });
   conn.on('close', () => {
     log.warn('RabbitMQ connection closed — reconnecting');
@@ -106,7 +109,7 @@ export const start = async (): Promise<void> => {
   channel = await conn.createConfirmChannel();
   const ch = channel;
   ch.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    log.error({ err: err.message }, 'RabbitMQ channel error');
     queueConnected = false;
   });
   await ch.assertQueue(QUEUE,         { durable: true });
@@ -119,11 +122,15 @@ export const start = async (): Promise<void> => {
   await ch.bindQueue(cancelQueue, CANCEL_EXCHANGE, '');
 
   queueConnected = true;
-  ch.prefetch(WORKER_CONCURRENCY);
+  await ch.prefetch(WORKER_CONCURRENCY);
   log.info({ queue: QUEUE, concurrency: WORKER_CONCURRENCY }, 'Worker-client listening');
 
   // r2: cancel consumer — closes running Puppeteer browser by testId
-  ch.consume(cancelQueue, async (msg) => {
+  // async callback intentional — the whole body is wrapped in its own try/catch
+  // (never actually rejects) and tests capture this handler directly via
+  // channel.consume.mock.calls[0][1] and await it to synchronize with the real work.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  await ch.consume(cancelQueue, async (msg) => {
     if (!msg) return;
     let testId: string;
     try {
@@ -145,7 +152,7 @@ export const start = async (): Promise<void> => {
     ch.ack(msg);
   }, { noAck: false });
 
-  const { consumerTag } = await ch.consume(QUEUE, async (msg) => {
+  const handleTestMessage = async (msg: amqplib.ConsumeMessage | null): Promise<void> => {
     if (!msg) return;
     inFlightMessages++;
     try {
@@ -217,7 +224,13 @@ export const start = async (): Promise<void> => {
     } finally {
       inFlightMessages--;
     }
-  });
+  };
+
+  // handleTestMessage already fully catches its own errors (never actually rejects)
+  // and is passed directly (not wrapped) so tests can capture it via
+  // channel.consume.mock.calls[1][1] and await it to synchronize with the real work.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  const { consumerTag } = await ch.consume(QUEUE, handleTestMessage);
   queueConsumerTag = consumerTag;
 };
 

@@ -65,7 +65,7 @@ export async function buildApp(
   }
 
   // ── Health ──────────────────────────────────────────────────────────────────
-  app.get('/health', async () => ({
+  app.get('/health', () => ({
     status: 'ok',
     service: 'recorder-service',
     checks: {
@@ -124,7 +124,7 @@ export async function buildApp(
         status: session.status === 'stopping' ? 'active' : session.status,
         noVncUrl: NOVNC_URL,
         stepCount: session.stepCount,
-      } as RecordingSession;
+      };
     }
     const done = _completed.get(request.params.id);
     if (done) {
@@ -138,7 +138,7 @@ export async function buildApp(
         ...(done.suggestedIgnore ? { suggestedIgnore: done.suggestedIgnore } : {}),
         ...(done.thinkTimes ? { thinkTimes: done.thinkTimes } : {}),
         ...(done.duplicates ? { duplicates: done.duplicates } : {}),
-      } as RecordingSession;
+      };
     }
     return reply.code(404).send({ error: 'Session not found' });
   });
@@ -370,7 +370,7 @@ async function shutdown(signal: string, app: FastifyInstance): Promise<void> {
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 if (!process.env.VITEST) {
-  (async (): Promise<void> => {
+  void (async (): Promise<void> => {
     const app = await buildApp(sessions, completedResults);
     try {
       await app.listen({ port: PORT, host: '0.0.0.0' });

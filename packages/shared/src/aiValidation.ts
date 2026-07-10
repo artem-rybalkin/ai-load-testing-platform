@@ -8,7 +8,7 @@
 // reject malformed output instead of forwarding it to the UI unchecked.
 
 /** Extracts and parses a {...} or [...] JSON block from raw LLM text. Returns null on no match or parse failure — never throws. */
-export function extractAndParseAIJson(text: string, kind: 'object' | 'array' = 'object'): unknown | null {
+export function extractAndParseAIJson(text: string, kind: 'object' | 'array' = 'object'): unknown {
   const re = kind === 'array' ? /\[[\s\S]*\]/ : /\{[\s\S]*\}/;
   const match = text.match(re);
   if (!match) return null;
