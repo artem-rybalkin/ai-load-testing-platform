@@ -455,9 +455,9 @@ export const initDb = async (): Promise<void> => {
 };
 
 export const findOrCreateProject = async (name: string, p: Pool = pool): Promise<string> => {
-  const { rows } = await p.query(
+  const { rows } = await p.query<{ id: string }>(
     `INSERT INTO projects (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
     [name.trim().toLowerCase()]
   );
-  return rows[0].id as string;
+  return rows[0].id;
 };

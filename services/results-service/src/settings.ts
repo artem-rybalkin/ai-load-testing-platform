@@ -9,8 +9,8 @@ export async function getAiProviderSetting(pool: Pool): Promise<AiProviderSettin
   );
   if (rows.length === 0) return DEFAULT_AI_PROVIDER_SETTING;
   try {
-    const parsed = JSON.parse(rows[0].value);
-    const provider: AiProviderName = AI_PROVIDER_NAMES.includes(parsed.provider) ? parsed.provider : 'gemini';
+    const parsed = JSON.parse(rows[0].value) as { provider?: unknown; fallbacks?: unknown };
+    const provider: AiProviderName = AI_PROVIDER_NAMES.includes(parsed.provider as AiProviderName) ? (parsed.provider as AiProviderName) : 'gemini';
     const fallbacks: AiProviderName[] = Array.isArray(parsed.fallbacks)
       ? parsed.fallbacks.filter((f: unknown): f is AiProviderName => AI_PROVIDER_NAMES.includes(f as AiProviderName))
       : [];

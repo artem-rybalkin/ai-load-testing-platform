@@ -8,6 +8,59 @@ import { validateSsrfSafeUrl } from '@alt/shared';
 import { checkScheduleQuota } from '../quotas';
 import { reloadSchedule, removeSchedule } from '../scheduler';
 
+interface WebhookRow {
+  id: string;
+  url: string;
+  events: string[];
+  secret: string | null;
+  format: string;
+  created_at: Date;
+  project_id: string | null;
+  workspace_id: string | null;
+}
+
+interface LogSourceRow {
+  id: string;
+  name: string;
+  platform: string | null;
+  url_template: string;
+  metrics_endpoint_template: string | null;
+  auth_header: string | null;
+  created_at: Date;
+  project_id: string | null;
+}
+
+interface ScheduleRow {
+  id: string;
+  name: string;
+  cron: string;
+  type: string;
+  target_url: string;
+  description: string | null;
+  options: Record<string, unknown>;
+  thresholds: Record<string, unknown> | null;
+  enabled: boolean;
+  last_run_at: Date | null;
+  next_run_at: Date | null;
+  created_at: Date;
+  project_id: string | null;
+  workspace_id: string | null;
+}
+
+interface TestPresetRow {
+  id: string;
+  name: string;
+  description: string | null;
+  type: string;
+  target_url: string | null;
+  options: Record<string, unknown>;
+  thresholds: Record<string, unknown> | null;
+  used_count: number;
+  created_at: Date;
+  project_id: string | null;
+  workspace_id: string | null;
+}
+
 export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): void {
 
   // ── Webhook CRUD ─────────────────────────────────────────────────────────────
@@ -20,7 +73,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
       const ssrfError = validateSsrfSafeUrl(url);
       if (ssrfError) return reply.code(400).send({ error: ssrfError });
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<WebhookRow>(
         `INSERT INTO webhooks (url, events, secret, format, project_id, workspace_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
         [url, events, secret ?? null, format, projectId, workspaceId ?? null]
       );
@@ -31,7 +84,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
   app.get<{ Querystring: { workspaceId?: string } }>('/webhooks', async (request) => {
     const projectId = request.projectId ?? null;
     const workspaceId = request.query.workspaceId ?? null;
-    const { rows } = await rPool.query(
+    const { rows } = await rPool.query<Pick<WebhookRow, 'id' | 'url' | 'events' | 'format' | 'created_at'>>(
       `SELECT id, url, events, format, created_at FROM webhooks
        WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
          AND ($2::uuid IS NULL OR workspace_id = $2::uuid)
@@ -56,7 +109,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
     const projectId = request.projectId ?? null;
     // auth_header deliberately excluded — it can hold a raw bearer/API token and this
     // route is readable by any team member (viewer included), not just admins.
-    const { rows } = await rPool.query(
+    const { rows } = await rPool.query<Omit<LogSourceRow, 'auth_header'>>(
       `SELECT id, name, platform, url_template, metrics_endpoint_template, project_id, created_at
        FROM log_sources WHERE ($1::uuid IS NULL OR project_id = $1::uuid) ORDER BY created_at DESC`,
       [projectId]
@@ -76,7 +129,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
         if (metricsSsrfError) return reply.code(400).send({ error: `metricsEndpointTemplate: ${metricsSsrfError}` });
       }
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<Omit<LogSourceRow, 'auth_header'>>(
         `INSERT INTO log_sources (name, platform, url_template, metrics_endpoint_template, auth_header, project_id)
          VALUES ($1,$2,$3,$4,$5,$6)
          RETURNING id, name, platform, url_template, metrics_endpoint_template, project_id, created_at`,
@@ -111,7 +164,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
       const projectId = request.projectId ?? null;
       vals.push(id);
       vals.push(projectId);
-      const { rows } = await pool.query(`UPDATE log_sources SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING id, name, platform, url_template, metrics_endpoint_template, project_id, created_at`, vals);
+      const { rows } = await pool.query<Omit<LogSourceRow, 'auth_header'>>(`UPDATE log_sources SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING id, name, platform, url_template, metrics_endpoint_template, project_id, created_at`, vals);
       if (rows.length === 0) return reply.code(404).send({ error: 'Log source not found' });
       return { logSource: rows[0] };
     }
@@ -131,7 +184,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
   app.get<{ Querystring: { workspaceId?: string } }>('/schedules', async (request) => {
     const projectId = request.projectId ?? null;
     const workspaceId = request.query.workspaceId ?? null;
-    const { rows } = await rPool.query(
+    const { rows } = await rPool.query<ScheduleRow>(
       `SELECT * FROM schedules WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
          AND ($2::uuid IS NULL OR workspace_id = $2::uuid) ORDER BY created_at DESC`,
       [projectId, workspaceId]
@@ -150,7 +203,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
         if (quotaError) return reply.code(429).send({ error: quotaError });
       }
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<ScheduleRow>(
         `INSERT INTO schedules (name, cron, type, target_url, description, options, thresholds, enabled, project_id, workspace_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [name, cron, type, target_url, description ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, enabled, projectId, workspaceId ?? null]
@@ -192,7 +245,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
       }
       vals.push(id);
       vals.push(projectId);
-      const { rows } = await pool.query(`UPDATE schedules SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING *`, vals);
+      const { rows } = await pool.query<ScheduleRow>(`UPDATE schedules SET ${sets.join(', ')} WHERE id = $${i} AND ($${i + 1}::uuid IS NULL OR project_id = $${i + 1}::uuid) RETURNING *`, vals);
       if (rows.length === 0) return reply.code(404).send({ error: 'Schedule not found' });
       await reloadSchedule(pool, id);
       return { schedule: rows[0] };
@@ -213,7 +266,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
     '/schedules/:id/run',
     async (request, reply) => {
       const projectId = request.projectId ?? null;
-      const { rows } = await rPool.query(
+      const { rows } = await rPool.query<ScheduleRow>(
         `SELECT * FROM schedules WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
         [request.params.id, projectId]
       );
@@ -241,7 +294,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
           projectId: s.project_id ?? undefined,
         }),
       });
-      const body = await res.json();
+      const body: unknown = await res.json();
       // Only mark the schedule as having run when api-service actually accepted
       // the test — previously this updated unconditionally, so a rejected
       // (e.g. unauthenticated) trigger would still report success and update
@@ -258,7 +311,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
   app.get<{ Querystring: { workspaceId?: string } }>('/presets', async (request) => {
     const projectId = request.projectId ?? null;
     const workspaceId = request.query.workspaceId ?? null;
-    const { rows } = await rPool.query(
+    const { rows } = await rPool.query<TestPresetRow>(
       `SELECT * FROM test_presets WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
          AND ($2::uuid IS NULL OR workspace_id = $2::uuid) ORDER BY used_count DESC, created_at DESC`,
       [projectId, workspaceId]
@@ -272,7 +325,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
       const { name, description, type, target_url, options, thresholds, workspaceId } = request.body;
       if (!name || !type || !options) return reply.code(400).send({ error: 'name, type, options are required' });
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<TestPresetRow>(
         `INSERT INTO test_presets (name, description, type, target_url, options, thresholds, project_id, workspace_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
         [name, description ?? null, type, target_url ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, projectId, workspaceId ?? null]
@@ -285,7 +338,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
     '/presets/:id',
     async (request, reply) => {
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<TestPresetRow>(
         `UPDATE test_presets SET used_count = used_count + 1 WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid) RETURNING *`,
         [request.params.id, projectId]
       );

@@ -6,11 +6,53 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 import PDFDocument from 'pdfkit';
+import type { BackendMetrics, ClientMetrics, AnalysisResult, LiveStepMetric } from '@alt/shared';
 import { broadcast } from '../ws';
 import { recordAudit } from '../audit';
 import { analyzeResult } from '../analyzer';
 import { getAiCapability } from './helpers';
 import { downsampleLivePoints } from '../liveMetricsDownsample';
+
+// test_results row shape as returned by `SELECT *`/`SELECT r.*` — see the
+// CREATE TABLE / ADD COLUMN statements in db.ts for the authoritative schema.
+// metrics/analysis/steps/test_data are JSONB, auto-parsed to JS values by pg;
+// timestamptz columns come back as Date (no custom type parser is registered).
+interface TestResultRow {
+  id: string;
+  test_id: string;
+  type: string;
+  target_url: string;
+  status: string;
+  metrics: BackendMetrics | ClientMetrics | null;
+  script_id: string | null;
+  reused_script: boolean | null;
+  perf_status: string | null;
+  analysis: AnalysisResult | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  created_at: Date;
+  is_baseline: boolean | null;
+  duration_seconds: number | null;
+  status_message: string | null;
+  steps: unknown;
+  test_data: unknown;
+  project_id: string | null;
+  execution_log: string | null;
+  workspace_id: string | null;
+}
+
+interface TestScriptRow {
+  id: string;
+  target_url: string;
+  test_type: string;
+  script: string;
+  description: string | null;
+  used_count: number;
+  created_at: Date;
+  updated_at: Date;
+  project_id: string | null;
+  workspace_id: string | null;
+}
 
 export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): void {
 
@@ -158,8 +200,9 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
           r.is_baseline, r.created_at, r.completed_at, r.started_at, r.duration_seconds,
           r.status_message, s.description AS script_description`;
 
+        type ListRow = Pick<TestResultRow, 'id' | 'test_id' | 'type' | 'target_url' | 'status' | 'perf_status' | 'metrics' | 'is_baseline' | 'created_at' | 'completed_at' | 'started_at' | 'duration_seconds' | 'status_message'> & { script_description: string | null };
         const { rows } = before
-          ? await rPool.query(
+          ? await rPool.query<ListRow>(
               `SELECT ${LIST_COLUMNS}
                FROM test_results r
                LEFT JOIN test_scripts s ON r.script_id = s.id
@@ -169,7 +212,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
                ORDER BY r.created_at DESC LIMIT $4`,
               [projectId, workspaceId, before, limit],
             )
-          : await rPool.query(
+          : await rPool.query<ListRow>(
               `SELECT ${LIST_COLUMNS}
                FROM test_results r
                LEFT JOIN test_scripts s ON r.script_id = s.id
@@ -189,7 +232,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
   app.get('/results/active', async (request, reply) => {
     try {
       const projectId = request.projectId ?? null;
-      const { rows } = await rPool.query(
+      const { rows } = await rPool.query<Pick<TestResultRow, 'test_id' | 'type' | 'target_url' | 'status' | 'created_at'>>(
         `SELECT test_id, type, target_url, status, created_at
          FROM test_results
          WHERE status IN ('pending', 'running')
@@ -210,7 +253,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
       const { a, b } = request.query;
       if (!a || !b) return reply.code(400).send({ error: 'Query params a and b are required' });
       const projectId = request.projectId ?? null;
-      const { rows } = await rPool.query(
+      const { rows } = await rPool.query<TestResultRow & { script: string | null; script_description: string | null }>(
         `SELECT r.*, s.script, s.description AS script_description FROM test_results r
          LEFT JOIN test_scripts s ON r.script_id = s.id
          WHERE r.test_id = ANY($1) AND ($2::uuid IS NULL OR r.project_id = $2::uuid)`,
@@ -230,7 +273,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
       if (!url) return reply.code(400).send({ error: 'Query param url is required' });
       const n = Math.min(parseInt(limit ?? '20', 10), 100);
       const projectId = request.projectId ?? null;
-      const { rows } = await rPool.query(
+      const { rows } = await rPool.query<Pick<TestResultRow, 'test_id' | 'type' | 'status' | 'metrics' | 'perf_status' | 'created_at'>>(
         `SELECT test_id, type, status, metrics, perf_status, created_at
          FROM test_results
          WHERE target_url = $1 AND status = 'completed'
@@ -249,7 +292,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
     async (request, reply) => {
       const { testId } = request.params;
       const projectId = request.projectId ?? null;
-      const { rows } = await rPool.query(
+      const { rows } = await rPool.query<TestResultRow & { script: string | null; script_description: string | null }>(
         `SELECT r.*, s.script, s.description AS script_description
          FROM test_results r
          LEFT JOIN test_scripts s ON r.script_id = s.id
@@ -268,7 +311,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
     try {
       const projectId = request.projectId ?? null;
       const workspaceId = request.query.workspaceId ?? null;
-      const { rows } = await rPool.query(
+      const { rows } = await rPool.query<Pick<TestScriptRow, 'id' | 'target_url' | 'test_type' | 'used_count' | 'created_at' | 'updated_at'>>(
         `SELECT id, target_url, test_type, used_count, created_at, updated_at
          FROM test_scripts
          WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
@@ -288,7 +331,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
     async (request, reply) => {
       const { id } = request.params;
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<TestScriptRow>(
         'SELECT * FROM test_scripts WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)',
         [id, projectId],
       );
@@ -349,7 +392,20 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
       const { testId } = request.params;
       const projectId = request.projectId ?? null;
       try {
-        const { rows } = await rPool.query(
+        // timestamp comes back as a Date (no custom type parser registered) — Fastify's
+        // JSON serialization converts it to an ISO string on the wire, matching the
+        // LiveMetricPoint.timestamp: string contract consumers see.
+        interface LiveMetricRow {
+          timestamp: Date;
+          vus: number;
+          rps: number;
+          avgResponseTime: number;
+          errorRate: number;
+          clientErrorRate: number;
+          serverErrorRate: number;
+          stepMetrics: LiveStepMetric[] | null;
+        }
+        const { rows } = await rPool.query<LiveMetricRow>(
           `SELECT lm.timestamp, lm.vus, lm.rps, lm.avg_response_time AS "avgResponseTime", lm.error_rate AS "errorRate",
                   lm.client_error_rate AS "clientErrorRate", lm.server_error_rate AS "serverErrorRate", lm.step_metrics AS "stepMetrics"
            FROM live_metrics lm
@@ -372,7 +428,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
       const { testId } = request.params;
       const projectId = request.projectId ?? null;
       try {
-        const { rows } = await rPool.query(
+        const { rows } = await rPool.query<{ executionLog: string | null }>(
           `SELECT tr.execution_log AS "executionLog"
            FROM test_results tr
            WHERE tr.test_id = $1 AND ($2::uuid IS NULL OR tr.project_id = $2::uuid)`,
@@ -392,7 +448,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
     async (request, reply) => {
       const { testId } = request.params;
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<Pick<TestResultRow, 'target_url' | 'type'>>(
         `SELECT target_url, type FROM test_results
          WHERE test_id = $1 AND status = 'completed' AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
         [testId, projectId],
@@ -431,7 +487,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
     async (request, reply) => {
       const { testId } = request.params;
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<TestResultRow & { script: string | null }>(
         `SELECT r.*, s.script FROM test_results r LEFT JOIN test_scripts s ON r.script_id = s.id
          WHERE r.test_id = $1 AND ($2::uuid IS NULL OR r.project_id = $2::uuid)`,
         [testId, projectId],
@@ -447,12 +503,19 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
         if (ai.configured) {
           try {
             const m = result.metrics;
-            const summaryCtx = {
-              url: result.target_url, type: result.type, perfStatus: result.perf_status,
-              p95: m.p95ResponseTime, avg: m.avgResponseTime, rps: m.rps,
-              errorRate: m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : '0',
-              analysis: result.analysis?.summary,
-            };
+            const summaryCtx = m.type === 'backend'
+              ? {
+                  url: result.target_url, type: result.type, perfStatus: result.perf_status,
+                  p95: m.p95ResponseTime, avg: m.avgResponseTime, rps: m.rps,
+                  errorRate: m.requestsTotal > 0 ? ((m.requestsFailed / m.requestsTotal) * 100).toFixed(1) : '0',
+                  analysis: result.analysis?.summary,
+                }
+              : {
+                  url: result.target_url, type: result.type, perfStatus: result.perf_status,
+                  lcp: m.lcp, fcp: m.fcp, ttfb: m.ttfb, cls: m.cls,
+                  lighthousePerformance: m.lighthouseScore?.performance,
+                  analysis: result.analysis?.summary,
+                };
             execSummary = (await ai.generateText(
               `Write a 3-sentence executive summary of this load test result for a non-technical manager. Be clear, factual, and end with a recommendation.
 Data: ${JSON.stringify(summaryCtx)}
@@ -509,10 +572,12 @@ Return only the summary text, no JSON, no markdown.`,
               ['p99 response',    `${Math.round(m.p99ResponseTime)}ms`],
             ]
           : [
-              ['LCP',  `${Math.round(m.lcp)}ms`],
-              ['FCP',  `${Math.round(m.fcp)}ms`],
-              ['TTFB', `${Math.round(m.ttfb)}ms`],
-              ['FID',  `${Math.round(m.fid)}ms`],
+              // lcp/fcp/ttfb/fid coalesce to undefined (not 0) when their PerformanceObserver
+              // never fired — show '—' rather than the misleading "NaNms" Math.round(undefined) gives.
+              ['LCP',  m.lcp  != null ? `${Math.round(m.lcp)}ms`  : '—'],
+              ['FCP',  m.fcp  != null ? `${Math.round(m.fcp)}ms`  : '—'],
+              ['TTFB', m.ttfb != null ? `${Math.round(m.ttfb)}ms` : '—'],
+              ['FID',  m.fid  != null ? `${Math.round(m.fid)}ms`  : '—'],
               ['CLS',  m.cls?.toFixed(3)],
             ];
         for (const [k, v] of metricRows) {
@@ -580,7 +645,7 @@ Return only the summary text, no JSON, no markdown.`,
     async (request, reply) => {
       const { testId } = request.params;
       const projectId = request.projectId ?? null;
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<TestResultRow>(
         `SELECT * FROM test_results WHERE test_id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
         [testId, projectId],
       );
@@ -628,7 +693,7 @@ Return only the summary text, no JSON, no markdown.`,
         if (m.tti != null) add('tti', m.tti);
       }
 
-      if (m?.stepMetrics?.length) {
+      if (m?.type === 'backend' && m.stepMetrics?.length) {
         lines.push('');
         lines.push('step,avgResponseTime,p95ResponseTime,requestsTotal,requestsFailed');
         for (const s of m.stepMetrics) {

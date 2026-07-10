@@ -5,6 +5,14 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 
+interface WorkspaceRow {
+  id: string;
+  team_id: string;
+  name: string;
+  description: string | null;
+  created_at: Date;
+}
+
 export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }): void {
 
   // ── GET /workspaces ───────────────────────────────────────────────────────────
@@ -13,7 +21,7 @@ export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }):
     const projectId = (request as { projectId?: string }).projectId ?? null;
     if (!projectId) return reply.code(403).send({ error: 'Team required' });
     try {
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<WorkspaceRow>(
         `SELECT id, team_id, name, description, created_at FROM workspaces WHERE team_id = $1 ORDER BY name ASC`,
         [projectId],
       );
@@ -35,7 +43,7 @@ export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }):
       const { name, description } = request.body;
       if (!name?.trim()) return reply.code(400).send({ error: 'name is required' });
       try {
-        const { rows } = await pool.query(
+        const { rows } = await pool.query<WorkspaceRow>(
           `INSERT INTO workspaces (team_id, name, description) VALUES ($1, $2, $3) RETURNING id, team_id, name, description, created_at`,
           [projectId, name.trim(), description?.trim() ?? null],
         );
@@ -66,7 +74,7 @@ export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }):
       if (!sets.length) return reply.code(400).send({ error: 'Nothing to update' });
       vals.push(id, projectId);
       try {
-        const { rows } = await pool.query(
+        const { rows } = await pool.query<WorkspaceRow>(
           `UPDATE workspaces SET ${sets.join(', ')} WHERE id = $${vals.length - 1} AND team_id = $${vals.length} RETURNING id, team_id, name, description, created_at`,
           vals,
         );
@@ -91,7 +99,7 @@ export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }):
       if (role !== 'admin') return reply.code(403).send({ error: 'Only admins can delete workspaces' });
       const { id } = request.params;
       try {
-        const { rowCount } = await pool.query(
+        const { rowCount } = await pool.query<WorkspaceRow>(
           `DELETE FROM workspaces WHERE id = $1 AND team_id = $2`,
           [id, projectId],
         );

@@ -155,7 +155,7 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
   const projectId = result.projectId ?? null;
 
   // 1. Fetch previous metrics (read-only — no pg client held during slow analyser call)
-  const { rows: prevRows } = await p.query(
+  const { rows: prevRows } = await p.query<{ metrics: BackendMetrics | ClientMetrics }>(
     `SELECT metrics FROM test_results
      WHERE target_url = $1
        AND type = $2
@@ -175,14 +175,14 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
     result.targetUrl,
     result.metrics.type,
     result.metrics,
-    previousMetrics as BackendMetrics | ClientMetrics | null,
+    previousMetrics,
     result.thresholds,
     result.startedAt ?? null,
     result.completedAt ?? null,
     projectId,
   ) ?? analyzeResult(
     result.metrics,
-    previousMetrics as BackendMetrics | ClientMetrics | null,
+    previousMetrics,
     result.thresholds
   );
 
