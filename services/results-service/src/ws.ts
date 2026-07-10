@@ -48,6 +48,10 @@ if (subscriber) {
   });
 }
 
+type HeartbeatSocket = WebSocket & { isAlive?: boolean };
+
+const HEARTBEAT_INTERVAL_MS = 30000;
+
 /**
  * Attach a WebSocket server to the given HTTP server (Fastify's underlying
  * server). Handles the HTTP→WS upgrade for GET /ws without requiring any
@@ -56,9 +60,29 @@ if (subscriber) {
 export const setupWebSocketServer = (server: Server): void => {
   const wss = new WebSocketServer({ noServer: true });
 
+  // Dead TCP connections (browser crash, NAT timeout, lost mobile signal) never
+  // fire 'close'/'error' — without a ping/pong sweep they'd stay in `clients`
+  // forever, growing broadcast overhead on every event indefinitely.
+  const heartbeat = setInterval(() => {
+    for (const ws of clients) {
+      const hb = ws as HeartbeatSocket;
+      if (hb.isAlive === false) {
+        clients.delete(hb);
+        hb.terminate();
+        continue;
+      }
+      hb.isAlive = false;
+      hb.ping();
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+  wss.on('close', () => clearInterval(heartbeat));
+
   server.on('upgrade', (req, socket, head) => {
     if (req.url === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => {
+        const hb = ws as HeartbeatSocket;
+        hb.isAlive = true;
+        hb.on('pong', () => { hb.isAlive = true; });
         clients.add(ws);
         ws.on('close', () => clients.delete(ws));
         ws.on('error', () => clients.delete(ws));

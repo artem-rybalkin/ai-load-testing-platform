@@ -19,8 +19,10 @@ const WS_CLOSING = 2;
 
 interface MockWS {
   readyState: number;
-  send:    ReturnType<typeof vi.fn>;
-  on:      ReturnType<typeof vi.fn>;
+  send:      ReturnType<typeof vi.fn>;
+  on:        ReturnType<typeof vi.fn>;
+  ping:      ReturnType<typeof vi.fn>;
+  terminate: ReturnType<typeof vi.fn>;
   /** Trigger a registered event handler (e.g. 'close') */
   _trigger: (event: string) => void;
 }
@@ -29,8 +31,10 @@ const makeMockWS = (readyState = WS_OPEN): MockWS => {
   const handlers: Record<string, () => void> = {};
   return {
     readyState,
-    send: vi.fn(),
-    on:   vi.fn((event: string, cb: () => void) => { handlers[event] = cb; }),
+    send:      vi.fn(),
+    on:        vi.fn((event: string, cb: () => void) => { handlers[event] = cb; }),
+    ping:      vi.fn(),
+    terminate: vi.fn(),
     _trigger: (event: string) => handlers[event]?.(),
   };
 };
@@ -62,6 +66,7 @@ describe('ws module', () => {
       }
       class MockWebSocketServer {
         handleUpgrade = mockHandleUpgrade;
+        on = vi.fn();
       }
       return { WebSocketServer: MockWebSocketServer, WebSocket: MockWebSocket };
     });
@@ -237,6 +242,7 @@ describe('ws module', () => {
         }
         class MockWebSocketServer {
           handleUpgrade = mockHandleUpgrade;
+          on = vi.fn();
         }
         return { WebSocketServer: MockWebSocketServer, WebSocket: MockWebSocket };
       });
@@ -358,6 +364,84 @@ describe('ws module', () => {
 
       wsMod.broadcast({ type: 'tests:changed' });
       expect(ws.send).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Heartbeat (zombie-connection detection) ───────────────────────────────
+
+  describe('heartbeat', () => {
+    // Fake timers must be installed BEFORE setupWebSocketServer() runs, since
+    // its setInterval() is only fake-clock-controllable if it's created while
+    // fake timers are already active — the outer beforeEach's module import
+    // (real timers) runs first, so re-do that setup here with fake timers on.
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      lastUpgradeCallback = null;
+
+      mockHandleUpgrade = vi.fn(
+        (_req: unknown, _socket: unknown, _head: unknown, cb: (ws: MockWS) => void) => {
+          lastUpgradeCallback = cb;
+        },
+      );
+
+      vi.doMock('ws', () => {
+        class MockWebSocket {
+          static OPEN    = WS_OPEN;
+          static CLOSING = WS_CLOSING;
+        }
+        class MockWebSocketServer {
+          handleUpgrade = mockHandleUpgrade;
+          on = vi.fn();
+        }
+        return { WebSocketServer: MockWebSocketServer, WebSocket: MockWebSocket };
+      });
+
+      wsMod      = await import('../ws') as typeof WsTypes;
+      mockServer = new EventEmitter();
+      wsMod.setupWebSocketServer(mockServer as never);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('pings every connected client every 30s', () => {
+      const ws = makeMockWS(WS_OPEN);
+      connectClient(ws);
+
+      vi.advanceTimersByTime(30000);
+
+      expect(ws.ping).toHaveBeenCalledOnce();
+      expect(ws.terminate).not.toHaveBeenCalled();
+    });
+
+    it('terminates and removes a client that never responds with pong', () => {
+      const ws = makeMockWS(WS_OPEN);
+      connectClient(ws);
+
+      vi.advanceTimersByTime(30000); // first ping sent, isAlive marked false
+      vi.advanceTimersByTime(30000); // no pong arrived — client is a zombie
+
+      expect(ws.terminate).toHaveBeenCalledOnce();
+
+      wsMod.broadcast({ type: 'tests:changed' });
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('keeps a client alive across multiple intervals when it responds with pong', () => {
+      const ws = makeMockWS(WS_OPEN);
+      connectClient(ws);
+
+      vi.advanceTimersByTime(30000); // first ping sent
+      ws._trigger('pong');           // client responds in time
+      vi.advanceTimersByTime(30000); // second sweep — should NOT terminate
+
+      expect(ws.terminate).not.toHaveBeenCalled();
+      expect(ws.ping).toHaveBeenCalledTimes(2);
+
+      wsMod.broadcast({ type: 'tests:changed' });
+      expect(ws.send).toHaveBeenCalledOnce();
     });
   });
 });
