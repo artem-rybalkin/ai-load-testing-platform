@@ -1,5 +1,6 @@
 node_modules/
 dist/
+*.tsbuildinfo
 
 # Environment files
 .env
@@ -37,3 +38,4 @@ plans/
 
 # Local working notes — not a project artifact for public consumption
 TODO.md
+TECH-STACK.md

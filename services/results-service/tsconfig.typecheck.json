@@ -5,5 +5,9 @@
     "noEmit": true
   },
   "include": ["src/**/*", "../../test-support/**/*"],
-  "exclude": []
+  "exclude": [],
+  "references": [
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/tracing" }
+  ]
 }

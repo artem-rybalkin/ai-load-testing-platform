@@ -1,0 +1,15 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/tracing" },
+    { "path": "services/api-service" },
+    { "path": "services/ai-service" },
+    { "path": "services/analyser-service" },
+    { "path": "services/recorder-service" },
+    { "path": "services/results-service" },
+    { "path": "services/worker-backend" },
+    { "path": "services/worker-client" },
+    { "path": "services/ui" }
+  ]
+}
