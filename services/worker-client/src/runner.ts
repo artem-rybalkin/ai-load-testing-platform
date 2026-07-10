@@ -132,123 +132,144 @@ export const runClientTest = async (
     const sessions = options.sessions || 1;
 
     let totalJsErrors = 0;
+    let sessionsFailed = 0;
 
     // ── Puppeteer sessions: collect Web Vitals ───────────────────────────────
+    // Each session's body is isolated in its own try/catch — a transient failure
+    // (e.g. a navigation timeout) in session 3 of 10 used to throw out of the whole
+    // loop, discarding sessions 4-10 and whatever 1-2 already collected. Now it's
+    // logged and skipped; snapshots/avgNum below already tolerate a shorter array.
     for (let i = 0; i < sessions; i++) {
       testLog.info({ session: i + 1, sessions }, 'Running session');
       await postMessage(`Running browser session ${i + 1} of ${sessions}…`);
       const page = await browser.newPage();
+      try {
+        addLog('INFO', `[session ${i + 1}/${sessions}] Navigating to ${test.targetUrl}`);
 
-      addLog('INFO', `[session ${i + 1}/${sessions}] Navigating to ${test.targetUrl}`);
+        let sessionJsErrors = 0;
+        page.on('pageerror', (err) => {
+          sessionJsErrors++;
+          addLog('ERROR', `[session ${i + 1}] pageerror: ${err.message}`);
+        });
+        page.on('console', (msg: { type(): string; text(): string }) => {
+          const t = msg.type();
+          const level = t === 'error' ? 'ERROR' : t === 'warn' ? 'WARN' : 'DEBUG';
+          addLog(level, `[session ${i + 1}] [browser] ${msg.text()}`);
+        });
 
-      let sessionJsErrors = 0;
-      page.on('pageerror', (err) => {
-        sessionJsErrors++;
-        addLog('ERROR', `[session ${i + 1}] pageerror: ${err.message}`);
-      });
-      page.on('console', (msg: { type(): string; text(): string }) => {
-        const t = msg.type();
-        const level = t === 'error' ? 'ERROR' : t === 'warn' ? 'WARN' : 'DEBUG';
-        addLog(level, `[session ${i + 1}] [browser] ${msg.text()}`);
-      });
+        const cdp = await page.createCDPSession();
+        await (cdp as { send(cmd: string): Promise<void> }).send('Performance.enable');
 
-      const cdp = await page.createCDPSession();
-      await (cdp as { send(cmd: string): Promise<void> }).send('Performance.enable');
+        if (options.headers && Object.keys(options.headers).length > 0) {
+          await page.setExtraHTTPHeaders(options.headers);
+        }
 
-      if (options.headers && Object.keys(options.headers).length > 0) {
-        await page.setExtraHTTPHeaders(options.headers);
-      }
+        await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: navTimeoutMs });
+        pageLoadCount++;
 
-      await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: navTimeoutMs });
-      pageLoadCount++;
+        const ttfb = await page.evaluate(() => {
+          const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
+          return nav ? Math.round(nav.responseStart - nav.requestStart) : 0;
+        });
 
-      const ttfb = await page.evaluate(() => {
-        const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
-        return nav ? Math.round(nav.responseStart - nav.requestStart) : 0;
-      });
+        const webVitals = await page.evaluate(() => {
+          return new Promise<{ lcp: number; fid: number; cls: number; fcp: number; inp: number; longTaskCount: number }>((resolve) => {
+            let lcp = 0;
+            let fid = 0;
+            let cls = 0;
+            let fcp = 0;
+            let inp = 0;
+            let longTaskCount = 0;
 
-      const webVitals = await page.evaluate(() => {
-        return new Promise<{ lcp: number; fid: number; cls: number; fcp: number; inp: number; longTaskCount: number }>((resolve) => {
-          let lcp = 0;
-          let fid = 0;
-          let cls = 0;
-          let fcp = 0;
-          let inp = 0;
-          let longTaskCount = 0;
+            new PerformanceObserver((list) => {
+              const entries = list.getEntries();
+              lcp = entries[entries.length - 1].startTime;
+            }).observe({ type: 'largest-contentful-paint', buffered: true });
 
-          new PerformanceObserver((list) => {
-            const entries = list.getEntries();
-            lcp = entries[entries.length - 1].startTime;
-          }).observe({ type: 'largest-contentful-paint', buffered: true });
-
-          new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-              const e = entry as ExtendedPerformanceEventTiming;
-              fid = e.processingStart - e.startTime;
-            }
-          }).observe({ type: 'first-input', buffered: true });
-
-          new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-              const e = entry as LayoutShift;
-              if (!e.hadRecentInput) cls += e.value;
-            }
-          }).observe({ type: 'layout-shift', buffered: true });
-
-          new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-              if (entry.name === 'first-contentful-paint') fcp = entry.startTime;
-            }
-          }).observe({ type: 'paint', buffered: true });
-
-          try {
             new PerformanceObserver((list) => {
               for (const entry of list.getEntries()) {
                 const e = entry as ExtendedPerformanceEventTiming;
-                const duration = e.processingStart - e.startTime;
-                if (duration > inp) inp = duration;
+                fid = e.processingStart - e.startTime;
               }
-            }).observe({ type: 'event', buffered: true, durationThreshold: 16 } as PerformanceObserverInit);
-          } catch { /* event type unsupported */ }
+            }).observe({ type: 'first-input', buffered: true });
 
-          try {
             new PerformanceObserver((list) => {
-              longTaskCount += list.getEntries().length;
-            }).observe({ type: 'longtask', buffered: true });
-          } catch { /* longtask type unsupported */ }
+              for (const entry of list.getEntries()) {
+                const e = entry as LayoutShift;
+                if (!e.hadRecentInput) cls += e.value;
+              }
+            }).observe({ type: 'layout-shift', buffered: true });
 
-          setTimeout(() => resolve({ lcp, fid, cls, fcp, inp, longTaskCount }), 3000);
+            new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                if (entry.name === 'first-contentful-paint') fcp = entry.startTime;
+              }
+            }).observe({ type: 'paint', buffered: true });
+
+            try {
+              new PerformanceObserver((list) => {
+                for (const entry of list.getEntries()) {
+                  const e = entry as ExtendedPerformanceEventTiming;
+                  const duration = e.processingStart - e.startTime;
+                  if (duration > inp) inp = duration;
+                }
+              }).observe({ type: 'event', buffered: true, durationThreshold: 16 } as PerformanceObserverInit);
+            } catch { /* event type unsupported */ }
+
+            try {
+              new PerformanceObserver((list) => {
+                longTaskCount += list.getEntries().length;
+              }).observe({ type: 'longtask', buffered: true });
+            } catch { /* longtask type unsupported */ }
+
+            setTimeout(() => resolve({ lcp, fid, cls, fcp, inp, longTaskCount }), 3000);
+          });
         });
-      });
 
-      const resourceBreakdown = await page.evaluate((): ResourceBreakdown => {
-        const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
-        const bd = { jsSize: 0, cssSize: 0, imageSize: 0, fontSize: 0, xhrSize: 0, totalSize: 0, requestCount: entries.length };
-        for (const e of entries) {
-          const kb = (e.transferSize || 0) / 1024;
-          bd.totalSize += kb;
-          if (e.initiatorType === 'script') bd.jsSize += kb;
-          else if (e.initiatorType === 'link' || e.initiatorType === 'css') bd.cssSize += kb;
-          else if (e.initiatorType === 'img') bd.imageSize += kb;
-          else if (e.initiatorType === 'font' || /\.(woff2?|ttf|otf|eot)/i.test(e.name)) bd.fontSize += kb;
-          else if (e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch') bd.xhrSize += kb;
-        }
-        return {
-          jsSize: Math.round(bd.jsSize * 10) / 10,
-          cssSize: Math.round(bd.cssSize * 10) / 10,
-          imageSize: Math.round(bd.imageSize * 10) / 10,
-          fontSize: Math.round(bd.fontSize * 10) / 10,
-          xhrSize: Math.round(bd.xhrSize * 10) / 10,
-          totalSize: Math.round(bd.totalSize * 10) / 10,
-          requestCount: bd.requestCount,
-        };
-      });
+        const resourceBreakdown = await page.evaluate((): ResourceBreakdown => {
+          const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+          const bd = { jsSize: 0, cssSize: 0, imageSize: 0, fontSize: 0, xhrSize: 0, totalSize: 0, requestCount: entries.length };
+          for (const e of entries) {
+            const kb = (e.transferSize || 0) / 1024;
+            bd.totalSize += kb;
+            if (e.initiatorType === 'script') bd.jsSize += kb;
+            else if (e.initiatorType === 'link' || e.initiatorType === 'css') bd.cssSize += kb;
+            else if (e.initiatorType === 'img') bd.imageSize += kb;
+            else if (e.initiatorType === 'font' || /\.(woff2?|ttf|otf|eot)/i.test(e.name)) bd.fontSize += kb;
+            else if (e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch') bd.xhrSize += kb;
+          }
+          return {
+            jsSize: Math.round(bd.jsSize * 10) / 10,
+            cssSize: Math.round(bd.cssSize * 10) / 10,
+            imageSize: Math.round(bd.imageSize * 10) / 10,
+            fontSize: Math.round(bd.fontSize * 10) / 10,
+            xhrSize: Math.round(bd.xhrSize * 10) / 10,
+            totalSize: Math.round(bd.totalSize * 10) / 10,
+            requestCount: bd.requestCount,
+          };
+        });
 
-      totalJsErrors += sessionJsErrors;
-      snapshots.push({ lcp: webVitals.lcp, fid: webVitals.fid, cls: webVitals.cls, ttfb, fcp: webVitals.fcp, inp: webVitals.inp, longTaskCount: webVitals.longTaskCount, resourceBreakdown });
-      await page.close();
-      testLog.info({ session: i + 1, metrics: snapshots[i] }, 'Session complete');
-      addLog('INFO', `[session ${i + 1}/${sessions}] Complete — LCP ${Math.round(webVitals.lcp)}ms FCP ${Math.round(webVitals.fcp)}ms TTFB ${ttfb}ms CLS ${webVitals.cls.toFixed(3)}${sessionJsErrors > 0 ? ` jsErrors=${sessionJsErrors}` : ''}`);
+        totalJsErrors += sessionJsErrors;
+        snapshots.push({ lcp: webVitals.lcp, fid: webVitals.fid, cls: webVitals.cls, ttfb, fcp: webVitals.fcp, inp: webVitals.inp, longTaskCount: webVitals.longTaskCount, resourceBreakdown });
+        testLog.info({ session: i + 1, metrics: snapshots[snapshots.length - 1] }, 'Session complete');
+        addLog('INFO', `[session ${i + 1}/${sessions}] Complete — LCP ${Math.round(webVitals.lcp)}ms FCP ${Math.round(webVitals.fcp)}ms TTFB ${ttfb}ms CLS ${webVitals.cls.toFixed(3)}${sessionJsErrors > 0 ? ` jsErrors=${sessionJsErrors}` : ''}`);
+      } catch (err) {
+        sessionsFailed++;
+        testLog.warn({ session: i + 1, err: (err as Error).message }, 'Session failed — recording as skipped and continuing');
+        addLog('WARN', `[session ${i + 1}/${sessions}] Failed (skipped): ${(err as Error).message}`);
+      } finally {
+        await page.close().catch(() => {});
+      }
+    }
+
+    if (sessionsFailed > 0) {
+      addLog('WARN', `${sessionsFailed} of ${sessions} session(s) failed and were skipped`);
+    }
+    // Every session failed — nothing to report. Matches the pre-existing "throw on
+    // no usable data" behavior this replaced (a single-session failure used to
+    // throw out of the whole loop unconditionally).
+    if (snapshots.length === 0) {
+      throw new Error(`All ${sessions} session(s) failed — no Web Vitals collected`);
     }
 
     // ── Lighthouse audit — reuses the same Chrome instance via CDP port ──────

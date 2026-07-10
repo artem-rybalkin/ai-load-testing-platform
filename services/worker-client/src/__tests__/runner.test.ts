@@ -273,6 +273,40 @@ describe('runClientTest — multiple sessions', () => {
     expect(result.metrics.lcp).toBe(1500); // (1000 + 2000) / 2
     expect(result.metrics.ttfb).toBe(150); // (100 + 200) / 2
   });
+
+  it('one failed session does not abort the rest — returns metrics averaged over the survivors', async () => {
+    const failingPage = makeMockPage({ gotoError: new Error('transient navigation timeout') });
+    const page2 = makeMockPage({ ttfb: 100, webVitals: makeWebVitals({ lcp: 1000 }) });
+    const page3 = makeMockPage({ ttfb: 300, webVitals: makeWebVitals({ lcp: 3000 }) });
+    let callCount = 0;
+    const pagesInOrder = [failingPage, page2, page3];
+    const browser = makeMockBrowser({
+      newPageResult: () => pagesInOrder[callCount++],
+    });
+    const { ctx } = makeCtx({ browser });
+    const test = { ...BASE_TEST, options: { sessions: 3, duration: '30s', collectWebVitals: true } as TestRequest['options'] };
+
+    const result = await runClientTest(test, ctx);
+
+    expect(browser.newPage).toHaveBeenCalledTimes(3);
+    // Failed session's page is still closed (cleanup happens regardless of outcome).
+    expect(failingPage.close).toHaveBeenCalled();
+    // Averaged over only the 2 surviving sessions, not all 3.
+    expect(result.metrics.lcp).toBe(2000); // (1000 + 3000) / 2
+    expect(result.metrics.ttfb).toBe(200); // (100 + 300) / 2
+    expect(result.executionLog).toContain('Failed (skipped)');
+  });
+
+  it('throws if every session fails — nothing usable to report', async () => {
+    const page = makeMockPage({ gotoError: new Error('connection refused') });
+    const browser = makeMockBrowser({ newPageResult: page });
+    const { ctx } = makeCtx({ browser });
+    const test = { ...BASE_TEST, options: { sessions: 2, duration: '30s', collectWebVitals: true } as TestRequest['options'] };
+
+    const err = await runClientTest(test, ctx).catch(e => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('All 2 session(s) failed');
+  });
 });
 
 describe('runClientTest — Lighthouse integration', () => {
