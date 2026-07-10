@@ -1,5 +1,3 @@
-'use client';
-
 import { useRef, useState, useEffect } from 'react';
 import { FlowStep, ExtractRule, ExtractSource, RecordingSession, startRecording, stopRecording, getRecording, suggestParamColumns, RECORDER_URL } from '@/lib/api';
 

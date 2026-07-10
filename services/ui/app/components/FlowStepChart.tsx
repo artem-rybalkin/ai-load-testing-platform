@@ -1,5 +1,3 @@
-'use client';
-
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, Cell
@@ -25,7 +23,8 @@ const TOOLTIP_STYLE = {
   color: 'var(--tx)',
 };
 
-const TICK = { fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const TICK = { fill: 'var(--tx-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const GRID_STROKE = 'var(--border-2)';
 
 export default function FlowStepChart({ steps }: { steps: StepMetric[] }) {
   const data = steps.map(s => ({
@@ -43,7 +42,7 @@ export default function FlowStepChart({ steps }: { steps: StepMetric[] }) {
       </div>
       <ResponsiveContainer width="100%" height={200}>
         <BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke="#f2ede2" vertical={false} />
+          <CartesianGrid stroke={GRID_STROKE} vertical={false} />
           <XAxis dataKey="name" tick={TICK} axisLine={false} tickLine={false} />
           <YAxis tick={TICK} unit="ms" width={50} axisLine={false} tickLine={false} />
           <Tooltip

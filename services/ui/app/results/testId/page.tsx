@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, diagnoseErrors, getTrendNarrative, getExecutionLog, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource, ErrorDiagnosis, BackendMetrics, ClientMetrics } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
+import Skeleton from '@/app/components/Skeleton';
 const BackendChart  = lazy(() => import('@/app/components/BackendChart'));
 const ClientChart   = lazy(() => import('@/app/components/ClientChart'));
 const FlowStepChart = lazy(() => import('@/app/components/FlowStepChart'));
@@ -496,7 +497,7 @@ export default function ResultPage() {
         {isBackend && (isRunning || (livePoints.length > 0 && (isPending || !m))) && (
           <Card>
             <CardHeader title={isRunning ? 'Live Metrics' : 'Test Timeline'} />
-            <div className="p-5"><Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense></div>
+            <div className="p-5"><Suspense fallback={<Skeleton />}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense></div>
           </Card>
         )}
 
@@ -576,7 +577,7 @@ export default function ResultPage() {
             {isBackend && livePoints.length > 0 && (
               <Card>
                 <CardHeader title="Test Timeline" />
-                <div className="p-5"><Suspense fallback={null}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense></div>
+                <div className="p-5"><Suspense fallback={<Skeleton />}><RealtimeChart points={livePoints} startedAt={result.started_at} /></Suspense></div>
               </Card>
             )}
 
@@ -584,7 +585,7 @@ export default function ResultPage() {
               <Card>
                 <CardHeader title={isBackend ? 'Response Distribution' : 'Web Vitals'} />
                 <div className="p-5">
-                  <Suspense fallback={null}>
+                  <Suspense fallback={<Skeleton />}>
                     {result.type === 'flow' && (bm.stepMetrics?.length ?? 0) > 0
                       ? <FlowStepChart steps={bm.stepMetrics!} />
                       : isBackend ? <BackendChart metrics={bm} /> : <ClientChart metrics={cm} />}
@@ -595,7 +596,7 @@ export default function ResultPage() {
               {result.analysis && (
                 <Card>
                   <CardHeader title="Analysis" />
-                  <div className="p-5"><Suspense fallback={null}><AnalysisPanel analysis={result.analysis as any} /></Suspense></div>
+                  <div className="p-5"><Suspense fallback={<Skeleton />}><AnalysisPanel analysis={result.analysis as any} /></Suspense></div>
                 </Card>
               )}
             </div>
@@ -687,7 +688,7 @@ export default function ResultPage() {
               <Card>
                 <CardHeader title={`Trend — ${trend.length} runs for this URL`} />
                 <div className="p-5">
-                  <Suspense fallback={null}><TrendChart trend={trend} metricKey={isBackend ? 'p95ResponseTime' : 'lcp'} label={isBackend ? 'p95 (ms)' : 'LCP (ms)'} /></Suspense>
+                  <Suspense fallback={<Skeleton />}><TrendChart trend={trend} metricKey={isBackend ? 'p95ResponseTime' : 'lcp'} label={isBackend ? 'p95 (ms)' : 'LCP (ms)'} /></Suspense>
                 </div>
                 <div className="px-5 pb-5">
                   {trendNarrative ? (

@@ -1,5 +1,3 @@
-'use client';
-
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell
@@ -24,7 +22,8 @@ const TOOLTIP_STYLE = {
   color: 'var(--tx)',
 };
 
-const TICK = { fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const TICK = { fill: 'var(--tx-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const GRID_STROKE = 'var(--border-2)';
 
 export default function BackendChart({ metrics }: { metrics: BackendMetrics }) {
   const responseTimeData = [
@@ -52,7 +51,7 @@ export default function BackendChart({ metrics }: { metrics: BackendMetrics }) {
         </div>
         <ResponsiveContainer width="100%" height={160}>
           <BarChart data={responseTimeData} barSize={40}>
-            <CartesianGrid stroke="#f2ede2" vertical={false} />
+            <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="name" tick={TICK} axisLine={false} tickLine={false} />
             <YAxis tick={TICK} unit="ms" width={48} axisLine={false} tickLine={false} />
             <Tooltip
@@ -77,7 +76,7 @@ export default function BackendChart({ metrics }: { metrics: BackendMetrics }) {
         </div>
         <ResponsiveContainer width="100%" height={120}>
           <BarChart data={requestsData} barSize={56}>
-            <CartesianGrid stroke="#f2ede2" vertical={false} />
+            <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis dataKey="name" tick={TICK} axisLine={false} tickLine={false} />
             <YAxis tick={TICK} width={48} axisLine={false} tickLine={false} />
             <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'var(--hover)' }} />

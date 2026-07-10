@@ -1,5 +1,3 @@
-'use client';
-
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis,
   ResponsiveContainer, Tooltip

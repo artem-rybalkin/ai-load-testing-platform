@@ -1,5 +1,3 @@
-'use client';
-
 import { useEffect, useState } from 'react';
 import { ServiceHealth } from '@/lib/api';
 import { useHealth } from '@/lib/HealthContext';

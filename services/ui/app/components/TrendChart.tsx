@@ -1,5 +1,3 @@
-'use client';
-
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer
@@ -22,7 +20,8 @@ const TOOLTIP_STYLE = {
   color: 'var(--tx)',
 };
 
-const TICK = { fill: '#6b6557', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const TICK = { fill: 'var(--tx-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' };
+const GRID_STROKE = 'var(--border-2)';
 
 export default function TrendChart({ trend, metricKey = 'p95ResponseTime', label = 'p95 (ms)' }: Props) {
   const data = trend.map((p, i) => ({
@@ -40,7 +39,7 @@ export default function TrendChart({ trend, metricKey = 'p95ResponseTime', label
   return (
     <ResponsiveContainer width="100%" height={160}>
       <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid stroke="#f2ede2" vertical={false} />
+        <CartesianGrid stroke={GRID_STROKE} vertical={false} />
         <XAxis dataKey="run" tick={TICK} axisLine={false} tickLine={false} />
         <YAxis tick={TICK} unit="ms" axisLine={false} tickLine={false} />
         <Tooltip

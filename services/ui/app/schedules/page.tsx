@@ -1,5 +1,3 @@
-'use client';
-
 import { useEffect, useState } from 'react';
 import { getSchedules, createSchedule, updateSchedule, deleteSchedule, runSchedule, convertCron, Schedule } from '@/lib/api';
 import { useWorkspace } from '@/lib/WorkspaceContext';
