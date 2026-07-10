@@ -10,10 +10,14 @@ vi.mock('@/lib/AuthContext', () => ({ useAuth: mockUseAuth }));
 const mockGetMe = vi.hoisted(() => vi.fn());
 const mockGetLiveMetricWindow = vi.hoisted(() => vi.fn());
 const mockSetLiveMetricWindow = vi.hoisted(() => vi.fn());
+const mockGetAiProvider = vi.hoisted(() => vi.fn());
+const mockSetAiProvider = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
   getMe: mockGetMe,
   getLiveMetricWindow: mockGetLiveMetricWindow,
   setLiveMetricWindow: mockSetLiveMetricWindow,
+  getAiProvider: mockGetAiProvider,
+  setAiProvider: mockSetAiProvider,
 }));
 
 import SettingsPage, { loader } from '../app/settings/page';
@@ -37,10 +41,18 @@ function setUser(user: typeof adminUser | typeof memberUser) {
   mockGetMe.mockResolvedValue(user);
 }
 
+const defaultAiProvider = {
+  provider: 'gemini' as const,
+  fallbacks: [] as string[],
+  available: { gemini: true, openai: false, anthropic: false },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetLiveMetricWindow.mockResolvedValue({ windowSec: 10 });
   mockSetLiveMetricWindow.mockResolvedValue({ windowSec: 10 });
+  mockGetAiProvider.mockResolvedValue(defaultAiProvider);
+  mockSetAiProvider.mockResolvedValue({ provider: 'gemini', fallbacks: [] });
 });
 
 describe('SettingsPage — non-admin', () => {
@@ -50,6 +62,7 @@ describe('SettingsPage — non-admin', () => {
 
     expect(await screen.findByText(/Admin access required/i)).toBeInTheDocument();
     expect(mockGetLiveMetricWindow).not.toHaveBeenCalled();
+    expect(mockGetAiProvider).not.toHaveBeenCalled();
   });
 
   it('does not render the live-metrics-window panel at all', async () => {
@@ -58,6 +71,7 @@ describe('SettingsPage — non-admin', () => {
 
     expect(await screen.findByText(/Admin access required/i)).toBeInTheDocument();
     expect(screen.queryByText('Live metrics window')).not.toBeInTheDocument();
+    expect(screen.queryByText('Platform-default AI provider')).not.toBeInTheDocument();
   });
 });
 
@@ -185,5 +199,79 @@ describe('SettingsPage — admin, saving a change', () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
     expect(screen.queryByText('boom')).not.toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage — platform-default AI provider', () => {
+  it('fetches the current AI provider setting on mount', async () => {
+    setUser(adminUser);
+    renderSettingsPage();
+
+    await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalledOnce());
+    expect(await screen.findByText('Platform-default AI provider')).toBeInTheDocument();
+  });
+
+  it('shows an error message when the fetch fails, instead of the picker', async () => {
+    mockGetAiProvider.mockRejectedValue(new Error('network error'));
+    setUser(adminUser);
+    renderSettingsPage();
+
+    await waitFor(() => expect(screen.getByText('Failed to load AI provider setting')).toBeInTheDocument());
+    expect(screen.queryByText('Primary provider')).not.toBeInTheDocument();
+  });
+
+  it('renders the configured primary provider and marks unconfigured providers', async () => {
+    setUser(adminUser);
+    renderSettingsPage();
+
+    expect(await screen.findByText('Primary provider')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Gemini' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'OpenAI (not configured)' })).toBeInTheDocument();
+  });
+
+  it('calls setAiProvider with the selected primary provider and fallbacks on save', async () => {
+    setUser(adminUser);
+    mockSetAiProvider.mockResolvedValue({ provider: 'openai', fallbacks: ['gemini'] });
+    renderSettingsPage();
+    await screen.findByText('Primary provider');
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'openai' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /gemini/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save provider/i }));
+
+    await waitFor(() => expect(mockSetAiProvider).toHaveBeenCalledWith('openai', ['gemini']));
+  });
+
+  it('shows "Saved" after a successful save', async () => {
+    setUser(adminUser);
+    renderSettingsPage();
+    await screen.findByText('Primary provider');
+
+    fireEvent.click(screen.getByRole('button', { name: /save provider/i }));
+
+    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
+  });
+
+  it('shows the error message and does not show "Saved" when saving fails', async () => {
+    setUser(adminUser);
+    mockSetAiProvider.mockRejectedValue(new Error('save failed'));
+    renderSettingsPage();
+    await screen.findByText('Primary provider');
+
+    fireEvent.click(screen.getByRole('button', { name: /save provider/i }));
+
+    await waitFor(() => expect(screen.getByText('save failed')).toBeInTheDocument());
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument();
+  });
+
+  it('does not offer the primary provider as one of its own fallback options', async () => {
+    setUser(adminUser);
+    renderSettingsPage();
+    await screen.findByText('Primary provider');
+
+    // Default primary is 'gemini' — its own checkbox should not appear under Fallback order.
+    expect(screen.queryByRole('checkbox', { name: /^gemini/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /openai/i })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /claude/i })).toBeInTheDocument();
   });
 });

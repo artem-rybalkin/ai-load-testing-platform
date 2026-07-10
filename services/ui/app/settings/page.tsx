@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLoaderData } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { getMe, getLiveMetricWindow, setLiveMetricWindow, LiveMetricWindowSec } from '@/lib/api';
+import { getMe, getLiveMetricWindow, setLiveMetricWindow, LiveMetricWindowSec, getAiProvider, setAiProvider, AiProviderConfig, AiProviderName } from '@/lib/api';
 
 const WINDOW_OPTIONS: { id: LiveMetricWindowSec; label: string }[] = [
   { id: 10, label: '10s' },
@@ -9,10 +9,23 @@ const WINDOW_OPTIONS: { id: LiveMetricWindowSec; label: string }[] = [
   { id: 60, label: '1min' },
 ];
 
+// Mirrors @alt/shared's AI_PROVIDER_NAMES — duplicated locally (same reason as
+// team/page.tsx: Vite/Rollup can't statically resolve value exports re-exported
+// via `export *` from the shared package's compiled CJS output).
+const AI_PROVIDER_NAMES: AiProviderName[] = ['gemini', 'openai', 'anthropic'];
+
+const PROVIDER_LABELS: Record<AiProviderName, string> = {
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  anthropic: 'Claude (Anthropic)',
+};
+
 interface LoaderData {
   isAdmin: boolean;
   windowSec: LiveMetricWindowSec | null;
   loadError: string | null;
+  aiProvider: AiProviderConfig | null;
+  aiProviderLoadError: string | null;
 }
 
 export async function loader(): Promise<LoaderData> {
@@ -20,19 +33,21 @@ export async function loader(): Promise<LoaderData> {
   // loaders run outside the component tree.
   const user = await getMe();
   const isAdmin = user.role === 'admin';
-  if (!isAdmin) return { isAdmin, windowSec: null, loadError: null };
-  try {
-    const { windowSec } = await getLiveMetricWindow();
-    return { isAdmin, windowSec, loadError: null };
-  } catch {
-    return { isAdmin, windowSec: null, loadError: 'Failed to load current setting' };
-  }
+  if (!isAdmin) return { isAdmin, windowSec: null, loadError: null, aiProvider: null, aiProviderLoadError: null };
+  const [windowResult, aiProviderResult] = await Promise.allSettled([getLiveMetricWindow(), getAiProvider()]);
+  return {
+    isAdmin,
+    windowSec: windowResult.status === 'fulfilled' ? windowResult.value.windowSec : null,
+    loadError: windowResult.status === 'fulfilled' ? null : 'Failed to load current setting',
+    aiProvider: aiProviderResult.status === 'fulfilled' ? aiProviderResult.value : null,
+    aiProviderLoadError: aiProviderResult.status === 'fulfilled' ? null : 'Failed to load AI provider setting',
+  };
 }
 
 export default function SettingsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const { windowSec, loadError } = useLoaderData() as LoaderData;
+  const { windowSec, loadError, aiProvider: initialAiProvider, aiProviderLoadError } = useLoaderData() as LoaderData;
 
   const [current, setCurrent] = useState<LiveMetricWindowSec | null>(windowSec);
   const [draft, setDraft] = useState<LiveMetricWindowSec>(windowSec ?? 10);
@@ -52,6 +67,37 @@ export default function SettingsPage() {
       setError(err instanceof Error ? err.message : 'Failed to save setting');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const [aiProvider, setAiProviderState] = useState<AiProviderConfig | null>(initialAiProvider);
+  const [aiProviderDraft, setAiProviderDraft] = useState<{ provider: AiProviderName; fallbacks: AiProviderName[] }>(
+    initialAiProvider ? { provider: initialAiProvider.provider, fallbacks: initialAiProvider.fallbacks } : { provider: 'gemini', fallbacks: [] },
+  );
+  const [aiProviderError, setAiProviderError] = useState(aiProviderLoadError ?? '');
+  const [savingAiProvider, setSavingAiProvider] = useState(false);
+  const [aiProviderSaved, setAiProviderSaved] = useState(false);
+
+  const toggleAiFallback = (p: AiProviderName): void => {
+    setAiProviderDraft(d => ({
+      ...d,
+      fallbacks: d.fallbacks.includes(p) ? d.fallbacks.filter(f => f !== p) : [...d.fallbacks, p],
+    }));
+  };
+
+  const handleSaveAiProvider = async () => {
+    setSavingAiProvider(true);
+    setAiProviderError('');
+    setAiProviderSaved(false);
+    try {
+      const result = await setAiProvider(aiProviderDraft.provider, aiProviderDraft.fallbacks);
+      setAiProviderDraft(result);
+      setAiProviderState(prev => prev ? { ...prev, ...result } : prev);
+      setAiProviderSaved(true);
+    } catch (err) {
+      setAiProviderError(err instanceof Error ? err.message : 'Failed to save AI provider');
+    } finally {
+      setSavingAiProvider(false);
     }
   };
 
@@ -103,6 +149,68 @@ export default function SettingsPage() {
                     className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
                   >
                     {saving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {isAdmin && (
+          <div className="bg-surface border border-border rounded-card overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <span className="font-display text-[16px] font-semibold">Platform-default AI provider</span>
+            </div>
+            {!aiProvider ? (
+              <div className="p-8 text-center text-[13px] text-tx-3">{aiProviderError || 'Loading…'}</div>
+            ) : (
+              <div className="p-4 space-y-3">
+                <p className="text-[11px] text-tx-4">
+                  Which AI provider generates scripts and insights platform-wide by default. Fallbacks are tried in
+                  order if the primary provider is rate-limited or unreachable. Individual teams can still override
+                  this from their own Team page.
+                </p>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-[12px] text-tx">Primary provider</span>
+                  <select
+                    value={aiProviderDraft.provider}
+                    onChange={e => {
+                      const provider = e.target.value as AiProviderName;
+                      setAiProviderDraft(d => ({ provider, fallbacks: d.fallbacks.filter(f => f !== provider) }));
+                    }}
+                    className="border border-border rounded-control px-2 py-1 text-[12px] bg-surface text-tx focus:outline-none focus:border-ink-bd"
+                  >
+                    {AI_PROVIDER_NAMES.map(p => (
+                      <option key={p} value={p}>
+                        {PROVIDER_LABELS[p]}{!aiProvider.available[p] ? ' (not configured)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <span className="text-[12px] text-tx">Fallback order</span>
+                  <div className="flex flex-col gap-1 mt-1">
+                    {AI_PROVIDER_NAMES.filter(p => p !== aiProviderDraft.provider).map(p => (
+                      <label key={p} className="flex items-center gap-2 text-[12px] text-tx">
+                        <input
+                          type="checkbox"
+                          checked={aiProviderDraft.fallbacks.includes(p)}
+                          onChange={() => toggleAiFallback(p)}
+                        />
+                        {PROVIDER_LABELS[p]}{!aiProvider.available[p] ? ' (not configured)' : ''}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  {aiProviderError && <p className="text-red-fg text-[12px] mr-auto">{aiProviderError}</p>}
+                  {aiProviderSaved && !aiProviderError && <p className="text-green-fg text-[12px] mr-auto">Saved</p>}
+                  <button
+                    onClick={handleSaveAiProvider}
+                    disabled={savingAiProvider}
+                    className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
+                  >
+                    {savingAiProvider ? 'Saving…' : 'Save provider'}
                   </button>
                 </div>
               </div>
