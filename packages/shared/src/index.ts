@@ -483,8 +483,8 @@ const analyzeClient = (
       { key: 'inp', label: 'INP' }, { key: 'tbt', label: 'TBT' },
     ];
     for (const { key, label } of vitalKeys) {
-      const curr = current[key] as number | undefined;
-      const prev = previous[key] as number | undefined;
+      const curr = current[key];
+      const prev = previous[key];
       if (curr == null || !prev) continue;
       const rawDiff = ((curr - prev) / prev) * 100;
       diffs.push({ metric: label, current: key === 'cls' ? Math.round(curr * 1000) / 1000 : Math.round(curr), previous: key === 'cls' ? Math.round(prev * 1000) / 1000 : Math.round(prev), diffPercent: Math.round(rawDiff * 10) / 10, status: getDiffStatus(rawDiff) });
@@ -521,8 +521,8 @@ export const analyzeResult = (
   thresholds?: SLOThresholds
 ): AnalysisResult =>
   currentMetrics.type === 'backend'
-    ? analyzeBackend(currentMetrics as BackendMetrics, previousMetrics as BackendMetrics | null, thresholds)
-    : analyzeClient(currentMetrics as ClientMetrics,  previousMetrics as ClientMetrics  | null, thresholds);
+    ? analyzeBackend(currentMetrics, previousMetrics as BackendMetrics | null, thresholds)
+    : analyzeClient(currentMetrics,  previousMetrics as ClientMetrics  | null, thresholds);
 
 // ── PII detection / redaction ──────────────────────────────────────────────
 //

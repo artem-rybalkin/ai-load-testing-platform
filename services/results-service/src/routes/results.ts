@@ -6,7 +6,6 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 import PDFDocument from 'pdfkit';
-import type { SLOThresholds, BackendMetrics, ClientMetrics } from '@alt/shared';
 import { broadcast } from '../ws';
 import { recordAudit } from '../audit';
 import { analyzeResult } from '../analyzer';
@@ -499,7 +498,7 @@ Return only the summary text, no JSON, no markdown.`,
         doc.moveDown(0.3);
         doc.fontSize(10).font('Helvetica');
         const m = result.metrics;
-        const metricRows: [string, unknown][] = m.type === 'backend'
+        const metricRows: [string, string | number | undefined][] = m.type === 'backend'
           ? [
               ['Total requests',  m.requestsTotal],
               ['Failed requests', m.requestsFailed],
@@ -592,6 +591,9 @@ Return only the summary text, no JSON, no markdown.`,
         // Object/array column values (e.g. a jsonb column selected via SELECT *)
         // previously rendered as the literal string "[object Object]" here —
         // String() on a plain object always uses Object's default toString().
+        // Objects are already routed to JSON.stringify above — TS just can't narrow
+        // `unknown` via a typeof-negation check, so the String(v) below is safe.
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };

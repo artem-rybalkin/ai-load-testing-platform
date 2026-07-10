@@ -208,7 +208,6 @@ export type CancelMessage = z.infer<typeof CancelMessageSchema>;
 // without requiring any consumer of the interface to switch to importing
 // z.infer<...> instead.
 
-/* eslint-disable @typescript-eslint/no-unused-vars */
 const _assertTestRequest: TestRequest = null as unknown as z.infer<typeof TestRequestSchema>;
 const _assertTestRequestRev: z.infer<typeof TestRequestSchema> = null as unknown as TestRequest;
 const _assertEnrichedTestRequest: EnrichedTestRequest = null as unknown as z.infer<typeof EnrichedTestRequestSchema>;
@@ -219,4 +218,3 @@ const _assertBackendMetrics: BackendMetrics = null as unknown as z.infer<typeof 
 const _assertBackendMetricsRev: z.infer<typeof BackendMetricsSchema> = null as unknown as BackendMetrics;
 const _assertClientMetrics: ClientMetrics = null as unknown as z.infer<typeof ClientMetricsSchema>;
 const _assertClientMetricsRev: z.infer<typeof ClientMetricsSchema> = null as unknown as ClientMetrics;
-/* eslint-enable @typescript-eslint/no-unused-vars */

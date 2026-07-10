@@ -184,7 +184,7 @@ function getByPath(data: unknown, path: string): string | undefined {
     }
   }
   if (cur == null) return undefined;
-  return typeof cur === 'object' ? undefined : String(cur);
+  return typeof cur === 'string' || typeof cur === 'number' || typeof cur === 'boolean' ? String(cur) : undefined;
 }
 
 /** Extract the literal value an ExtractRule points to from the recorded request/response. */

@@ -17,7 +17,6 @@ import {
   buildEnglishPrompt,
   buildSwaggerPrompt,
   buildContextPrompt,
-  buildChatParsePrompt,
   isValidChatParseResponse,
   processAttachments,
   CHAT_HISTORY_LIMIT,

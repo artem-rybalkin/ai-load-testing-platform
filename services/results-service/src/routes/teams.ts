@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 import { randomBytes } from 'crypto';
 import type { TeamRole, TeamQuota, OrgRole, AiProviderName } from '@alt/shared';
 import { AI_PROVIDER_NAMES } from '@alt/shared';
-import { getTeamQuota, upsertTeamQuota, checkScheduleQuota, getTeamUsage, getTeamQuotasAndUsageBatch } from '../quotas';
+import { getTeamQuota, upsertTeamQuota, getTeamUsage, getTeamQuotasAndUsageBatch } from '../quotas';
 import {
   setTeamAiProviderSetting,
   clearTeamAiProviderSetting,

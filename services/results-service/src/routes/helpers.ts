@@ -12,7 +12,6 @@ import type {
   OrgRole,
   ChatMessage,
   ChatAttachment,
-  ChatMode,
   FlowStep,
 } from '@alt/shared';
 import {

@@ -106,7 +106,7 @@ interface AnalysisPromptPayload {
 const buildPayload = (ctx: InsightsContext): AnalysisPromptPayload => {
   let metrics: BackendPromptMetrics | ClientPromptMetrics;
   if (ctx.metrics.type === 'backend') {
-    const m = ctx.metrics as BackendMetrics;
+    const m = ctx.metrics;
     const total = m.requestsTotal || 1;
     metrics = {
       type: 'backend',
@@ -132,7 +132,7 @@ const buildPayload = (ctx: InsightsContext): AnalysisPromptPayload => {
       } : {}),
     };
   } else {
-    const m = ctx.metrics as ClientMetrics;
+    const m = ctx.metrics;
     metrics = {
       type: 'client',
       fidMs:  Math.round(m.fid),
