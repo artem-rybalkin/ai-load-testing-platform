@@ -1,0 +1,12 @@
+coverage:
+  status:
+    project:
+      default:
+        # Ratchet — total coverage is allowed to move up, never down by more than 1%.
+        threshold: 1%
+    patch:
+      default:
+        # New/changed lines in a PR must be at least 80% covered.
+        target: 80%
+
+comment: false
