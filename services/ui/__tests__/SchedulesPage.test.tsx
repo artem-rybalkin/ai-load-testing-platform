@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import SchedulesPage from '../app/schedules/page';
+import { createRoutesStub } from 'react-router';
+import SchedulesPage, { loader } from '../app/schedules/page';
+import { storageKey } from '../lib/WorkspaceContext';
 import type { Schedule } from '../lib/api';
 
+const mockGetMe           = vi.hoisted(() => vi.fn());
 const mockGetSchedules    = vi.hoisted(() => vi.fn());
 const mockCreateSchedule  = vi.hoisted(() => vi.fn());
 const mockUpdateSchedule  = vi.hoisted(() => vi.fn());
@@ -12,6 +15,7 @@ const mockRunSchedule     = vi.hoisted(() => vi.fn());
 const mockConvertCron     = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
+  getMe: mockGetMe,
   getSchedules: mockGetSchedules,
   createSchedule: mockCreateSchedule,
   updateSchedule: mockUpdateSchedule,
@@ -22,9 +26,23 @@ vi.mock('@/lib/api', () => ({
 
 const mockActiveWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
 
-vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
-}));
+// Only useWorkspace() is mocked (still used by the component for the
+// create-time workspaceId) — storageKey stays the real implementation so the
+// loader (which reads localStorage directly, no context access) works as-is.
+vi.mock('@/lib/WorkspaceContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/WorkspaceContext')>();
+  return { ...actual, useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }) };
+});
+
+const TEAM_ID = 'team1';
+
+// SchedulesPage now fetches its data via a route loader instead of a mount-time
+// useEffect — render it through a routes stub so useLoaderData() has the
+// router context it needs.
+function renderSchedulesPage() {
+  const Stub = createRoutesStub([{ path: '/schedules', Component: SchedulesPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={['/schedules']} />);
+}
 
 const makeSchedule = (overrides: Partial<Schedule> = {}): Schedule => ({
   id: 's1',
@@ -43,21 +61,22 @@ const makeSchedule = (overrides: Partial<Schedule> = {}): Schedule => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   mockActiveWorkspaceId.current = null;
+  mockGetMe.mockResolvedValue({ id: 'u1', email: 'a@example.com', role: 'member', teams: [], currentTeamId: TEAM_ID, orgs: [] });
   mockGetSchedules.mockResolvedValue({ schedules: [] });
 });
 afterEach(() => cleanup());
 
 describe('SchedulesPage — loading and empty state', () => {
-  it('shows loading then empty state when no schedules exist', async () => {
-    render(<SchedulesPage />);
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+  it('shows the empty state once loaded', async () => {
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText(/No schedules yet/)).toBeInTheDocument());
   });
 
   it('shows an error message when getSchedules rejects', async () => {
     mockGetSchedules.mockRejectedValue(new Error('network error'));
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText(/Could not reach results-service/)).toBeInTheDocument());
   });
 });
@@ -65,7 +84,7 @@ describe('SchedulesPage — loading and empty state', () => {
 describe('SchedulesPage — list rendering', () => {
   it('renders schedule details for existing schedules', async () => {
     mockGetSchedules.mockResolvedValue({ schedules: [makeSchedule()] });
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText('Hourly smoke test')).toBeInTheDocument());
     expect(screen.getByText('https://example.com')).toBeInTheDocument();
     expect(screen.getByText('0 * * * *')).toBeInTheDocument();
@@ -74,7 +93,7 @@ describe('SchedulesPage — list rendering', () => {
 
   it('shows "paused" badge for disabled schedules', async () => {
     mockGetSchedules.mockResolvedValue({ schedules: [makeSchedule({ enabled: false })] });
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText('paused')).toBeInTheDocument());
   });
 });
@@ -82,7 +101,7 @@ describe('SchedulesPage — list rendering', () => {
 describe('SchedulesPage — create flow', () => {
   it('opens the form, fills required fields, and calls createSchedule', async () => {
     mockCreateSchedule.mockResolvedValue({ schedule: makeSchedule() });
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText(/No schedules yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new schedule/i }));
@@ -98,11 +117,11 @@ describe('SchedulesPage — create flow', () => {
       options: { vus: 5, duration: '30s' },
       enabled: true,
     })));
-    expect(mockGetSchedules).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockGetSchedules).toHaveBeenCalledTimes(2));
   });
 
   it('shows a validation error when required fields are missing', async () => {
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText(/No schedules yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new schedule/i }));
@@ -114,7 +133,7 @@ describe('SchedulesPage — create flow', () => {
 
   it('shows an error message when createSchedule fails', async () => {
     mockCreateSchedule.mockRejectedValue(new Error('boom'));
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText(/No schedules yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new schedule/i }));
@@ -130,7 +149,7 @@ describe('SchedulesPage — actions on existing schedules', () => {
   it('calls runSchedule when "Run now" is clicked', async () => {
     mockGetSchedules.mockResolvedValue({ schedules: [makeSchedule()] });
     mockRunSchedule.mockResolvedValue(undefined);
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText('Hourly smoke test')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /run now/i }));
@@ -140,7 +159,7 @@ describe('SchedulesPage — actions on existing schedules', () => {
   it('calls updateSchedule to toggle enabled state', async () => {
     mockGetSchedules.mockResolvedValue({ schedules: [makeSchedule()] });
     mockUpdateSchedule.mockResolvedValue({ schedule: makeSchedule({ enabled: false }) });
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText('Hourly smoke test')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /pause/i }));
@@ -151,7 +170,7 @@ describe('SchedulesPage — actions on existing schedules', () => {
     mockGetSchedules.mockResolvedValue({ schedules: [makeSchedule()] });
     mockDeleteSchedule.mockResolvedValue(undefined);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText('Hourly smoke test')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
@@ -161,7 +180,7 @@ describe('SchedulesPage — actions on existing schedules', () => {
   it('does not call deleteSchedule when delete is cancelled', async () => {
     mockGetSchedules.mockResolvedValue({ schedules: [makeSchedule()] });
     vi.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText('Hourly smoke test')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
@@ -172,7 +191,7 @@ describe('SchedulesPage — actions on existing schedules', () => {
 describe('SchedulesPage — natural language cron conversion', () => {
   it('converts a phrase to a cron expression and shows a preview', async () => {
     mockConvertCron.mockResolvedValue({ cron: '0 9 * * 1-5', preview: 'Every weekday at 9:00 AM' });
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(screen.getByText(/No schedules yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new schedule/i }));
@@ -185,17 +204,19 @@ describe('SchedulesPage — natural language cron conversion', () => {
 });
 
 // ─── Workspace filter ─────────────────────────────────────────────────────────
+// The loader reads the active workspace straight from localStorage (the same
+// place WorkspaceContext persists it) since loaders have no React context access.
 
 describe('SchedulesPage — workspace filter', () => {
   it('calls getSchedules with null when no workspace is active', async () => {
-    render(<SchedulesPage />);
+    renderSchedulesPage();
     await waitFor(() => expect(mockGetSchedules).toHaveBeenCalled());
     expect(mockGetSchedules).toHaveBeenCalledWith(null);
   });
 
   it('calls getSchedules with active workspaceId when a workspace is selected', async () => {
-    mockActiveWorkspaceId.current = 'ws-sched';
-    render(<SchedulesPage />);
+    localStorage.setItem(storageKey(TEAM_ID), 'ws-sched');
+    renderSchedulesPage();
     await waitFor(() => expect(mockGetSchedules).toHaveBeenCalled());
     expect(mockGetSchedules).toHaveBeenCalledWith('ws-sched');
   });

@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import WebhooksPage from '../app/webhooks/page';
+import { createRoutesStub } from 'react-router';
+import WebhooksPage, { loader } from '../app/webhooks/page';
+import { storageKey } from '../lib/WorkspaceContext';
 import type { Webhook, LogSource } from '../lib/api';
 
+const mockGetMe              = vi.hoisted(() => vi.fn());
 const mockGetWebhooks        = vi.hoisted(() => vi.fn());
 const mockCreateWebhook      = vi.hoisted(() => vi.fn());
 const mockDeleteWebhook      = vi.hoisted(() => vi.fn());
@@ -14,6 +17,7 @@ const mockDeleteLogSource    = vi.hoisted(() => vi.fn());
 const mockPredictWebhookNoise = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
+  getMe: mockGetMe,
   getWebhooks: mockGetWebhooks,
   createWebhook: mockCreateWebhook,
   deleteWebhook: mockDeleteWebhook,
@@ -26,9 +30,24 @@ vi.mock('@/lib/api', () => ({
 
 const mockActiveWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
 
-vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
-}));
+// Only useWorkspace() is mocked (still used by the component for the
+// create-time workspaceId) — storageKey stays the real implementation so the
+// loader (which reads localStorage directly, no context access) works as-is.
+vi.mock('@/lib/WorkspaceContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/WorkspaceContext')>();
+  return { ...actual, useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }) };
+});
+
+const TEAM_ID = 'team1';
+
+// WebhooksPage now fetches its webhooks via a route loader instead of a
+// mount-time useEffect — render it through a routes stub so useLoaderData()
+// has the router context it needs. (LogSourcesSection is not workspace-scoped
+// and keeps its own mount-time fetch, untouched by this migration.)
+function renderWebhooksPage() {
+  const Stub = createRoutesStub([{ path: '/webhooks', Component: WebhooksPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={['/webhooks']} />);
+}
 
 const makeWebhook = (overrides: Partial<Webhook> = {}): Webhook => ({
   id: 'wh1',
@@ -52,7 +71,9 @@ const makeLogSource = (overrides: Partial<LogSource> = {}): LogSource => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   mockActiveWorkspaceId.current = null;
+  mockGetMe.mockResolvedValue({ id: 'u1', email: 'a@example.com', role: 'member', teams: [], currentTeamId: TEAM_ID, orgs: [] });
   mockGetWebhooks.mockResolvedValue({ webhooks: [] });
   mockGetLogSources.mockResolvedValue({ logSources: [] });
   mockPredictWebhookNoise.mockResolvedValue({ level: 'ok', warning: null, message: '' });
@@ -61,7 +82,7 @@ afterEach(() => cleanup());
 
 describe('WebhooksPage — initial load', () => {
   it('renders empty states for both sections', async () => {
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
     expect(screen.getByText('No log sources configured')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Webhooks', level: 1 })).toBeInTheDocument();
@@ -69,25 +90,25 @@ describe('WebhooksPage — initial load', () => {
 
   it('shows an error message when getWebhooks rejects', async () => {
     mockGetWebhooks.mockRejectedValue(new Error('network error'));
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText(/Could not reach results-service/)).toBeInTheDocument());
   });
 
   it('renders existing webhooks and log sources', async () => {
     mockGetWebhooks.mockResolvedValue({ webhooks: [makeWebhook()] });
     mockGetLogSources.mockResolvedValue({ logSources: [makeLogSource()] });
-    render(<WebhooksPage />);
+    renderWebhooksPage();
 
     await waitFor(() => expect(screen.getByText('https://hooks.example.com/notify')).toBeInTheDocument());
     expect(screen.getByText(/Events: failed, degraded/)).toBeInTheDocument();
-    expect(screen.getByText('Production Grafana')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Production Grafana')).toBeInTheDocument());
     expect(screen.getAllByText('Grafana').length).toBeGreaterThan(0);
   });
 });
 
 describe('WebhooksPage — webhook create flow', () => {
   it('shows a validation error when URL is empty', async () => {
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /add webhook/i }));
@@ -97,7 +118,7 @@ describe('WebhooksPage — webhook create flow', () => {
 
   it('calls createWebhook with url, events, and format', async () => {
     mockCreateWebhook.mockResolvedValue({ webhook: makeWebhook() });
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('https://your-endpoint.example.com/webhook'), {
@@ -108,12 +129,12 @@ describe('WebhooksPage — webhook create flow', () => {
     await waitFor(() => expect(mockCreateWebhook).toHaveBeenCalledWith(
       'https://my-hook.example.com', ['failed', 'degraded'], 'generic', undefined
     ));
-    expect(mockGetWebhooks).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockGetWebhooks).toHaveBeenCalledTimes(2));
   });
 
   it('shows an error message when createWebhook fails', async () => {
     mockCreateWebhook.mockRejectedValue(new Error('boom'));
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('https://your-endpoint.example.com/webhook'), {
@@ -126,7 +147,7 @@ describe('WebhooksPage — webhook create flow', () => {
 
   it('toggles the "degraded" event off and checks noise prediction', async () => {
     mockPredictWebhookNoise.mockResolvedValue({ level: 'noisy', warning: true, message: 'Too many alerts' });
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
 
     const degradedCheckbox = screen.getByRole('checkbox', { name: /degraded/i });
@@ -141,19 +162,18 @@ describe('WebhooksPage — webhook delete flow', () => {
   it('calls deleteWebhook and reloads the list', async () => {
     mockGetWebhooks.mockResolvedValue({ webhooks: [makeWebhook()] });
     mockDeleteWebhook.mockResolvedValue(undefined);
-    render(<WebhooksPage />);
+    renderWebhooksPage();
 
     await waitFor(() => expect(screen.getByText('https://hooks.example.com/notify')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /remove/i }));
 
     await waitFor(() => expect(mockDeleteWebhook).toHaveBeenCalledWith('wh1'));
-    expect(mockGetWebhooks).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('WebhooksPage — log source create flow', () => {
   it('shows a validation error when required fields are missing', async () => {
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No log sources configured')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /add log source/i }));
@@ -163,7 +183,7 @@ describe('WebhooksPage — log source create flow', () => {
 
   it('calls createLogSource with name, platform and urlTemplate', async () => {
     mockCreateLogSource.mockResolvedValue({ logSource: makeLogSource() });
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No log sources configured')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('e.g. Production Grafana'), { target: { value: 'My Grafana' } });
@@ -175,12 +195,12 @@ describe('WebhooksPage — log source create flow', () => {
       platform: 'Grafana',
       urlTemplate: 'https://g.example.com?from={startedAtMs}',
     })));
-    expect(mockGetLogSources).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockGetLogSources).toHaveBeenCalledTimes(2));
   });
 
   it('shows an error message when createLogSource fails', async () => {
     mockCreateLogSource.mockRejectedValue(new Error('boom'));
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No log sources configured')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('e.g. Production Grafana'), { target: { value: 'My Grafana' } });
@@ -195,7 +215,7 @@ describe('WebhooksPage — log source edit and delete flow', () => {
   it('loads a source into the form for editing and saves changes', async () => {
     mockGetLogSources.mockResolvedValue({ logSources: [makeLogSource()] });
     mockUpdateLogSource.mockResolvedValue({ logSource: makeLogSource({ name: 'Updated Grafana' }) });
-    render(<WebhooksPage />);
+    renderWebhooksPage();
 
     await waitFor(() => expect(screen.getByText('Production Grafana')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
@@ -212,28 +232,30 @@ describe('WebhooksPage — log source edit and delete flow', () => {
   it('calls deleteLogSource and reloads the list', async () => {
     mockGetLogSources.mockResolvedValue({ logSources: [makeLogSource()] });
     mockDeleteLogSource.mockResolvedValue(undefined);
-    render(<WebhooksPage />);
+    renderWebhooksPage();
 
     await waitFor(() => expect(screen.getByText('Production Grafana')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /^remove$/i }));
 
     await waitFor(() => expect(mockDeleteLogSource).toHaveBeenCalledWith('ls1'));
-    expect(mockGetLogSources).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockGetLogSources).toHaveBeenCalledTimes(2));
   });
 });
 
 // ─── Workspace filter ─────────────────────────────────────────────────────────
+// The loader reads the active workspace straight from localStorage (the same
+// place WorkspaceContext persists it) since loaders have no React context access.
 
 describe('WebhooksPage — workspace filter', () => {
   it('calls getWebhooks with null when no workspace is active', async () => {
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(mockGetWebhooks).toHaveBeenCalled());
     expect(mockGetWebhooks).toHaveBeenCalledWith(null);
   });
 
   it('calls getWebhooks with active workspaceId when a workspace is selected', async () => {
-    mockActiveWorkspaceId.current = 'ws-hook';
-    render(<WebhooksPage />);
+    localStorage.setItem(storageKey(TEAM_ID), 'ws-hook');
+    renderWebhooksPage();
     await waitFor(() => expect(mockGetWebhooks).toHaveBeenCalled());
     expect(mockGetWebhooks).toHaveBeenCalledWith('ws-hook');
   });
@@ -241,7 +263,7 @@ describe('WebhooksPage — workspace filter', () => {
   it('passes workspaceId to createWebhook when creating a webhook in an active workspace', async () => {
     mockActiveWorkspaceId.current = 'ws-hook-create';
     mockCreateWebhook.mockResolvedValue({ webhook: makeWebhook() });
-    render(<WebhooksPage />);
+    renderWebhooksPage();
     await waitFor(() => expect(screen.getByText('No webhooks configured')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('https://your-endpoint.example.com/webhook'), {

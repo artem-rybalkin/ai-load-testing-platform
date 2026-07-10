@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { getSchedules, createSchedule, updateSchedule, deleteSchedule, runSchedule, convertCron, Schedule } from '@/lib/api';
-import { useWorkspace } from '@/lib/WorkspaceContext';
+import { useLoaderData, useRevalidator } from 'react-router-dom';
+import { getMe, getSchedules, createSchedule, updateSchedule, deleteSchedule, runSchedule, convertCron, Schedule } from '@/lib/api';
+import { storageKey, useWorkspace } from '@/lib/WorkspaceContext';
 
 const EMPTY_FORM = {
   name: '',
@@ -14,30 +15,49 @@ const EMPTY_FORM = {
   enabled: true,
 };
 
+interface SchedulesLoaderData {
+  schedules: Schedule[];
+  loadError: string | null;
+}
+
+// getMe() (not the AuthContext/WorkspaceContext) so this loader has no React
+// context dependency — loaders run outside the component tree. The active
+// workspace is read straight from localStorage, the same place WorkspaceContext
+// persists it, since loaders can't subscribe to that context.
+export async function loader(): Promise<SchedulesLoaderData> {
+  const user = await getMe();
+  const activeWorkspaceId = user.currentTeamId ? localStorage.getItem(storageKey(user.currentTeamId)) : null;
+  try {
+    const { schedules } = await getSchedules(activeWorkspaceId);
+    return { schedules, loadError: null };
+  } catch {
+    return { schedules: [], loadError: 'Could not reach results-service — check that it is running.' };
+  }
+}
+
 export default function SchedulesPage() {
+  // Still used at mutation-time (handleCreate scopes a new schedule to the
+  // currently active workspace) — the initial list load moved to the loader.
   const { activeWorkspaceId } = useWorkspace();
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [loading, setLoading] = useState(true);
+  const data = useLoaderData() as SchedulesLoaderData;
+  const revalidator = useRevalidator();
+  const [schedules, setSchedules] = useState<Schedule[]>(data.schedules);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(data.loadError ?? '');
   const [cronPhrase, setCronPhrase] = useState('');
   const [cronConverting, setCronConverting] = useState(false);
   const [cronPreview, setCronPreview] = useState('');
 
-  const load = async () => {
-    try {
-      const data = await getSchedules(activeWorkspaceId);
-      setSchedules(data.schedules ?? []);
-    } catch {
-      setError('Could not reach results-service — check that it is running.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Re-syncs local state whenever the loader re-runs — on the Sidebar's
+  // workspace switcher calling revalidator.revalidate(), or a real navigation.
+  useEffect(() => {
+    setSchedules(data.schedules);
+    setError(data.loadError ?? '');
+  }, [data]);
 
-  useEffect(() => { load(); }, [activeWorkspaceId]);
+  const load = async () => { await revalidator.revalidate(); };
 
   const handleConvertCron = async () => {
     if (!cronPhrase) return;
@@ -212,9 +232,7 @@ export default function SchedulesPage() {
           <div className="bg-red-bg border border-red-fg/30 rounded-control px-4 py-3 text-[12.5px] text-red-fg">{error}</div>
         )}
 
-        {loading ? (
-          <div className="bg-surface border border-border rounded-card p-8 text-center text-[13px] text-tx-4">Loading…</div>
-        ) : schedules.length === 0 && !error ? (
+        {schedules.length === 0 && !error ? (
           <div className="bg-surface border border-border rounded-card p-10 text-center text-[13px] text-tx-4">
             No schedules yet. Create one to run tests automatically.
           </div>

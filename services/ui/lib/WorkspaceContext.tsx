@@ -19,7 +19,9 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
 
 export const useWorkspace = () => useContext(WorkspaceContext);
 
-function storageKey(teamId: string) {
+// Exported so route loaders (which run outside the React tree, no context
+// access) can read the persisted active-workspace selection directly.
+export function storageKey(teamId: string) {
   return `activeWorkspace_${teamId}`;
 }
 

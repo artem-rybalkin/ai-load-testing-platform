@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { createRoutesStub } from 'react-router';
 import Sidebar from '../app/components/Sidebar';
 import type { SessionUser } from '../lib/api';
 
@@ -29,7 +29,13 @@ const baseUser: SessionUser = {
   currentTeamId: 't1', role: 'admin', orgs: [],
 };
 
-const renderSidebar = (open = true) => render(<MemoryRouter><Sidebar open={open} onNavigate={() => {}} /></MemoryRouter>);
+// Sidebar calls useRevalidator() (to re-run loader-backed pages' data on
+// workspace switch), which requires a data router — a plain MemoryRouter
+// doesn't provide one, so render through a routes stub instead.
+const renderSidebar = (open = true) => {
+  const Stub = createRoutesStub([{ path: '/', Component: () => <Sidebar open={open} onNavigate={() => {}} /> }]);
+  return render(<Stub initialEntries={['/']} />);
+};
 
 beforeEach(() => {
   vi.clearAllMocks();

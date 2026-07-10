@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { getResults, TestResult, BackendMetrics, ClientMetrics } from '@/lib/api';
+import { getMe, getResults, TestResult, BackendMetrics, ClientMetrics } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
-import { useWorkspace } from '@/lib/WorkspaceContext';
-import { Link, useNavigate } from 'react-router-dom';
+import { storageKey, useWorkspace } from '@/lib/WorkspaceContext';
+import { Link, useLoaderData, useNavigate } from 'react-router-dom';
 
 function relTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -81,13 +81,36 @@ const DATE_RANGES = [
   { id: '30', label: 'Last 30 days', days: 30 },
 ] as const;
 
+interface ResultsLoaderData {
+  results: TestResult[];
+  nextBefore: string | null;
+  loadError: string | null;
+}
+
+// getMe() (not the AuthContext/WorkspaceContext) so this loader has no React
+// context dependency — loaders run outside the component tree. The active
+// workspace is read straight from localStorage, the same place WorkspaceContext
+// persists it, since loaders can't subscribe to that context.
+export async function loader(): Promise<ResultsLoaderData> {
+  const user = await getMe();
+  const activeWorkspaceId = user.currentTeamId ? localStorage.getItem(storageKey(user.currentTeamId)) : null;
+  try {
+    const data = await getResults(undefined, 50, activeWorkspaceId);
+    return { results: data.results || [], nextBefore: data.nextBefore ?? null, loadError: null };
+  } catch {
+    return { results: [], nextBefore: null, loadError: 'Failed to load results' };
+  }
+}
+
 export default function ResultsPage() {
+  // Still used by refresh() (WebSocket-driven real-time updates, unrelated to
+  // routing/loaders) and loadMore() — the initial list load moved to the loader.
   const { activeWorkspaceId } = useWorkspace();
-  const [results, setResults] = useState<TestResult[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const data = useLoaderData() as ResultsLoaderData;
+  const [results, setResults] = useState<TestResult[]>(data.results);
+  const [error, setError] = useState(data.loadError ?? '');
   const [loadingMore, setLoadingMore] = useState(false);
-  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [nextBefore, setNextBefore] = useState<string | null>(data.nextBefore);
   const [selected, setSelected] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'backend' | 'client-side' | 'flow'>('all');
@@ -98,13 +121,11 @@ export default function ResultsPage() {
   const refresh = async () => {
     setError('');
     try {
-      const data = await getResults(undefined, 50, activeWorkspaceId);
-      setResults(data.results || []);
-      setNextBefore(data.nextBefore ?? null);
+      const d = await getResults(undefined, 50, activeWorkspaceId);
+      setResults(d.results || []);
+      setNextBefore(d.nextBefore ?? null);
     } catch {
       setError('Failed to load results');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -112,16 +133,21 @@ export default function ResultsPage() {
     if (!nextBefore || loadingMore) return;
     setLoadingMore(true);
     try {
-      const data = await getResults(nextBefore, 50, activeWorkspaceId);
-      setResults(prev => [...prev, ...(data.results || [])]);
-      setNextBefore(data.nextBefore ?? null);
+      const d = await getResults(nextBefore, 50, activeWorkspaceId);
+      setResults(prev => [...prev, ...(d.results || [])]);
+      setNextBefore(d.nextBefore ?? null);
     } finally {
       setLoadingMore(false);
     }
   };
 
-  // Reload when workspace filter changes
-  useEffect(() => { setLoading(true); setResults([]); setNextBefore(null); refresh(); }, [activeWorkspaceId]);
+  // Re-syncs local state whenever the loader re-runs — on the Sidebar's
+  // workspace switcher calling revalidator.revalidate(), or a real navigation.
+  useEffect(() => {
+    setResults(data.results);
+    setNextBefore(data.nextBefore);
+    setError(data.loadError ?? '');
+  }, [data]);
 
   // Real-time updates via WebSocket — replaces 5s polling.
   // Debounced 50ms: consumer broadcasts both test:status + tests:changed together;
@@ -198,9 +224,7 @@ export default function ResultsPage() {
           </select>
         </div>
 
-        {loading ? (
-          <div className="bg-surface border border-border rounded-card p-8 text-center text-[13px] text-tx-4">Loading…</div>
-        ) : error ? (
+        {error ? (
           <div className="bg-surface border border-border rounded-card p-8 text-center">
             <p className="text-red-fg text-[12px]">{error}</p>
           </div>

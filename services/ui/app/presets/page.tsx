@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getPresets, createPreset, deletePreset, Preset } from '@/lib/api';
-import { useWorkspace } from '@/lib/WorkspaceContext';
+import { useLoaderData, useNavigate, useRevalidator } from 'react-router-dom';
+import { getMe, getPresets, createPreset, deletePreset, Preset } from '@/lib/api';
+import { storageKey } from '@/lib/WorkspaceContext';
 
 const EMPTY_FORM = {
   name: '',
@@ -13,28 +13,44 @@ const EMPTY_FORM = {
   sessions: 2,
 };
 
+interface PresetsLoaderData {
+  presets: Preset[];
+  loadError: string | null;
+}
+
+// getMe() (not the AuthContext/WorkspaceContext) so this loader has no React
+// context dependency — loaders run outside the component tree. The active
+// workspace is read straight from localStorage, the same place WorkspaceContext
+// persists it, since loaders can't subscribe to that context.
+export async function loader(): Promise<PresetsLoaderData> {
+  const user = await getMe();
+  const activeWorkspaceId = user.currentTeamId ? localStorage.getItem(storageKey(user.currentTeamId)) : null;
+  try {
+    const { presets } = await getPresets(activeWorkspaceId);
+    return { presets, loadError: null };
+  } catch {
+    return { presets: [], loadError: 'Could not reach results-service — check that it is running.' };
+  }
+}
+
 export default function PresetsPage() {
   const navigate = useNavigate();
-  const { activeWorkspaceId } = useWorkspace();
-  const [presets, setPresets] = useState<Preset[]>([]);
-  const [loading, setLoading] = useState(true);
+  const data = useLoaderData() as PresetsLoaderData;
+  const revalidator = useRevalidator();
+  const [presets, setPresets] = useState<Preset[]>(data.presets);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(data.loadError ?? '');
 
-  const load = async () => {
-    try {
-      const data = await getPresets(activeWorkspaceId);
-      setPresets(data.presets ?? []);
-    } catch {
-      setError('Could not reach results-service — check that it is running.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Re-syncs local state whenever the loader re-runs — on the Sidebar's
+  // workspace switcher calling revalidator.revalidate(), or a real navigation.
+  useEffect(() => {
+    setPresets(data.presets);
+    setError(data.loadError ?? '');
+  }, [data]);
 
-  useEffect(() => { load(); }, [activeWorkspaceId]);
+  const load = async () => { await revalidator.revalidate(); };
 
   const handleCreate = async () => {
     if (!form.name) { setError('Name is required'); return; }
@@ -179,9 +195,7 @@ export default function PresetsPage() {
           <div className="bg-red-bg border border-red-fg/30 rounded-control px-4 py-3 text-[12.5px] text-red-fg">{error}</div>
         )}
 
-        {loading ? (
-          <div className="bg-surface border border-border rounded-card p-8 text-center text-[13px] text-tx-4">Loading…</div>
-        ) : presets.length === 0 && !error ? (
+        {presets.length === 0 && !error ? (
           <div className="bg-surface border border-border rounded-card p-10 text-center text-[13px] text-tx-4">
             No presets yet. Save a test configuration to reuse it later.
           </div>

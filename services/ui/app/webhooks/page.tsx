@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useLoaderData, useRevalidator } from 'react-router-dom';
 import {
-  getWebhooks, createWebhook, deleteWebhook, Webhook,
+  getMe, getWebhooks, createWebhook, deleteWebhook, Webhook,
   getLogSources, createLogSource, updateLogSource, deleteLogSource, LogSource,
   predictWebhookNoise,
 } from '@/lib/api';
-import { useWorkspace } from '@/lib/WorkspaceContext';
+import { storageKey, useWorkspace } from '@/lib/WorkspaceContext';
 
 const PLATFORMS = ['Grafana', 'Datadog', 'Kibana', 'Loki', 'OpenSearch', 'Custom'] as const;
 
@@ -31,6 +32,26 @@ const TEMPLATE_VARS = [
 
 // ── Webhooks section ──────────────────────────────────────────────────────────
 
+interface WebhooksLoaderData {
+  webhooks: Webhook[];
+  loadError: string | null;
+}
+
+// getMe() (not the AuthContext/WorkspaceContext) so this loader has no React
+// context dependency — loaders run outside the component tree. The active
+// workspace is read straight from localStorage, the same place WorkspaceContext
+// persists it, since loaders can't subscribe to that context.
+export async function loader(): Promise<WebhooksLoaderData> {
+  const user = await getMe();
+  const activeWorkspaceId = user.currentTeamId ? localStorage.getItem(storageKey(user.currentTeamId)) : null;
+  try {
+    const { webhooks } = await getWebhooks(activeWorkspaceId);
+    return { webhooks, loadError: null };
+  } catch {
+    return { webhooks: [], loadError: 'Could not reach results-service — check that it is running.' };
+  }
+}
+
 const WEBHOOK_FORMATS = [
   { value: 'generic',   label: 'Generic JSON',  hint: 'Standard JSON payload — works with any HTTP endpoint' },
   { value: 'slack',     label: 'Slack',          hint: 'Slack Incoming Webhooks — shows coloured attachment' },
@@ -39,26 +60,28 @@ const WEBHOOK_FORMATS = [
 ] as const;
 
 function WebhooksSection() {
+  // Still used at mutation-time (handleAdd scopes a new webhook to the
+  // currently active workspace) — the initial list load moved to the loader.
   const { activeWorkspaceId } = useWorkspace();
-  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  const data = useLoaderData() as WebhooksLoaderData;
+  const revalidator = useRevalidator();
+  const [webhooks, setWebhooks] = useState<Webhook[]>(data.webhooks);
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<string[]>(['failed', 'degraded']);
   const [format, setFormat] = useState<string>('generic');
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(data.loadError ?? '');
   const [noiseWarning, setNoiseWarning] = useState<{ level: string; message: string } | null>(null);
   const [checkingNoise, setCheckingNoise] = useState(false);
 
-  const load = async () => {
-    try {
-      const data = await getWebhooks(activeWorkspaceId);
-      setWebhooks(data.webhooks ?? []);
-    } catch {
-      setError('Could not reach results-service — check that it is running.');
-    }
-  };
+  // Re-syncs local state whenever the loader re-runs — on the Sidebar's
+  // workspace switcher calling revalidator.revalidate(), or a real navigation.
+  useEffect(() => {
+    setWebhooks(data.webhooks);
+    setError(data.loadError ?? '');
+  }, [data]);
 
-  useEffect(() => { load(); }, [activeWorkspaceId]);
+  const load = async () => { await revalidator.revalidate(); };
 
   const handleAdd = async () => {
     if (!url.trim()) { setError('URL is required'); return; }

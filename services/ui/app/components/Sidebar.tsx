@@ -1,4 +1,4 @@
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useRevalidator } from 'react-router-dom';
 import { useDarkMode } from '@/lib/useDarkMode';
 import { useAuth } from '@/lib/AuthContext';
 import { useHealth } from '@/lib/HealthContext';
@@ -58,6 +58,7 @@ interface SidebarProps {
 export default function Sidebar({ open, onNavigate }: SidebarProps) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
   const { dark, toggle: toggleDark } = useDarkMode();
   const { user, logout, switchTeam } = useAuth();
   const { services, activeTests: active } = useHealth();
@@ -110,7 +111,14 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
           <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sidebar-muted-2 mb-1.5 px-1">Project</div>
           <select
             value={activeWorkspaceId ?? ''}
-            onChange={e => setActiveWorkspaceId(e.target.value || null)}
+            onChange={e => {
+              setActiveWorkspaceId(e.target.value || null);
+              // Route loaders don't observe WorkspaceContext changes on their
+              // own (they only re-run on navigation) — revalidate the current
+              // route so pages already converted to the loader pattern
+              // (Presets/Schedules/Webhooks/Results) pick up the new filter.
+              revalidator.revalidate();
+            }}
             className="w-full bg-sidebar-panel border border-sidebar-border text-[12.5px] text-sidebar-bright rounded-[9px] px-2.5 py-1.5 focus:outline-none cursor-pointer"
           >
             <option value="">All projects</option>

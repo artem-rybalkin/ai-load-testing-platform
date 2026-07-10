@@ -3,59 +3,43 @@
  * Regression test for TODO finding #4 (Low):
  * "UI: /results list page can get stuck on 'Loading…' forever"
  *
- * Root cause: `refresh()` in app/results/page.tsx was an async function
- * with no try/catch.  It was called from a useEffect with no .catch() chained:
+ * Root cause (original): `refresh()` in app/results/page.tsx was an async
+ * function with no try/catch, called from a mount-time useEffect with no
+ * .catch() chained. When getResults rejected, setLoading(false) was never
+ * reached, so the spinner stayed on screen forever.
  *
- *   useEffect(() => { ...; refresh(); }, [activeWorkspaceId]);
- *
- * When getResults rejects (network error, 5xx, etc.) the awaited Promise
- * inside refresh() rejected and propagated out of refresh() uncaught.
- * `setLoading(false)` was never reached, so the spinner stayed on screen forever.
- *
- * Fix: refresh() now wraps the fetch in try/catch/finally — setLoading(false)
- * is called unconditionally in the finally block, and a minimal error state
- * is set in the catch block so the user sees a message instead of a spinner.
+ * The page has since been migrated to a route loader (2026-07-10 router
+ * migration) — there is no more mount-time fetch or "Loading…" state to get
+ * stuck on; the router itself blocks the transition until the loader
+ * settles. The equivalent invariant to guard now is: a rejected getResults()
+ * inside the loader must not throw (which would land the route in its
+ * errorElement) — it must resolve to an error state the page can render.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
-import ResultsPage from '../app/results/page';
+import { createRoutesStub } from 'react-router';
+import ResultsPage, { loader } from '../app/results/page';
 
 // ---------------------------------------------------------------------------
 // Module mocks — mirrors results.test.tsx so the component renders without a
-// real router, workspace context, or WebSocket connection.
+// real workspace context or WebSocket connection.
 // ---------------------------------------------------------------------------
 
-vi.mock('react-router-dom', () => ({
-  useNavigate: () => vi.fn(),
-  Link: ({
-    to,
-    children,
-    ...props
-  }: {
-    to: string;
-    children: React.ReactNode;
-    [key: string]: unknown;
-  }) => (
-    <a href={String(to)} {...(props as React.HTMLAttributes<HTMLAnchorElement>)}>
-      {children}
-    </a>
-  ),
-}));
-
+const mockGetMe = vi.hoisted(() => vi.fn());
 const mockGetResults = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
+  getMe: mockGetMe,
   getResults: mockGetResults,
 }));
 
-vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({
-    workspaces: [],
-    activeWorkspaceId: null,
-    setActiveWorkspaceId: vi.fn(),
-    refetch: vi.fn(),
-  }),
-}));
+vi.mock('@/lib/WorkspaceContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/WorkspaceContext')>();
+  return {
+    ...actual,
+    useWorkspace: () => ({ workspaces: [], activeWorkspaceId: null, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
+  };
+});
 
 // useResultsSocket internally calls useSocketContext() which returns null when
 // no ResultsSocketProvider wraps the tree — the hook's `if (!ctx) return` guard
@@ -63,6 +47,7 @@ vi.mock('@/lib/WorkspaceContext', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetMe.mockResolvedValue({ id: 'u1', email: 'a@example.com', role: 'member', teams: [], currentTeamId: 'team1', orgs: [] });
 });
 
 afterEach(() => cleanup());
@@ -71,23 +56,21 @@ afterEach(() => cleanup());
 // Finding #4 regression
 // ---------------------------------------------------------------------------
 
-describe('Finding #4 — ResultsPage stuck on Loading… when getResults rejects', () => {
-  it(
-    'loading spinner clears when getResults rejects (try/catch/finally present)',
-    async () => {
-      // A rejected promise simulates a network error or non-2xx response.
-      // refresh() now catches the rejection in a try/catch/finally and calls
-      // setLoading(false) unconditionally — the spinner must disappear.
-      mockGetResults.mockRejectedValue(new Error('network error'));
+describe('Finding #4 — ResultsPage does not get stuck when getResults rejects', () => {
+  it('loader resolves to an error state instead of throwing when getResults rejects', async () => {
+    mockGetResults.mockRejectedValue(new Error('network error'));
 
-      render(<ResultsPage />);
+    const data = await loader();
 
-      // Desired behaviour: the component transitions out of the loading state
-      // and shows an error message instead of the infinite spinner.
-      await waitFor(
-        () => expect(screen.queryByText('Loading…')).not.toBeInTheDocument(),
-        { timeout: 500 },
-      );
-    },
-  );
+    expect(data).toEqual({ results: [], nextBefore: null, loadError: 'Failed to load results' });
+  });
+
+  it('renders the error message instead of hanging when getResults rejects', async () => {
+    mockGetResults.mockRejectedValue(new Error('network error'));
+    const Stub = createRoutesStub([{ path: '/results', Component: ResultsPage, loader, HydrateFallback: () => null }]);
+
+    render(<Stub initialEntries={['/results']} />);
+
+    await waitFor(() => expect(screen.getByText('Failed to load results')).toBeInTheDocument());
+  });
 });

@@ -82,7 +82,12 @@ const router = createBrowserRouter([
         children: [
           { path: '/', element: <HomePage />, errorElement: <RouteErrorBoundary /> },
           { path: '/chat', element: <ChatPage />, errorElement: <RouteErrorBoundary /> },
-          { path: '/results', element: <ResultsPage />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: '/results',
+            element: <ResultsPage />,
+            loader: () => import('@/app/results/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
           {
             path: '/results/compare',
             element: <ComparePage />,
@@ -90,10 +95,25 @@ const router = createBrowserRouter([
             errorElement: <RouteErrorBoundary />,
           },
           { path: '/results/:testId', element: <ResultDetailPage />, errorElement: <RouteErrorBoundary /> },
-          { path: '/presets', element: <PresetsPage />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: '/presets',
+            element: <PresetsPage />,
+            loader: () => import('@/app/presets/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
           { path: '/library', element: <LibraryPage />, errorElement: <RouteErrorBoundary /> },
-          { path: '/schedules', element: <SchedulesPage />, errorElement: <RouteErrorBoundary /> },
-          { path: '/webhooks', element: <WebhooksPage />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: '/schedules',
+            element: <SchedulesPage />,
+            loader: () => import('@/app/schedules/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
+          {
+            path: '/webhooks',
+            element: <WebhooksPage />,
+            loader: () => import('@/app/webhooks/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
           {
             path: '/team',
             element: <TeamPage />,

@@ -1,30 +1,38 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import PresetsPage from '../app/presets/page';
+import { createRoutesStub } from 'react-router';
+import PresetsPage, { loader } from '../app/presets/page';
+import { storageKey } from '../lib/WorkspaceContext';
 import type { Preset } from '../lib/api';
 
+const mockGetMe        = vi.hoisted(() => vi.fn());
 const mockGetPresets   = vi.hoisted(() => vi.fn());
 const mockCreatePreset = vi.hoisted(() => vi.fn());
 const mockDeletePreset = vi.hoisted(() => vi.fn());
 const mockNavigate     = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
+  getMe: mockGetMe,
   getPresets: mockGetPresets,
   createPreset: mockCreatePreset,
   deletePreset: mockDeletePreset,
-}));
-
-const mockActiveWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
-
-vi.mock('@/lib/WorkspaceContext', () => ({
-  useWorkspace: () => ({ workspaces: [], activeWorkspaceId: mockActiveWorkspaceId.current, setActiveWorkspaceId: vi.fn(), refetch: vi.fn() }),
 }));
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
   return { ...actual, useNavigate: () => mockNavigate };
 });
+
+const TEAM_ID = 'team1';
+
+// PresetsPage now fetches its data via a route loader instead of a mount-time
+// useEffect — render it through a routes stub so useLoaderData() has the
+// router context it needs.
+function renderPresetsPage() {
+  const Stub = createRoutesStub([{ path: '/presets', Component: PresetsPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={['/presets']} />);
+}
 
 const makePreset = (overrides: Partial<Preset> = {}): Preset => ({
   id: 'p1',
@@ -41,21 +49,21 @@ const makePreset = (overrides: Partial<Preset> = {}): Preset => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockActiveWorkspaceId.current = null;
+  localStorage.clear();
+  mockGetMe.mockResolvedValue({ id: 'u1', email: 'a@example.com', role: 'member', teams: [], currentTeamId: TEAM_ID, orgs: [] });
   mockGetPresets.mockResolvedValue({ presets: [] });
 });
 afterEach(() => cleanup());
 
 describe('PresetsPage — loading and empty state', () => {
-  it('shows loading then empty state when no presets exist', async () => {
-    render(<PresetsPage />);
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+  it('shows the empty state once loaded', async () => {
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText(/No presets yet/)).toBeInTheDocument());
   });
 
   it('shows an error message when getPresets rejects', async () => {
     mockGetPresets.mockRejectedValue(new Error('network error'));
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText(/Could not reach results-service/)).toBeInTheDocument());
   });
 });
@@ -63,7 +71,7 @@ describe('PresetsPage — loading and empty state', () => {
 describe('PresetsPage — list rendering', () => {
   it('renders preset details for existing presets', async () => {
     mockGetPresets.mockResolvedValue({ presets: [makePreset()] });
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText('API smoke test')).toBeInTheDocument());
     expect(screen.getByText('https://example.com')).toBeInTheDocument();
     expect(screen.getByText('backend')).toBeInTheDocument();
@@ -77,7 +85,7 @@ describe('PresetsPage — list rendering', () => {
 describe('PresetsPage — create flow', () => {
   it('opens the form, fills required fields, and calls createPreset', async () => {
     mockCreatePreset.mockResolvedValue({ preset: makePreset() });
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText(/No presets yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new preset/i }));
@@ -92,11 +100,11 @@ describe('PresetsPage — create flow', () => {
       type: 'backend',
       options: { vus: 5, duration: '30s' },
     })));
-    expect(mockGetPresets).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockGetPresets).toHaveBeenCalledTimes(2));
   });
 
   it('shows a validation error when name is missing', async () => {
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText(/No presets yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new preset/i }));
@@ -108,7 +116,7 @@ describe('PresetsPage — create flow', () => {
 
   it('shows an error message when createPreset fails', async () => {
     mockCreatePreset.mockRejectedValue(new Error('boom'));
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText(/No presets yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new preset/i }));
@@ -120,7 +128,7 @@ describe('PresetsPage — create flow', () => {
 
   it('builds client-side options when type is client-side', async () => {
     mockCreatePreset.mockResolvedValue({ preset: makePreset({ type: 'client-side' }) });
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText(/No presets yet/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /new preset/i }));
@@ -144,7 +152,7 @@ describe('PresetsPage — delete flow', () => {
     mockGetPresets.mockResolvedValue({ presets: [makePreset()] });
     mockDeletePreset.mockResolvedValue(undefined);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText('API smoke test')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
@@ -154,7 +162,7 @@ describe('PresetsPage — delete flow', () => {
   it('does not call deletePreset when delete is cancelled', async () => {
     mockGetPresets.mockResolvedValue({ presets: [makePreset()] });
     vi.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText('API smoke test')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
@@ -163,17 +171,19 @@ describe('PresetsPage — delete flow', () => {
 });
 
 // ─── Workspace filter ─────────────────────────────────────────────────────────
+// The loader reads the active workspace straight from localStorage (the same
+// place WorkspaceContext persists it) since loaders have no React context access.
 
 describe('PresetsPage — workspace filter', () => {
   it('calls getPresets with null when no workspace is active', async () => {
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
     expect(mockGetPresets).toHaveBeenCalledWith(null);
   });
 
   it('calls getPresets with active workspaceId when a workspace is selected', async () => {
-    mockActiveWorkspaceId.current = 'ws-xyz';
-    render(<PresetsPage />);
+    localStorage.setItem(storageKey(TEAM_ID), 'ws-xyz');
+    renderPresetsPage();
     await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
     expect(mockGetPresets).toHaveBeenCalledWith('ws-xyz');
   });
@@ -182,7 +192,7 @@ describe('PresetsPage — workspace filter', () => {
 describe('PresetsPage — Use button navigation', () => {
   it('navigates to / with query params built from the preset', async () => {
     mockGetPresets.mockResolvedValue({ presets: [makePreset()] });
-    render(<PresetsPage />);
+    renderPresetsPage();
     await waitFor(() => expect(screen.getByText('API smoke test')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /^use$/i }));
