@@ -70,11 +70,38 @@ describe('generateAIText', () => {
           };
         }
       },
+      HarmCategory: { HARM_CATEGORY_DANGEROUS_CONTENT: 'HARM_CATEGORY_DANGEROUS_CONTENT' },
+      HarmBlockThreshold: { BLOCK_ONLY_HIGH: 'BLOCK_ONLY_HIGH' },
     }));
 
     const { generateAIText: fn } = await import('../aiProvider');
     const text = await fn('hello', { provider: 'gemini', fallbacks: [] });
     expect(text).toBe('gemini response');
+  });
+
+  it('passes explicit safetySettings (BLOCK_ONLY_HIGH on dangerous content) to getGenerativeModel', async () => {
+    process.env.GEMINI_API_KEY = 'g-key';
+    const getGenerativeModel = vi.fn().mockReturnValue({
+      generateContent: vi.fn().mockResolvedValue({ response: { text: () => 'gemini response' } }),
+    });
+    vi.doMock('@google/generative-ai', () => ({
+      GoogleGenerativeAI: class {
+        getGenerativeModel = getGenerativeModel;
+      },
+      HarmCategory: { HARM_CATEGORY_DANGEROUS_CONTENT: 'HARM_CATEGORY_DANGEROUS_CONTENT' },
+      HarmBlockThreshold: { BLOCK_ONLY_HIGH: 'BLOCK_ONLY_HIGH' },
+    }));
+
+    const { generateAIText: fn } = await import('../aiProvider');
+    await fn('hello', { provider: 'gemini', fallbacks: [] });
+
+    expect(getGenerativeModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        safetySettings: [
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+        ],
+      }),
+    );
   });
 
   it('falls back to the next provider when the primary is not configured', async () => {
@@ -120,10 +147,42 @@ describe('generateAIText', () => {
           };
         }
       },
+      HarmCategory: { HARM_CATEGORY_DANGEROUS_CONTENT: 'HARM_CATEGORY_DANGEROUS_CONTENT' },
+      HarmBlockThreshold: { BLOCK_ONLY_HIGH: 'BLOCK_ONLY_HIGH' },
     }));
 
     const { generateAIText: fn } = await import('../aiProvider');
     await expect(fn('hello', { provider: 'gemini', fallbacks: [] }))
       .rejects.toMatchObject({ status: 429 });
+  });
+
+  it('records a PII-redacted copy of the prompt as trace input, not the raw prompt', async () => {
+    process.env.GEMINI_API_KEY = 'g-key';
+    const updateActiveObservation = vi.fn();
+    vi.doMock('@langfuse/tracing', () => ({
+      // Passthrough — no active span/processor in tests anyway, so this just
+      // preserves normal execution while letting us spy on the input recorded.
+      observe: (fn: (...args: unknown[]) => unknown) => fn,
+      updateActiveObservation,
+    }));
+    vi.doMock('@google/generative-ai', () => ({
+      GoogleGenerativeAI: class {
+        getGenerativeModel(): { generateContent: ReturnType<typeof vi.fn> } {
+          return { generateContent: vi.fn().mockResolvedValue({ response: { text: () => 'ok' } }) };
+        }
+      },
+      HarmCategory: { HARM_CATEGORY_DANGEROUS_CONTENT: 'HARM_CATEGORY_DANGEROUS_CONTENT' },
+      HarmBlockThreshold: { BLOCK_ONLY_HIGH: 'BLOCK_ONLY_HIGH' },
+    }));
+
+    const { generateAIText: fn } = await import('../aiProvider');
+    const prompt = 'Test description from user@example.com — generate a script.';
+    await fn(prompt, { provider: 'gemini', fallbacks: [] });
+
+    const inputCall = updateActiveObservation.mock.calls.find(([attrs]) => 'input' in attrs);
+    expect(inputCall).toBeDefined();
+    const recordedInput = inputCall![0].input as string;
+    expect(recordedInput).not.toContain('user@example.com');
+    expect(recordedInput).toContain('[REDACTED_EMAIL]');
   });
 });

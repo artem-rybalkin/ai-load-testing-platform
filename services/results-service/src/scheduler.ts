@@ -97,6 +97,7 @@ const registerSchedule = (pool: Pool, schedule: Schedule): void => {
   }
   const task = cron.schedule(schedule.cron, () => triggerSchedule(pool, schedule), {
     name: schedule.id,
+    noOverlap: true,
   });
   if (!schedule.enabled) task.stop();
   activeTasks.set(schedule.id, task);

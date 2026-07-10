@@ -38,7 +38,7 @@ type FakeChannel = EventEmitter & {
 function makeFakeChannel(): FakeChannel {
   const ch = new EventEmitter() as FakeChannel;
   ch.assertQueue = vi.fn().mockResolvedValue(undefined);
-  ch.consume     = vi.fn();
+  ch.consume     = vi.fn().mockResolvedValue({ consumerTag: 'fake-consumer-tag' });
   ch.ack         = vi.fn();
   ch.sendToQueue = vi.fn();
   ch.publish     = vi.fn();

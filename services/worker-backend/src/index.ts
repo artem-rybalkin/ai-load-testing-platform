@@ -6,13 +6,18 @@ import * as os from 'os';
 import Fastify from 'fastify';
 
 import { trace } from '@opentelemetry/api';
+import { shutdownTracing } from '@alt/tracing';
 import { EnrichedTestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders, LiveMetricWindowSec, DEFAULT_LIVE_METRIC_WINDOW_SEC, EnrichedTestRequestSchema, CancelMessageSchema } from '@alt/shared';
 import { log } from './logger';
 import { runK6Test, handleRetry, GRACE_PERIOD_MS } from './runner';
 
 let queueConnected = false;
 let connection: amqplib.ChannelModel | null = null;
-let channel: amqplib.Channel | null = null;
+// ConfirmChannel (not plain Channel) so publishing a test result can await
+// waitForConfirms() — without it, a broker crash between sendToQueue() returning
+// and the message actually being persisted silently drops the completed test's
+// result with no way to know it happened.
+let channel: amqplib.ConfirmChannel | null = null;
 let queueConsumerTag: string | null = null;
 // Counts a message as "in flight" for its full handler lifetime — including the
 // post-k6-exit bookkeeping (DB write, result-queue send, ack) — not just while
@@ -177,7 +182,7 @@ export const start = async (): Promise<void> => {
     scheduleReconnect();
   });
 
-  channel = await conn.createChannel();
+  channel = await conn.createConfirmChannel();
   const ch = channel;
   ch.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
@@ -305,6 +310,10 @@ export const start = async (): Promise<void> => {
           Buffer.from(JSON.stringify({ ...result, scriptId, reusedScript: test.reusedScript, thresholds: test.thresholds, projectId: test.projectId, executionLog })),
           { persistent: true }
         );
+        // Wait for the broker to actually persist the message before acking the
+        // source message below — otherwise a broker crash in this window loses
+        // the test's result permanently (the run completed but nothing recorded it).
+        await ch.waitForConfirms();
 
         if (wasStopped) {
           testLog.info({ requestsTotal: metrics.requestsTotal }, 'Test stopped — partial metrics saved');
@@ -398,6 +407,7 @@ async function shutdown(signal: string) {
     if (channel) await channel.close();
     if (connection) await connection.close();
   } catch (_) { /* ignore close errors during shutdown */ }
+  await shutdownTracing();
   process.exit(0);
 }
 

@@ -1,6 +1,7 @@
 import './tracing';
 import Fastify, { FastifyInstance } from 'fastify';
 import { BackendMetrics, ClientMetrics, SLOThresholds, AnalysisResult } from '@alt/shared';
+import { shutdownTracing } from '@alt/tracing';
 import { analyzeResult } from './analyzer';
 import { generateAiInsights } from './aiInsights';
 import { log } from './logger';
@@ -93,6 +94,17 @@ export function buildApp(): FastifyInstance {
   return app;
 }
 
+async function shutdown(signal: string, app: FastifyInstance): Promise<void> {
+  log.info({ signal }, 'Shutdown signal received — draining');
+  try {
+    await app.close();
+  } catch (err) {
+    log.error({ err: (err as Error).message }, 'Error closing Fastify app');
+  }
+  await shutdownTracing();
+  process.exit(0);
+}
+
 if (process.env.VITEST !== 'true') {
   const app = buildApp();
   app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
@@ -102,4 +114,6 @@ if (process.env.VITEST !== 'true') {
     }
     log.info({ port: PORT }, 'analyser-service listening');
   });
+  process.on('SIGTERM', () => void shutdown('SIGTERM', app));
+  process.on('SIGINT',  () => void shutdown('SIGINT', app));
 }

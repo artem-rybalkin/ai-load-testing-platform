@@ -2,6 +2,7 @@ import './tracing';
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { RecordingSession, FlowStep, validateSsrfSafeUrl } from '@alt/shared';
+import { shutdownTracing } from '@alt/tracing';
 import { startSession, stopSession, toFlowSteps, computeThinkTimes, compileIgnorePatterns, RecordingSessionInternal } from './recorder';
 import { detectCorrelations, suggestStepNames, suggestIgnorePatterns, detectDuplicateSteps, correlatorRateLimited, DeduplicationSuggestion } from './correlator';
 import { log } from './logger';
@@ -348,6 +349,25 @@ export async function buildApp(
   return app;
 }
 
+async function shutdown(signal: string, app: FastifyInstance): Promise<void> {
+  log.info({ signal, activeSessions: sessions.size }, 'Shutdown signal received — draining');
+  // Without this, active Puppeteer browser sessions are abandoned mid-recording
+  // (the CDP connection and headless browser process are left running) — the
+  // auto-stop sweep only runs on the *next* boot, not on a graceful shutdown.
+  await Promise.all(
+    [...sessions.values()].map((session) =>
+      stopSession(session).catch((err) => log.error({ err, sessionId: session.id }, 'Error stopping session during shutdown'))
+    )
+  );
+  try {
+    await app.close();
+  } catch (err) {
+    log.error({ err: (err as Error).message }, 'Error closing Fastify app');
+  }
+  await shutdownTracing();
+  process.exit(0);
+}
+
 // ── Startup ───────────────────────────────────────────────────────────────────
 if (!process.env.VITEST) {
   (async (): Promise<void> => {
@@ -359,5 +379,7 @@ if (!process.env.VITEST) {
       log.error(err, 'Failed to start recorder-service');
       process.exit(1);
     }
+    process.on('SIGTERM', () => void shutdown('SIGTERM', app));
+    process.on('SIGINT',  () => void shutdown('SIGINT', app));
   })();
 }

@@ -4,6 +4,7 @@ import { Browser } from 'puppeteer';
 import Fastify from 'fastify';
 import * as os from 'os';
 
+import { shutdownTracing } from '@alt/tracing';
 import { TestRequest, TestResult, connectWithBackoff, drainInFlight, internalHeaders, EnrichedTestRequestSchema, CancelMessageSchema } from '@alt/shared';
 import { log } from './logger';
 import { handleRetry, MAX_RETRIES } from './retry';
@@ -18,7 +19,11 @@ const CANCEL_EXCHANGE    = 'cancel-fanout';
 let queueConnected = false;
 let reconnecting = false;
 let connection: amqplib.ChannelModel | null = null;
-let channel: amqplib.Channel | null = null;
+// ConfirmChannel (not plain Channel) so publishing a test result can await
+// waitForConfirms() — without it, a broker crash between sendToQueue() returning
+// and the message actually being persisted silently drops the completed test's
+// result with no way to know it happened.
+let channel: amqplib.ConfirmChannel | null = null;
 let queueConsumerTag: string | null = null;
 // Counts a message as "in flight" for its full handler lifetime — including the
 // post-browser-close bookkeeping (result-queue send, ack) — not just while the
@@ -98,7 +103,7 @@ export const start = async (): Promise<void> => {
     scheduleReconnect();
   });
 
-  channel = await conn.createChannel();
+  channel = await conn.createConfirmChannel();
   const ch = channel;
   ch.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
@@ -190,6 +195,10 @@ export const start = async (): Promise<void> => {
         };
 
         ch.sendToQueue(RESULTS_QUEUE, Buffer.from(JSON.stringify({ ...result, thresholds: test.thresholds, projectId: test.projectId, executionLog })), { persistent: true });
+        // Wait for the broker to actually persist the message before acking the
+        // source message below — otherwise a broker crash in this window loses
+        // the test's result permanently (the run completed but nothing recorded it).
+        await ch.waitForConfirms();
         log.info({ testId: test.id, metrics }, 'Client test completed');
         ch.ack(msg);
       } catch (err) {
@@ -267,6 +276,7 @@ async function shutdown(signal: string) {
     if (channel) await channel.close();
     if (connection) await connection.close();
   } catch (_) { /* ignore close errors during shutdown */ }
+  await shutdownTracing();
   process.exit(0);
 }
 

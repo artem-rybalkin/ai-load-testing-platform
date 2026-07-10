@@ -1,4 +1,5 @@
 import './tracing';
+import { shutdownTracing } from '@alt/tracing';
 import { initDb, pool, readPool } from './db';
 import { startConsumer } from './consumer';
 import { buildApp } from './app';
@@ -36,6 +37,7 @@ const shutdown = async (signal: string): Promise<void> => {
   } catch (err) {
     log.error({ err: (err as Error).message }, 'Error closing DB pool');
   }
+  await shutdownTracing();
   process.exit(0);
 };
 

@@ -41,27 +41,29 @@ vi.mock('../tracing', () => ({}));
 type FakeChannel = EventEmitter & {
   assertQueue: MockFn; assertExchange: MockFn; bindQueue: MockFn; consume: MockFn;
   ack: MockFn; sendToQueue: MockFn; publish: MockFn; prefetch: MockFn; cancel: MockFn;
+  waitForConfirms: MockFn;
 };
 
 function makeFakeChannel(): FakeChannel {
   const ch = new EventEmitter() as FakeChannel;
-  ch.assertQueue    = vi.fn().mockResolvedValue({ queue: 'cancel-queue-name' });
-  ch.assertExchange = vi.fn().mockResolvedValue(undefined);
-  ch.bindQueue      = vi.fn().mockResolvedValue(undefined);
-  ch.consume        = vi.fn().mockResolvedValue({ consumerTag: 'tag-1' });
-  ch.ack            = vi.fn();
-  ch.sendToQueue    = vi.fn();
-  ch.publish        = vi.fn();
-  ch.prefetch       = vi.fn();
-  ch.cancel         = vi.fn().mockResolvedValue(undefined);
+  ch.assertQueue      = vi.fn().mockResolvedValue({ queue: 'cancel-queue-name' });
+  ch.assertExchange   = vi.fn().mockResolvedValue(undefined);
+  ch.bindQueue        = vi.fn().mockResolvedValue(undefined);
+  ch.consume          = vi.fn().mockResolvedValue({ consumerTag: 'tag-1' });
+  ch.ack              = vi.fn();
+  ch.sendToQueue      = vi.fn();
+  ch.publish          = vi.fn();
+  ch.prefetch         = vi.fn();
+  ch.cancel           = vi.fn().mockResolvedValue(undefined);
+  ch.waitForConfirms  = vi.fn().mockResolvedValue(undefined);
   return ch;
 }
 
-type FakeConnection = EventEmitter & { createChannel: MockFn; close: MockFn };
+type FakeConnection = EventEmitter & { createConfirmChannel: MockFn; close: MockFn };
 
 function makeFakeConnection(channel: FakeChannel): FakeConnection {
   const conn = new EventEmitter() as FakeConnection;
-  conn.createChannel = vi.fn().mockResolvedValue(channel);
+  conn.createConfirmChannel = vi.fn().mockResolvedValue(channel);
   conn.close = vi.fn().mockResolvedValue(undefined);
   return conn;
 }
@@ -203,7 +205,16 @@ describe('worker-client index.ts', () => {
       expect(sent).toBeDefined();
       const payload = JSON.parse((sent![1] as Buffer).toString());
       expect(payload.status).toBe('completed');
+      // Publisher confirms: the broker must acknowledge it persisted the result
+      // before we ack the source message — otherwise a broker crash in between
+      // silently drops a completed test's result with no way to know it happened.
+      expect(channel.waitForConfirms).toHaveBeenCalledOnce();
       expect(channel.ack).toHaveBeenCalledOnce();
+      const sendOrder = channel.sendToQueue.mock.invocationCallOrder[channel.sendToQueue.mock.calls.indexOf(sent!)];
+      const confirmOrder = channel.waitForConfirms.mock.invocationCallOrder[0];
+      const ackOrder = channel.ack.mock.invocationCallOrder[0];
+      expect(sendOrder).toBeLessThan(confirmOrder);
+      expect(confirmOrder).toBeLessThan(ackOrder);
     });
 
     it('rewrites localhost to host.docker.internal in the target URL', async () => {

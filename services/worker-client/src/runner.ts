@@ -270,6 +270,14 @@ export const runClientTest = async (
         output: 'json' as const,
         logLevel: 'silent' as const,
         onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
+        // Lighthouse defaults to formFactor:'mobile' + simulated 4G + 4x CPU
+        // slowdown — calibrated for a phone on a mobile connection, not this
+        // datacenter worker. Without this override every score this platform
+        // reports is a synthetic-mobile number, not a measure of the actual
+        // site/server performance being load-tested.
+        formFactor: 'desktop' as const,
+        screenEmulation: { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false },
+        throttling: { rttMs: 40, throughputKbps: 10240, cpuSlowdownMultiplier: 1, requestLatencyMs: 0, uploadThroughputKbps: 0, downloadThroughputKbps: 0 },
       });
 
       if (lhResult?.lhr?.categories) {

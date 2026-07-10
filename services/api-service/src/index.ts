@@ -5,6 +5,7 @@ import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 
 import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, FlowStep, TeamRole, internalHeaders } from '@alt/shared';
+import { shutdownTracing } from '@alt/tracing';
 import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
 import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount, pool } from './scripts';
 import { getApiSession, hashApiKey } from './session';
@@ -284,9 +285,9 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         }
       };
 
-      const tryPublish = (skipAI: boolean): void => {
+      const tryPublish = async (skipAI: boolean): Promise<void> => {
         try {
-          publishTest(test, skipAI);
+          await publishTest(test, skipAI);
         } catch (err) {
           postMessage(`Test could not be queued — message broker unavailable. Restart the api-service when RabbitMQ recovers. (${(err as Error).message})`);
           throw err;
@@ -299,7 +300,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
           return reply.code(400).send({ error: 'Custom script must be 512 KB or smaller' });
         }
         test.generatedScript = customScript;
-        tryPublish(true);
+        await tryPublish(true);
         warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
@@ -308,7 +309,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
 
       if (!existingScript) {
         // Cache miss — generate new script
-        tryPublish(false);
+        await tryPublish(false);
         warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
@@ -320,7 +321,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         test.generatedScript = existingScript.script;
         test.scriptId = existingScript.id;
         test.reusedScript = true;
-        tryPublish(true);
+        await tryPublish(true);
         warnIfNoWorker();
         return { success: true, test: safeTestResponse(test), scriptReused: true, scriptUsedCount: existingScript.usedCount };
       }
@@ -330,7 +331,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       test.cachedScript = existingScript.script;
       test.cachedScriptDescription = existingScript.description;
       test.scriptId = existingScript.id;
-      tryPublish(false);
+      await tryPublish(false);
       warnIfNoWorker();
       return { success: true, test: safeTestResponse(test), scriptReused: false };
     }
@@ -364,10 +365,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   return app;
 };
 
+let appInstance: FastifyInstance | null = null;
+
 const start = async (): Promise<void> => {
   try {
     await connectQueue();
     const app = await buildApp();
+    appInstance = app;
     const port = Number(process.env.PORT) || 3000;
     await app.listen({ port, host: '0.0.0.0' });
   } catch (err) {
@@ -376,6 +380,19 @@ const start = async (): Promise<void> => {
   }
 };
 
+async function shutdown(signal: string): Promise<void> {
+  console.log(`[api-service] ${signal} received — draining`);
+  try {
+    if (appInstance) await appInstance.close();
+  } catch (err) {
+    console.error('[api-service] Error closing Fastify app', err);
+  }
+  await shutdownTracing();
+  process.exit(0);
+}
+
 if (!process.env.VITEST) {
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT',  () => void shutdown('SIGINT'));
   start();
 }

@@ -1,6 +1,31 @@
 // Must be called before all other module imports so OTel auto-instrumentation patches load first.
 // Uses require() so a missing OTel package degrades gracefully instead of crashing the service.
 
+let sdkInstance: { shutdown(): Promise<void> } | null = null;
+let shutdownPromise: Promise<void> | null = null;
+
+/**
+ * Flushes buffered spans and shuts down the OTel SDK, if `initTracing()` actually
+ * started one (a no-op otherwise — e.g. `OTEL_SDK_DISABLED=true` or the OTel
+ * packages aren't installed). Safe to call more than once — e.g. once from this
+ * module's own process signal handlers and once from a service's own graceful
+ * shutdown sequence — the underlying `sdk.shutdown()` only ever runs once.
+ *
+ * Each service should `await` this before `process.exit()` in its own shutdown
+ * handler; otherwise `process.exit()` can win the race against the async flush
+ * and the most recent spans (including any Langfuse LLM-call traces) are lost.
+ */
+export function shutdownTracing(): Promise<void> {
+  if (!sdkInstance) return Promise.resolve();
+  if (!shutdownPromise) {
+    shutdownPromise = sdkInstance.shutdown().catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error('[tracing] shutdown failed:', err);
+    });
+  }
+  return shutdownPromise;
+}
+
 /**
  * Initialise OpenTelemetry tracing.
  *
@@ -57,7 +82,12 @@ export function initTracing(withLangfuse = false): void {
     }
 
     sdk.start();
-    process.on('SIGTERM', () => sdk.shutdown().catch(() => {}));
+    sdkInstance = sdk;
+    // Safety net for services that don't (yet) explicitly await shutdownTracing()
+    // in their own shutdown sequence — shutdownTracing() is idempotent, so a
+    // service that also calls it explicitly won't double-shutdown.
+    process.on('SIGTERM', () => { void shutdownTracing(); });
+    process.on('SIGINT', () => { void shutdownTracing(); });
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw err;
     // OTel packages not available — tracing disabled, service starts normally

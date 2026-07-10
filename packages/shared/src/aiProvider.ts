@@ -7,6 +7,9 @@
 // skipped (treated as "not configured") when its API key is unset.
 
 import { observe, updateActiveObservation } from '@langfuse/tracing';
+import type OpenAI from 'openai';
+import type Anthropic from '@anthropic-ai/sdk';
+import { redactPII } from './index';
 
 export type AiProviderName = 'gemini' | 'openai' | 'anthropic';
 
@@ -35,21 +38,41 @@ export function isProviderConfigured(provider: AiProviderName): boolean {
 const callGemini = async (prompt: string): Promise<string> => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = await import('@google/generative-ai');
   const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({
     model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
+    // Gemini 2.5+ defaults safety filtering to OFF — fenceUserContent() mitigates
+    // prompt injection, but this is the only defense against a successfully
+    // injected payload returning harmful executable code. BLOCK_ONLY_HIGH avoids
+    // over-blocking legitimate load-test jargon (e.g. "attack", "exploit", "kill").
+    safetySettings: [
+      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+    ],
   });
   const result = await model.generateContent(prompt);
   return result.response.text();
 };
 
+// Singletons, initialised lazily on first use. maxRetries: 0 because the outer
+// retry loop in generateAIText/generateScript already retries on 429s with its
+// own backoff — leaving each SDK's default maxRetries: 2 in place would let a
+// single failed call silently retry up to 3x internally before the outer loop
+// even sees the error, compounding into far more attempts than intended and
+// making the outer loop's wait calculation blind to the time already spent.
+// Per-call instantiation was also discarding TCP connection reuse between calls.
+let openaiClient: OpenAI | null = null;
+let anthropicClient: Anthropic | null = null;
+
 const callOpenAI = async (prompt: string): Promise<string> => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
-  const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey });
-  const result = await client.chat.completions.create({
+  if (!openaiClient) {
+    const { default: OpenAIClient } = await import('openai');
+    openaiClient = new OpenAIClient({ apiKey, maxRetries: 0 });
+  }
+  const result = await openaiClient.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    max_tokens: 8192,
     messages: [{ role: 'user', content: prompt }],
   });
   return result.choices[0]?.message?.content ?? '';
@@ -58,9 +81,11 @@ const callOpenAI = async (prompt: string): Promise<string> => {
 const callAnthropic = async (prompt: string): Promise<string> => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
-  const { default: Anthropic } = await import('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
-  const result = await client.messages.create({
+  if (!anthropicClient) {
+    const { default: AnthropicClient } = await import('@anthropic-ai/sdk');
+    anthropicClient = new AnthropicClient({ apiKey, maxRetries: 0 });
+  }
+  const result = await anthropicClient.messages.create({
     model: process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest',
     max_tokens: 8192,
     messages: [{ role: 'user', content: prompt }],
@@ -95,6 +120,14 @@ export interface GenerateAITextOptions {
  */
 export const generateAIText = observe(
   async function generateAIText(prompt: string, opts: GenerateAITextOptions): Promise<string> {
+    // captureInput: false below stops observe() from auto-capturing the raw
+    // `prompt` argument as trace input — it can contain user-supplied test
+    // descriptions, step URLs/bodies, and (via the recorder flow) auth header
+    // values, all wrapped by fenceUserContent() but none filtered by redactPII().
+    // Set a redacted copy explicitly instead so traces stay useful without
+    // leaking that content to Langfuse. The real `prompt` (unredacted) is still
+    // what's actually sent to the LLM below — only the trace copy is redacted.
+    updateActiveObservation({ input: redactPII(prompt) });
     const chain = [opts.provider, ...(opts.fallbacks ?? [])];
     let lastErr: unknown = new Error('No AI provider configured');
     for (const provider of chain) {
@@ -108,5 +141,5 @@ export const generateAIText = observe(
     }
     throw lastErr;
   },
-  { name: 'generateAIText', asType: 'generation' }
+  { name: 'generateAIText', asType: 'generation', captureInput: false }
 );

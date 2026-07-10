@@ -12,7 +12,11 @@ export const QUEUES = {
 // Fanout exchange — every worker replica gets every cancel message
 const CANCEL_EXCHANGE = 'cancel-fanout';
 
-let channel: amqplib.Channel | null = null;
+// ConfirmChannel (not plain Channel) so publishTest() can await waitForConfirms()
+// — without it, a broker crash between sendToQueue() returning and the message
+// actually being persisted silently drops the dispatch, leaving the test stuck
+// 'pending' forever with no way to know the request was ever lost in transit.
+let channel: amqplib.ConfirmChannel | null = null;
 let reconnecting = false;
 
 export const isQueueConnected = (): boolean => channel !== null;
@@ -29,7 +33,7 @@ const setupConnection = async (url: string): Promise<void> => {
     scheduleReconnect(url);
   });
 
-  channel = await connection.createChannel();
+  channel = await connection.createConfirmChannel();
   channel.on('error', (err) => {
     log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
     channel = null;
@@ -83,16 +87,18 @@ export const publishCancel = (testId: string): void => {
   log.info({ testId }, 'Cancel signal published to fanout exchange');
 };
 
-export const publishTest = (test: EnrichedTestRequest, skipAI: boolean): void => {
+export const publishTest = async (test: EnrichedTestRequest, skipAI: boolean): Promise<void> => {
   if (!channel) throw new Error('Queue not connected');
 
   const message = Buffer.from(JSON.stringify(test));
   if (skipAI) {
     const targetQueue = (test.type === 'backend' || test.type === 'flow') ? QUEUES.BACKEND : QUEUES.CLIENT;
     channel.sendToQueue(targetQueue, message, { persistent: true });
+    await channel.waitForConfirms();
     log.info({ testId: test.id, queue: targetQueue }, 'Test routed directly to worker (script reused)');
   } else {
     channel.sendToQueue(QUEUES.AI_REQUESTS, message, { persistent: true });
+    await channel.waitForConfirms();
     log.info({ testId: test.id }, 'Test sent to AI for script generation');
   }
 };

@@ -16,11 +16,12 @@ import type * as QueueTypes from '../queue';
 type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
 
 type MockChannel = EventEmitter & {
-  assertQueue:    MockFn;
-  assertExchange: MockFn;
-  sendToQueue:    MockFn;
-  publish:        MockFn;
-  checkQueue:     MockFn;
+  assertQueue:     MockFn;
+  assertExchange:  MockFn;
+  sendToQueue:     MockFn;
+  publish:         MockFn;
+  checkQueue:      MockFn;
+  waitForConfirms: MockFn;
 };
 
 /** Real EventEmitters (not bare vi.fn() spies) so tests can actually
@@ -28,24 +29,25 @@ type MockChannel = EventEmitter & {
  *  reconnect wiring in queue.ts, not just record that .on() was called. */
 const makeMockChannel = (): MockChannel => {
   const ch = new EventEmitter() as MockChannel;
-  ch.assertQueue    = vi.fn().mockResolvedValue(undefined);
-  ch.assertExchange = vi.fn().mockResolvedValue(undefined);
-  ch.sendToQueue    = vi.fn();
-  ch.publish        = vi.fn();
-  ch.checkQueue     = vi.fn().mockResolvedValue({ consumerCount: 2 });
+  ch.assertQueue      = vi.fn().mockResolvedValue(undefined);
+  ch.assertExchange   = vi.fn().mockResolvedValue(undefined);
+  ch.sendToQueue      = vi.fn();
+  ch.publish          = vi.fn();
+  ch.checkQueue       = vi.fn().mockResolvedValue({ consumerCount: 2 });
+  ch.waitForConfirms  = vi.fn().mockResolvedValue(undefined);
   return ch;
 };
 
-const makeMockConnection = (channel: MockChannel): EventEmitter & { createChannel: MockFn } => {
-  const conn = new EventEmitter() as EventEmitter & { createChannel: MockFn };
-  conn.createChannel = vi.fn().mockResolvedValue(channel);
+const makeMockConnection = (channel: MockChannel): EventEmitter & { createConfirmChannel: MockFn } => {
+  const conn = new EventEmitter() as EventEmitter & { createConfirmChannel: MockFn };
+  conn.createConfirmChannel = vi.fn().mockResolvedValue(channel);
   return conn;
 };
 
 describe('queue module', () => {
   let queueMod: typeof QueueTypes;
   let mockChannel: MockChannel;
-  let mockConnection: EventEmitter & { createChannel: MockFn };
+  let mockConnection: EventEmitter & { createConfirmChannel: MockFn };
   let mockConnect: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
@@ -117,7 +119,7 @@ describe('queue module', () => {
     it('retries after a transient failure and succeeds on the second attempt', async () => {
       mockConnect
         .mockRejectedValueOnce(new Error('ECONNREFUSED'))
-        .mockResolvedValueOnce({ createChannel: vi.fn().mockResolvedValue(mockChannel), on: vi.fn() });
+        .mockResolvedValueOnce({ createConfirmChannel: vi.fn().mockResolvedValue(mockChannel), on: vi.fn() });
 
       vi.useFakeTimers();
       try {
@@ -145,7 +147,7 @@ describe('queue module', () => {
         expect(queueMod.isQueueConnected()).toBe(false);
 
         // Now let it succeed
-        mockConnect.mockResolvedValueOnce({ createChannel: vi.fn().mockResolvedValue(mockChannel), on: vi.fn() });
+        mockConnect.mockResolvedValueOnce({ createConfirmChannel: vi.fn().mockResolvedValue(mockChannel), on: vi.fn() });
         await vi.advanceTimersByTimeAsync(30000);
         await promise;
         expect(queueMod.isQueueConnected()).toBe(true);
@@ -204,13 +206,13 @@ describe('queue module', () => {
   // ── publishTest ─────────────────────────────────────────────────────────────
 
   describe('publishTest', () => {
-    it('throws when the queue is not connected', () => {
-      expect(() => queueMod.publishTest({} as never, false)).toThrow('Queue not connected');
+    it('throws when the queue is not connected', async () => {
+      await expect(queueMod.publishTest({} as never, false)).rejects.toThrow('Queue not connected');
     });
 
     it('routes to ai-requests when skipAI is false', async () => {
       await connect();
-      queueMod.publishTest({ id: 't1', type: 'backend' } as never, false);
+      await queueMod.publishTest({ id: 't1', type: 'backend' } as never, false);
       expect(mockChannel.sendToQueue).toHaveBeenCalledWith(
         'ai-requests', expect.any(Buffer), { persistent: true },
       );
@@ -218,7 +220,7 @@ describe('queue module', () => {
 
     it('routes a backend test directly to backend-tests when skipAI is true', async () => {
       await connect();
-      queueMod.publishTest({ id: 't1', type: 'backend' } as never, true);
+      await queueMod.publishTest({ id: 't1', type: 'backend' } as never, true);
       expect(mockChannel.sendToQueue).toHaveBeenCalledWith(
         'backend-tests', expect.any(Buffer), { persistent: true },
       );
@@ -226,7 +228,7 @@ describe('queue module', () => {
 
     it('routes a flow test to backend-tests when skipAI is true', async () => {
       await connect();
-      queueMod.publishTest({ id: 't1', type: 'flow' } as never, true);
+      await queueMod.publishTest({ id: 't1', type: 'flow' } as never, true);
       expect(mockChannel.sendToQueue).toHaveBeenCalledWith(
         'backend-tests', expect.any(Buffer), { persistent: true },
       );
@@ -234,7 +236,7 @@ describe('queue module', () => {
 
     it('routes a client-side test to client-tests when skipAI is true', async () => {
       await connect();
-      queueMod.publishTest({ id: 't1', type: 'client-side' } as never, true);
+      await queueMod.publishTest({ id: 't1', type: 'client-side' } as never, true);
       expect(mockChannel.sendToQueue).toHaveBeenCalledWith(
         'client-tests', expect.any(Buffer), { persistent: true },
       );
@@ -243,11 +245,17 @@ describe('queue module', () => {
     it('serialises the full test object as JSON in the buffer', async () => {
       await connect();
       const test = { id: 'abc-123', type: 'backend', targetUrl: 'https://example.com' } as never;
-      queueMod.publishTest(test, false);
+      await queueMod.publishTest(test, false);
       const buf = mockChannel.sendToQueue.mock.calls[0][1] as Buffer;
       expect(JSON.parse(buf.toString())).toMatchObject({
         id: 'abc-123', targetUrl: 'https://example.com',
       });
+    });
+
+    it('waits for the broker to confirm the publish before resolving', async () => {
+      await connect();
+      await queueMod.publishTest({ id: 't1', type: 'backend' } as never, false);
+      expect(mockChannel.waitForConfirms).toHaveBeenCalledOnce();
     });
   });
 

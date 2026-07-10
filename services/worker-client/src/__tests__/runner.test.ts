@@ -339,6 +339,21 @@ describe('runClientTest — Lighthouse integration', () => {
       expect.objectContaining({ port: 9222 }),
     );
   });
+
+  it('runs Lighthouse with desktop emulation, not the mobile/4G default', async () => {
+    const lh = makeLighthouseMock();
+    const { ctx } = makeCtx({ lighthouse: lh });
+    await runClientTest(BASE_TEST, ctx);
+
+    expect(lh).toHaveBeenCalledWith(
+      BASE_TEST.targetUrl,
+      expect.objectContaining({
+        formFactor: 'desktop',
+        screenEmulation: expect.objectContaining({ mobile: false }),
+        throttling: expect.objectContaining({ cpuSlowdownMultiplier: 1 }),
+      }),
+    );
+  });
 });
 
 describe('runClientTest — runningBrowsers tracking', () => {
