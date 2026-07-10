@@ -30,11 +30,11 @@ test.describe('Compare-runs page crash (no ErrorBoundary)', () => {
     const fakeA = '00000000-0000-4000-8000-000000000001';
     const fakeB = '00000000-0000-4000-8000-000000000002';
     await page.goto(`/results/compare?a=${fakeA}&b=${fakeB}`);
-    await page.waitForTimeout(2000);
 
     // Desired: no uncaught render exception, and a friendly message shown.
-    expect(pageErrors, `expected no uncaught page errors, got: ${pageErrors.map(e => e.message).join('; ')}`).toHaveLength(0);
+    // toBeVisible() polls/retries, so this also gives the crash (if any) time to happen.
     await expect(page.getByText(/failed to load|not found/i)).toBeVisible({ timeout: 5_000 });
+    expect(pageErrors, `expected no uncaught page errors, got: ${pageErrors.map(e => e.message).join('; ')}`).toHaveLength(0);
   });
 });
 
@@ -56,7 +56,6 @@ test.describe('Silent failures on Stop / Set-baseline / Clear-baseline', () => {
       route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'Forbidden' }) }));
 
     await cancelBtn.click();
-    await page.waitForTimeout(2000);
 
     // Desired: an error is surfaced. Currently: the button silently returns
     // to its normal state and the test keeps running with zero indication
@@ -85,7 +84,6 @@ export default function () { http.get('http://api-service:3000/health'); sleep(1
       route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'Forbidden' }) }));
 
     await page.getByRole('button', { name: /set baseline/i }).click();
-    await page.waitForTimeout(2000);
 
     // Desired: an error is surfaced instead of the button quietly resetting.
     await expect(page.getByTestId('action-error')).toBeVisible({ timeout: 5_000 });
@@ -111,7 +109,6 @@ test.describe('Webhook creation silent failure', () => {
     });
 
     await page.getByRole('button', { name: /^add webhook$/i }).click();
-    await page.waitForTimeout(2000);
 
     // Desired: an error message is shown and the URL field keeps its value
     // so the user can retry. Currently: the form silently clears (`setUrl('')`
@@ -133,7 +130,7 @@ test.describe('Results list stuck on Loading forever', () => {
 
     // The page must settle into an error state within a reasonable window —
     // the "Loading…" skeleton must not remain visible once the request settles.
-    await page.waitForTimeout(8_000);
-    await expect(page.getByText(/loading/i)).not.toBeVisible();
+    // not.toBeVisible() polls/retries up to the timeout instead of a fixed sleep.
+    await expect(page.getByText(/loading/i)).not.toBeVisible({ timeout: 8_000 });
   });
 });

@@ -56,12 +56,11 @@ test.describe('Templates', () => {
 
     // Select the first non-placeholder option
     await select.selectOption({ index: 1 });
-    await page.waitForTimeout(500);
 
-    // URL field should be populated
+    // URL field should be populated — poll instead of a fixed sleep for the
+    // template's onChange handler to fill it in.
     const urlInput = page.locator('input[type="text"][placeholder*="acme"]');
-    const urlValue = await urlInput.inputValue();
-    expect(urlValue.length).toBeGreaterThan(0);
+    await expect(urlInput).not.toHaveValue('', { timeout: 5_000 });
   });
 
   test('templates page lists saved templates', async ({ page }) => {

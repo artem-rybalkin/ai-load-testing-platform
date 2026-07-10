@@ -214,7 +214,10 @@ test.describe('Flow Recorder', () => {
     await vncPage.waitForLoadState();
 
     // Wait for the noVNC canvas to be created and the RFB connection to render
-    // its first frame (autoconnect=true is set on NOVNC_URL).
+    // its first frame (autoconnect=true is set on NOVNC_URL). Left as a fixed
+    // sleep, not a web-first assertion: the canvas is an opaque pixel buffer
+    // (remote-desktop framebuffer, not page DOM), so there's nothing to poll
+    // for other than "some time has passed since the element appeared".
     const canvas = vncPage.locator('canvas').first();
     await expect(canvas).toBeVisible({ timeout: 30_000 });
     await vncPage.waitForTimeout(3_000);
@@ -222,7 +225,9 @@ test.describe('Flow Recorder', () => {
     // Click into the remote desktop to give it focus, then jump to the address
     // bar with Ctrl+L (works no matter where the toolbar is on screen) and
     // navigate to a same-network service that returns a small JSON response —
-    // captured by recorder-service as a single network request/step.
+    // captured by recorder-service as a single network request/step. The
+    // address bar is real browser chrome inside the remote VNC session, not
+    // page DOM, so — same as above — there's no locator to assert against.
     await canvas.click({ position: { x: 640, y: 400 } });
     await vncPage.keyboard.press('Control+l');
     await vncPage.waitForTimeout(300);

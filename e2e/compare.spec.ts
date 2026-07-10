@@ -38,14 +38,13 @@ async function createAndWaitForResult(page: Page): Promise<string> {
   const { test: created } = await res.json();
   const testId: string = created.id;
 
-  // Poll until completed or failed (max 90 seconds)
-  const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline) {
+  // Poll until completed or failed (max 90 seconds) — expect.poll retries on
+  // its own schedule instead of a hand-rolled deadline + fixed sleep loop.
+  await expect.poll(async () => {
     const r = await page.request.get(`${RESULTS_URL}/results/${testId}`);
     const { result } = await r.json();
-    if (result?.status === 'completed' || result?.status === 'failed') break;
-    await page.waitForTimeout(3000);
-  }
+    return result?.status;
+  }, { timeout: 90_000, intervals: [3_000] }).toMatch(/^(completed|failed)$/);
 
   return testId;
 }

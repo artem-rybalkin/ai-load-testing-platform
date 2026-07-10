@@ -13,6 +13,10 @@ export default defineConfig({
     headless: true,
     screenshot: 'only-on-failure',
     video: 'off',
+    // retries: 0 means 'on-first-retry' would never fire — capture on the
+    // first (only) attempt instead so CI failures are diagnosable without
+    // a local repro.
+    trace: 'retain-on-failure',
   },
   projects: [
     {
