@@ -117,7 +117,7 @@ Requirements:
 - Use k6 JavaScript API (import from 'k6/http' and 'k6')
 - Include realistic think time between requests (sleep 1-3s)
 - Add checks for HTTP status AND at least one body/header assertion per request
-- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO) and http_req_failed rate < ${errorRateFrac}
+- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a request that returns 200 but with the wrong body)
 - Log failures: if res.status is 0 or >= 400, console.error a line with the status and URL (e.g. \`console.error(\`FAILED \${res.status} \${res.request.url}\`)\`) right after the check — this is the only way a failed request shows up in the execution log, since k6 does not print anything for a failing check or a non-2xx response on its own
 - For JSON APIs: set Content-Type: application/json header, use JSON.stringify for request body, call res.json() to parse
 - For authenticated endpoints: read credentials from __ENV.USERNAME / __ENV.PASSWORD / __ENV.API_TOKEN — never hardcode secrets
@@ -140,7 +140,7 @@ Structure:
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<${p95}'], http_req_failed: ['rate<${errorRateFrac}'] } };
+export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<${p95}'], http_req_failed: ['rate<${errorRateFrac}'], checks: ['rate>0.9'] } };
 export default function() { ... }
 `;
 };
@@ -336,14 +336,14 @@ Requirements:
   * Create/POST: assert the returned object has the expected field(s) from the request body
   * Wrap body assertions in try/catch inside the check callback so a parse failure is a check failure (false), not an exception
 - After all groups, add sleep(1)
-- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO) and http_req_failed rate < ${errorRateFrac}
+- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a step that returns 2xx but with the wrong body)
 - Return ONLY the JavaScript code, no markdown fences, no explanation
 
 Structure:
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 
-export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<${p95}'], http_req_failed: ['rate<${errorRateFrac}'] } };
+export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<${p95}'], http_req_failed: ['rate<${errorRateFrac}'], checks: ['rate>0.9'] } };
 
 export default function() {
   const vars = {};

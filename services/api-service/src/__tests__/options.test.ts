@@ -126,6 +126,16 @@ describe('buildK6Options', () => {
       expect(parsed.thresholds).toBeDefined();
     }
   });
+
+  it('includes a checks threshold for every profile, so cached-script re-injection (findExistingScript) never drops it', () => {
+    const profiles = ['load', 'spike', 'capacity', 'soak'] as const;
+
+    for (const profile of profiles) {
+      const result = buildK6Options({ vus: 10, duration: '1m', profile });
+      const parsed = JSON.parse(result);
+      expect(parsed.thresholds.checks).toEqual(['rate>0.9']);
+    }
+  });
 });
 
 // ─── buildK6Options — httpOptions ─────────────────────────────────────────────

@@ -71,6 +71,7 @@ export interface SLOThresholds {
   errorRate?: number;      // % — default 1
   serverErrorRate?: number;// % server (5xx) errors — default 1
   timeoutRate?: number;    // % timeout errors — default 1
+  checksFailRate?: number; // % of k6 check() assertions allowed to fail — default 10 (i.e. ≥90% must pass)
   lcp?: number;            // ms — default 2500
   fcp?: number;            // ms — default 1800
   ttfb?: number;           // ms — default 800
@@ -262,6 +263,12 @@ export interface BackendMetrics {
   statusCodes?: Record<string, number>;
   errorBreakdown?: ErrorBreakdown;
   stepMetrics?: StepMetrics[];
+  // Count of k6 check() assertion invocations — separate from requestsFailed
+  // (HTTP-status-based). A test can have requestsFailed: 0 yet still have
+  // failing checks if the AI-written body/content assertions don't match.
+  // Optional: absent for results recorded before this metric was tracked.
+  checksTotal?: number;
+  checksFailed?: number;
 }
 
 export interface LighthouseScore {
@@ -372,6 +379,7 @@ const BACKEND_THRESHOLDS = {
   p95ResponseTime: 1000,
   avgResponseTime: 500,
   errorRate: 1,
+  checksFailRate: 10, // % — i.e. ≥90% of check() assertions must pass
 };
 
 const CLIENT_THRESHOLDS = {
@@ -401,6 +409,7 @@ const analyzeBackend = (
     errorRate:       thresholds?.errorRate ?? BACKEND_THRESHOLDS.errorRate,
     serverErrorRate: thresholds?.serverErrorRate ?? 1,
     timeoutRate:     thresholds?.timeoutRate ?? 1,
+    checksFailRate:  thresholds?.checksFailRate ?? BACKEND_THRESHOLDS.checksFailRate,
   };
 
   const thresholdViolations: string[] = [];
@@ -414,6 +423,15 @@ const analyzeBackend = (
     thresholdViolations.push(`avg response time ${Math.round(current.avgResponseTime)}ms exceeds threshold ${t.avgResponseTime}ms`);
   if (currentErrorRate > t.errorRate)
     thresholdViolations.push(`error rate ${currentErrorRate.toFixed(2)}% exceeds threshold ${t.errorRate}%`);
+
+  // checksTotal is only present when the executed script actually reported k6
+  // check() results (parser only sets it when > 0) — absent for historical
+  // results predating this metric, which must not be flagged as a violation.
+  if (current.checksTotal) {
+    const checksFailRate = ((current.checksFailed ?? 0) / current.checksTotal) * 100;
+    if (checksFailRate > t.checksFailRate)
+      thresholdViolations.push(`${checksFailRate.toFixed(2)}% of checks failed, exceeding threshold ${t.checksFailRate}% — response status looked fine but content/body assertions did not match`);
+  }
 
   if (current.errorBreakdown && total > 0) {
     const serverRate  = (current.errorBreakdown.serverError / total) * 100;

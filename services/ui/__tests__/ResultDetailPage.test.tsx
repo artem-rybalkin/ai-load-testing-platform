@@ -163,6 +163,23 @@ describe('ResultDetailPage — completed backend test', () => {
     });
   });
 
+  it('does not render a Checks Failed cell when checksTotal is absent (historical results)', async () => {
+    mockGetResult.mockResolvedValue({ result: makeResult() });
+    render(<ResultPage />);
+    await waitFor(() => expect(screen.getByText('1000')).toBeInTheDocument());
+    expect(screen.queryByText('Checks Failed')).not.toBeInTheDocument();
+  });
+
+  it('renders a Checks Failed cell when checksTotal is present', async () => {
+    mockGetResult.mockResolvedValue({ result: makeResult({ metrics: makeBackendMetrics({ checksTotal: 200, checksFailed: 20 }) }) });
+    render(<ResultPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Checks Failed')).toBeInTheDocument();
+      expect(screen.getByText('20')).toBeInTheDocument();
+      expect(screen.getByText('/ 10.0%')).toBeInTheDocument();
+    });
+  });
+
   it('shows the BackendChart component', async () => {
     mockGetResult.mockResolvedValue({ result: makeResult() });
     render(<ResultPage />);

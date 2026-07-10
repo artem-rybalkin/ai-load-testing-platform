@@ -59,12 +59,16 @@ const parseK6All = (jsonContent: string): {
   statusCodes: Record<string, number>;
   errorBreakdown: ErrorBreakdown;
   stepMetrics: StepMetrics[];
+  checksTotal: number;
+  checksFailed: number;
 } => {
   const statusCodes: Record<string, number> = {};
   const breakdown: ErrorBreakdown = { success: 0, clientError: 0, serverError: 0, timeout: 0, networkError: 0 };
   const durationsByGroup: Record<string, number[]> = {};
   const countByGroup:     Record<string, number>   = {};
   const failedByGroup:    Record<string, number[]> = {};
+  let checksTotal = 0;
+  let checksFailed = 0;
 
   for (const line of jsonContent.split('\n')) {
     if (!line.trim()) continue;
@@ -74,6 +78,11 @@ const parseK6All = (jsonContent: string): {
 
       const rawGroup: string = obj.data.tags?.group ?? '';
       const groupName = rawGroup && rawGroup !== '::' ? rawGroup.replace(/^::/, '') : null;
+
+      if (obj.metric === 'checks') {
+        checksTotal++;
+        if (obj.data.value === 0) checksFailed++;
+      }
 
       if (obj.metric === 'http_reqs') {
         const status: string = obj.data.tags?.status ?? '';
@@ -123,7 +132,7 @@ const parseK6All = (jsonContent: string): {
     };
   });
 
-  return { statusCodes, errorBreakdown: breakdown, stepMetrics };
+  return { statusCodes, errorBreakdown: breakdown, stepMetrics, checksTotal, checksFailed };
 };
 
 // Production entry-point: one call instead of two to avoid parsing the file twice.

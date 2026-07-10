@@ -20,14 +20,14 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
           { duration: '10s', target: vus  },
           { duration: '30s', target: 0    },
         ],
-        thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.1'] }
+        thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.1'], checks: ['rate>0.9'] }
       };
       case 'capacity': return {
         stages: [
           { duration: duration, target: peak },
           { duration: '30s',   target: 0    },
         ],
-        thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.05'] }
+        thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.05'], checks: ['rate>0.9'] }
       };
       case 'soak': return {
         stages: [
@@ -35,7 +35,7 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
           { duration: duration, target: vus },
           { duration: '30s',    target: 0   },
         ],
-        thresholds: { http_req_duration: ['p(95)<500'], http_req_failed: ['rate<0.01'] }
+        thresholds: { http_req_duration: ['p(95)<500'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }
       };
       default: return {
         stages: [
@@ -43,7 +43,7 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
           { duration: duration, target: vus },
           { duration: '15s',    target: 0   },
         ],
-        thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] }
+        thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }
       };
     }
   })();

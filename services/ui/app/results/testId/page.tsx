@@ -562,6 +562,17 @@ export default function ResultPage() {
                   <MetricCell label="p95 Response" value={Math.round(bm.p95ResponseTime ?? 0)} unit="ms" />
                   <MetricCell label="Avg Response" value={Math.round(bm.avgResponseTime ?? 0)} unit="ms" />
                   <MetricCell label="p99 Response" value={Math.round(bm.p99ResponseTime ?? 0)} unit="ms" />
+                  {/* Separate from "Failed" (HTTP status) — a request can return 200 with the
+                      wrong body, which only a failing check() catches. Absent (not 0) on results
+                      recorded before this metric was tracked, so only render when present. */}
+                  {bm.checksTotal != null && (
+                    <MetricCell
+                      label="Checks Failed"
+                      value={bm.checksFailed ?? 0}
+                      unit={`/ ${((bm.checksFailed ?? 0) / bm.checksTotal * 100).toFixed(1)}%`}
+                      color={(bm.checksFailed ?? 0) > 0 ? 'text-red-fg' : ''}
+                    />
+                  )}
                 </>
               ) : (
                 <>

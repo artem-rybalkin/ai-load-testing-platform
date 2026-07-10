@@ -75,6 +75,51 @@ describe('analyzeResult — backend thresholds', () => {
   });
 });
 
+// ─── Backend — checks (content/body assertions), separate from HTTP status ──
+
+describe('analyzeResult — backend checks threshold', () => {
+  it('fails when more than 10% of k6 check() assertions fail, even with zero requestsFailed', () => {
+    // requestsFailed: 0 — every response returned a 2xx status. Only the
+    // checks metric (body/content assertions) reveals the test actually failed.
+    const result = analyzeResult(
+      backend({ requestsTotal: 100, requestsFailed: 0, checksTotal: 100, checksFailed: 20 }),
+      null
+    );
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations[0]).toMatch(/checks failed/i);
+    expect(result.thresholdViolations[0]).toMatch(/20\.00%/);
+  });
+
+  it('passes when checks fail rate is within the 10% default threshold', () => {
+    const result = analyzeResult(
+      backend({ checksTotal: 100, checksFailed: 5 }),
+      null
+    );
+
+    expect(result.perfStatus).toBe('passed');
+    expect(result.thresholdViolations).toHaveLength(0);
+  });
+
+  it('does not evaluate a checks violation when checksTotal is absent (historical results)', () => {
+    const result = analyzeResult(backend(), null);
+
+    expect(result.perfStatus).toBe('passed');
+    expect(result.thresholdViolations).toHaveLength(0);
+  });
+
+  it('honors a custom checksFailRate threshold', () => {
+    const result = analyzeResult(
+      backend({ checksTotal: 100, checksFailed: 3 }),
+      null,
+      { checksFailRate: 2 }
+    );
+
+    expect(result.perfStatus).toBe('failed');
+    expect(result.thresholdViolations[0]).toMatch(/3\.00%/);
+  });
+});
+
 // ─── Backend — regression comparison ─────────────────────────────────────────
 
 describe('analyzeResult — backend regression', () => {

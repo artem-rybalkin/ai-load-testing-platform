@@ -89,7 +89,7 @@ describe('FLOW_PROMPT — thresholds', () => {
     const prompt = await getLastPrompt();
     expect(prompt).toContain('p(95) < 1000');
     expect(prompt).toContain('rate < 0.01');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }");
   });
 
   it('reflects a custom SLOThresholds.errorRate/p95 in the generated prompt instead of the hardcoded default', async () => {
@@ -99,7 +99,13 @@ describe('FLOW_PROMPT — thresholds', () => {
     const prompt = await getLastPrompt();
     expect(prompt).toContain('p(95) < 500');
     expect(prompt).toContain('rate < 0.03');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<500'], http_req_failed: ['rate<0.03'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<500'], http_req_failed: ['rate<0.03'], checks: ['rate>0.9'] }");
+  });
+
+  it('instructs the AI to require a 90% check pass rate', async () => {
+    await generateScript(baseFlow());
+    const prompt = await getLastPrompt();
+    expect(prompt).toMatch(/checks rate > 0\.9/);
   });
 });
 
@@ -311,7 +317,7 @@ describe('BACKEND_PROMPT — basic content', () => {
     const prompt = await getLastPrompt();
     expect(prompt).toContain('p(95) < 1000');
     expect(prompt).toContain('rate < 0.01');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }");
   });
 
   it('reflects a custom SLOThresholds.errorRate/p95 in the generated prompt instead of the hardcoded default', async () => {
@@ -321,7 +327,13 @@ describe('BACKEND_PROMPT — basic content', () => {
     const prompt = await getLastPrompt();
     expect(prompt).toContain('p(95) < 2000');
     expect(prompt).toContain('rate < 0.05');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.05'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.05'], checks: ['rate>0.9'] }");
+  });
+
+  it('instructs the AI to require a 90% check pass rate', async () => {
+    await generateScript(baseBackend());
+    const prompt = await getLastPrompt();
+    expect(prompt).toMatch(/checks rate > 0\.9/);
   });
 });
 

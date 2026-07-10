@@ -734,6 +734,44 @@ describe('parseK6GroupMetrics', () => {
   });
 });
 
+// ─── parseK6JsonOutput — checks metric ───────────────────────────────────────
+//
+// k6 emits a Point per check() invocation: value 1 = passed, 0 = failed. This
+// is the only signal that a request returned 2xx but with the wrong body —
+// http_req_failed only tracks HTTP-status-based failures.
+
+describe('parseK6JsonOutput — checks', () => {
+  const makeCheckPoint = (value: 0 | 1): string => makeJsonPoint('checks', value);
+
+  it('returns checksTotal: 0, checksFailed: 0 when the script has no check() calls', () => {
+    const lines = [makeJsonPoint('http_req_duration', 200), makeJsonPoint('http_reqs', 1)].join('\n');
+    const result = parseK6JsonOutput(lines);
+    expect(result.checksTotal).toBe(0);
+    expect(result.checksFailed).toBe(0);
+  });
+
+  it('counts total checks and failures separately', () => {
+    const lines = [makeCheckPoint(1), makeCheckPoint(1), makeCheckPoint(0), makeCheckPoint(1)].join('\n');
+    const result = parseK6JsonOutput(lines);
+    expect(result.checksTotal).toBe(4);
+    expect(result.checksFailed).toBe(1);
+  });
+
+  it('treats every check point as a pass when none fail', () => {
+    const lines = [makeCheckPoint(1), makeCheckPoint(1), makeCheckPoint(1)].join('\n');
+    const result = parseK6JsonOutput(lines);
+    expect(result.checksTotal).toBe(3);
+    expect(result.checksFailed).toBe(0);
+  });
+
+  it('counts all points as failed when every check fails', () => {
+    const lines = [makeCheckPoint(0), makeCheckPoint(0)].join('\n');
+    const result = parseK6JsonOutput(lines);
+    expect(result.checksTotal).toBe(2);
+    expect(result.checksFailed).toBe(2);
+  });
+});
+
 // ─── performance ───────────────────────────────────────────────────────────
 //
 // Regression guards (not strict benchmarks): synthetic k6 JSON-lines output

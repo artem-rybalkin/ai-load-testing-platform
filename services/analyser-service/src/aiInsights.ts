@@ -77,6 +77,10 @@ interface BackendPromptMetrics {
   clientErrors?: number;
   timeouts?: number;
   networkErrors?: number;
+  // k6 check() assertion pass rate — separate from requestsFailed (HTTP status).
+  // A request can return 2xx with the wrong body; only this reveals that.
+  checksFailed?: number;
+  checksFailRatePct?: number;
   topStepsByP95?: Pick<StepMetrics, 'name' | 'avgResponseTime' | 'p95ResponseTime'>[];
 }
 
@@ -130,6 +134,10 @@ const buildPayload = (ctx: InsightsContext): AnalysisPromptPayload => {
           .slice(0, 5)
           .map(s => ({ name: s.name, avgResponseTime: Math.round(s.avgResponseTime), p95ResponseTime: Math.round(s.p95ResponseTime) })),
       } : {}),
+      ...(m.checksTotal ? {
+        checksFailed: m.checksFailed ?? 0,
+        checksFailRatePct: Math.round(((m.checksFailed ?? 0) / m.checksTotal) * 1000) / 10,
+      } : {}),
     };
   } else {
     const m = ctx.metrics;
@@ -177,6 +185,8 @@ const formatMetrics = (p: AnalysisPromptPayload): string => {
     ];
     if (m.serverErrors !== undefined)
       lines.push(`Error breakdown: ${m.serverErrors} HTTP 5xx (server errors), ${m.clientErrors} HTTP 4xx (request errors), ${m.timeouts} timeouts, ${m.networkErrors} network errors`);
+    if (m.checksFailRatePct !== undefined)
+      lines.push(`Check assertions failed: ${m.checksFailed} (${m.checksFailRatePct}%) — separate from HTTP status; these are body/content assertions, so a low error rate above does not mean the responses were actually correct`);
     if (m.topStepsByP95?.length)
       lines.push(`Top steps by p95: ${m.topStepsByP95.map(s => `${s.name} avg=${s.avgResponseTime}ms p95=${s.p95ResponseTime}ms`).join(', ')}`);
     return lines.join('\n');

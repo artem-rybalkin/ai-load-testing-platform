@@ -239,6 +239,28 @@ describe('generateAiInsights — prompt includes key context', () => {
     const prompt = mock.mock.calls[0][0] as string;
     expect(prompt).toContain('None');
   });
+
+  it('includes the checks fail-rate line when checksTotal is present, separate from HTTP-status errors', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    await generateAiInsights(makeCtx({
+      metrics: { ...baseMetrics, requestsFailed: 0, checksTotal: 200, checksFailed: 20 },
+    }));
+
+    const prompt = mock.mock.calls[0][0] as string;
+    expect(prompt).toContain('Check assertions failed: 20 (10%)');
+  });
+
+  it('omits the checks fail-rate line when checksTotal is absent (historical results)', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    await generateAiInsights(makeCtx({ metrics: baseMetrics }));
+
+    const prompt = mock.mock.calls[0][0] as string;
+    expect(prompt).not.toContain('Check assertions failed');
+  });
 });
 
 // ─── Performance — large flow payloads ────────────────────────────────────────

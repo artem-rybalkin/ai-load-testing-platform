@@ -221,10 +221,13 @@ export const runK6Test = async (
 
         const output = stdoutTail.toString() + stderrTail.toString();
         const metrics = parseK6Output(output);
-        const { statusCodes, errorBreakdown, stepMetrics } = parseK6JsonOutput(jsonContent);
+        const { statusCodes, errorBreakdown, stepMetrics, checksTotal, checksFailed } = parseK6JsonOutput(jsonContent);
         metrics.statusCodes    = statusCodes;
         metrics.errorBreakdown = errorBreakdown;
         if (stepMetrics.length > 0) metrics.stepMetrics = stepMetrics;
+        // Only set when the script actually reported check() results — absent
+        // (rather than 0) for old cached scripts predating the checks threshold.
+        if (checksTotal > 0) { metrics.checksTotal = checksTotal; metrics.checksFailed = checksFailed; }
 
         if (code !== 0 && code !== 99 && metrics.requestsTotal === 0) {
           const e = Object.assign(
