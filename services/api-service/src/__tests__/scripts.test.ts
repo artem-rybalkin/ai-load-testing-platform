@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { findExistingScript, stepsToKey, incrementUsedCount } from '../scripts';
 import type { FlowStep, BackendTestOptions } from '@alt/shared';
 
@@ -50,7 +50,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE test_scripts CASCADE');
+  await truncateAll(pool, 'TRUNCATE test_scripts CASCADE');
 });
 
 // ─── findExistingScript ───────────────────────────────────────────────────────
