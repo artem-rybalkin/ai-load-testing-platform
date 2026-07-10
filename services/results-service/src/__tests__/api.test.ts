@@ -14,9 +14,10 @@ vi.mock('../scheduler', () => ({
 }));
 
 // Mock consumer connection state so health check returns consistent results
+const mockIsConsumerConnected = vi.hoisted(() => vi.fn());
 vi.mock('../consumer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../consumer')>();
-  return { ...actual, isConsumerConnected: vi.fn().mockReturnValue(true) };
+  return { ...actual, isConsumerConnected: mockIsConsumerConnected };
 });
 
 let pool: Pool;
@@ -41,6 +42,11 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
   mockFetch.mockReset();
+  // The vi.mock('../consumer', ...) factory above only runs once — with the
+  // project's global mockReset: true, isConsumerConnected's .mockReturnValue()
+  // is cleared before each test, so it must be re-established here rather
+  // than relying on the one-time factory setup.
+  mockIsConsumerConnected.mockReturnValue(true);
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -23,6 +23,12 @@ export default defineConfig({
     },
   },
   test: {
+    // Root cause of a leaked-mock bug found and fixed by hand in worker-backend
+    // (a queued mockReturnValueOnce leaked into the next test's spawn queue) —
+    // reset all mocks between tests instead of relying on every file's own
+    // beforeEach to call vi.clearAllMocks()/mockReset() correctly.
+    mockReset: true,
+    clearMocks: true,
     env: {
       DATABASE_URL: 'postgresql://placeholder:placeholder@localhost:5432/placeholder',
       RABBITMQ_URL: 'amqp://placeholder:placeholder@localhost:5672',

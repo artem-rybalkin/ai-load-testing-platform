@@ -30,7 +30,10 @@ vi.mock('@/lib/api', () => ({
   previewThresholds: vi.fn().mockResolvedValue({ available: false }),
 }));
 
-import { createTest, getPresets, getResult, previewThresholds } from '@/lib/api';
+import {
+  createTest, getPresets, createPreset, getResults, getActiveTests, getResult,
+  suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds,
+} from '@/lib/api';
 const mockCreateTest = vi.mocked(createTest);
 const mockGetPresets = vi.mocked(getPresets);
 const mockGetResult = vi.mocked(getResult);
@@ -38,9 +41,19 @@ const mockPreviewThresholds = vi.mocked(previewThresholds);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // These previously had default resolved values baked into the vi.mock(...)
+  // factory itself, which only runs once — the project's global mockReset: true
+  // clears that implementation before every test, so it's re-established here.
   mockCreateTest.mockResolvedValue({ test: { id: 'new-test-id' } });
   mockGetPresets.mockResolvedValue({ presets: [] });
+  vi.mocked(createPreset).mockResolvedValue({} as never);
+  vi.mocked(getResults).mockResolvedValue({ results: [] } as never);
+  vi.mocked(getActiveTests).mockResolvedValue({ active: [] });
   mockGetResult.mockResolvedValue({ result: null } as never);
+  vi.mocked(suggestThresholds).mockResolvedValue({} as never);
+  vi.mocked(suggestSettings).mockResolvedValue({} as never);
+  vi.mocked(translatePlaywright).mockResolvedValue({} as never);
+  vi.mocked(suggestPresetName).mockResolvedValue({ name: 'Suggested preset' } as never);
   mockPreviewThresholds.mockResolvedValue({ available: false });
   // Ensure no rerun param bleeds between tests
   stableSearchParams.delete('rerun');

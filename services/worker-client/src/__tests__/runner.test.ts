@@ -8,6 +8,7 @@ import { Browser } from 'puppeteer';
 import type { TestRequest, ResourceBreakdown } from '@alt/shared';
 import { runClientTest } from '../runner';
 import { createBrowserPool } from '../browserPool';
+import { log } from '../logger';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,19 @@ vi.mock('../logger', () => ({
     debug: vi.fn(),
   },
 }));
+
+// The vi.mock(...) factory above only runs once — with the project's global
+// mockReset: true, every mock's implementation (including log.child's
+// .mockReturnValue()) is cleared before each test, so it must be
+// re-established here rather than relying on the one-time factory setup.
+beforeEach(() => {
+  vi.mocked(log.child).mockReturnValue({
+    info:  vi.fn(),
+    warn:  vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  } as unknown as ReturnType<typeof log.child>);
+});
 
 vi.mock('@alt/shared', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@alt/shared')>();

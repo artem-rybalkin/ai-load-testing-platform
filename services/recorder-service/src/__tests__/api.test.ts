@@ -13,12 +13,13 @@ const mockDetect       = vi.hoisted(() => vi.fn());
 const mockSuggestStepNames     = vi.hoisted(() => vi.fn());
 const mockSuggestIgnorePatterns = vi.hoisted(() => vi.fn());
 const mockDetectDuplicateSteps = vi.hoisted(() => vi.fn());
+const mockComputeThinkTimes    = vi.hoisted(() => vi.fn());
 
 vi.mock('../recorder', () => ({
   startSession:          mockStartSession,
   stopSession:           mockStopSession,
   toFlowSteps:           mockToFlowSteps,
-  computeThinkTimes:     vi.fn().mockReturnValue([]),
+  computeThinkTimes:     mockComputeThinkTimes,
   compileIgnorePatterns: (patterns: string[]): RegExp[] => patterns.map(p => new RegExp(p)),
 }));
 
@@ -74,6 +75,7 @@ beforeEach(async () => {
   mockSuggestStepNames.mockImplementation(async (steps) => steps);
   mockSuggestIgnorePatterns.mockResolvedValue([]);
   mockDetectDuplicateSteps.mockReturnValue([]);
+  mockComputeThinkTimes.mockReturnValue([]);
   app = await buildApp(sessions, completed);
 });
 

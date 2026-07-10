@@ -71,6 +71,15 @@ describe('ws module', () => {
       return { WebSocketServer: MockWebSocketServer, WebSocket: MockWebSocket };
     });
 
+    // Explicit here (not just relying on real env state) so this outer
+    // beforeEach never depends on a `vi.doMock('../redis', ...)` registration
+    // left over from the "Redis pub/sub broadcast" describe below — doMock
+    // bindings aren't cleared by vi.resetModules() alone, and with the
+    // project's global mockReset: true, a stale binding's captured vi.fn()
+    // from a previous test comes back with its implementation wiped instead
+    // of just being a harmless no-op.
+    vi.doMock('../redis', () => ({ redisClient: undefined }));
+
     wsMod      = await import('../ws') as typeof WsTypes;
     mockServer = new EventEmitter();
     wsMod.setupWebSocketServer(mockServer as never);

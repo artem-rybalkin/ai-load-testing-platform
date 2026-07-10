@@ -25,9 +25,9 @@ vi.mock('@/app/components/TrendChart',    () => ({ default: () => null }));
 
 vi.mock('@/lib/api', () => ({
   getResult: vi.fn(),
-  getLiveMetrics: vi.fn().mockResolvedValue({ points: [] }),
-  getTrend: vi.fn().mockResolvedValue({ trend: [] }),
-  getLogSources: vi.fn().mockResolvedValue({ logSources: [] }),
+  getLiveMetrics: vi.fn(),
+  getTrend: vi.fn(),
+  getLogSources: vi.fn(),
   setBaseline: vi.fn(),
   clearBaseline: vi.fn(),
   cancelTest: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock('@/lib/api', () => ({
   interpolateLogSourceUrl: vi.fn(),
 }));
 
-import { getResult } from '@/lib/api';
+import { getResult, getLiveMetrics, getTrend, getLogSources } from '@/lib/api';
 const mockGetResult = vi.mocked(getResult);
 
 const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
@@ -61,6 +61,12 @@ const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetResult.mockResolvedValue({ result: makeResult() });
+  // These previously had default resolved values baked into the vi.mock(...)
+  // factory itself, which only runs once — the project's global mockReset: true
+  // clears that implementation before every test, so it's re-established here.
+  vi.mocked(getLiveMetrics).mockResolvedValue({ points: [] });
+  vi.mocked(getTrend).mockResolvedValue({ trend: [] } as never);
+  vi.mocked(getLogSources).mockResolvedValue({ logSources: [] });
 });
 
 afterEach(() => cleanup());

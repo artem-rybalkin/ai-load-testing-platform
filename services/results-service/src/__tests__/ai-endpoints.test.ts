@@ -13,6 +13,7 @@ import { createTestDatabase, truncateAll } from '../../../../test-support/shared
 import { FastifyInstance } from 'fastify';
 import { buildApp, buildChatParsePrompt, fetchExternalMetrics } from '../app';
 import { createSchema } from '../db';
+import { fetchSsrfSafe, validateSsrfSafeUrl } from '@alt/shared';
 
 // ── AI provider mock ─────────────────────────────────────────────────────────
 // vi.mock is hoisted before variable declarations, so the fn must be created
@@ -74,6 +75,15 @@ beforeEach(async () => {
   mockGenerateAIText.mockReset();
   mockFetch.mockReset();
   mockFetch.mockResolvedValue({ ok: true, text: async () => '' });
+  // The vi.mock('@alt/shared', ...) factory above only runs once — with the
+  // project's global mockReset: true, fetchSsrfSafe's .mockImplementation()
+  // is cleared before each test, so it must be re-established here rather
+  // than relying on the one-time factory setup.
+  vi.mocked(fetchSsrfSafe).mockImplementation(async (url: string, init: RequestInit = {}) => {
+    const err = validateSsrfSafeUrl(url);
+    if (err) throw new Error(`SSRF check failed: ${err}`);
+    return (globalThis.fetch as typeof fetch)(url, { ...init, redirect: 'manual' });
+  });
   await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
 });
 
@@ -545,7 +555,13 @@ describe('fetchExternalMetrics', () => {
 
   afterAll(() => { vi.unstubAllGlobals(); });
 
-  beforeEach(() => { mockFetch.mockClear(); });
+  // mockClear() alone isn't enough under the project's global mockReset: true
+  // — that clears mockFetch's .mockResolvedValue() implementation (set once,
+  // in beforeAll) before every test, so it must be re-established here too.
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: true, text: async () => '{"ok":true}' });
+  });
 
   const insertLogSource = (metricsEndpointTemplate: string, projectId: string | null): Promise<unknown> =>
     pool.query(

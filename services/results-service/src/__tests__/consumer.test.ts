@@ -3,6 +3,7 @@ import { Pool, QueryResult } from 'pg';
 import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { handleResult } from '../consumer';
 import { createSchema } from '../db';
+import { fetchSsrfSafe, validateSsrfSafeUrl } from '@alt/shared';
 import type { TestResult, BackendMetrics } from '@alt/shared';
 
 // Mock fetchSsrfSafe so DNS resolution is not required in tests.
@@ -72,6 +73,15 @@ beforeEach(async () => {
   mockFetch.mockImplementation((url: string) => {
     if (String(url).includes('/analyse')) return Promise.resolve({ ok: false });
     return Promise.resolve({ ok: true });
+  });
+  // The vi.mock('@alt/shared', ...) factory above only runs once — with the
+  // project's global mockReset: true, fetchSsrfSafe's .mockImplementation()
+  // is cleared before each test, so it must be re-established here rather
+  // than relying on the one-time factory setup.
+  vi.mocked(fetchSsrfSafe).mockImplementation(async (url: string, init: RequestInit = {}) => {
+    const err = validateSsrfSafeUrl(url);
+    if (err) throw new Error(`SSRF check failed: ${err}`);
+    return (globalThis.fetch as typeof fetch)(url, { ...init, redirect: 'manual' });
   });
 });
 
