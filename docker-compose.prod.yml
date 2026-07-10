@@ -125,6 +125,12 @@ services:
       VNC_PASSWORD: ${VNC_PASSWORD}
 
   ui:
+    build:
+      args:
+        VITE_API_URL: https://api.${DOMAIN}
+        VITE_RESULTS_URL: https://data.${DOMAIN}
+        VITE_RECORDER_URL: https://recorder.${DOMAIN}
+        VITE_API_KEY: ${API_KEY}
     ports: !reset []    # Caddy proxies ${DOMAIN} → ui:3006
     deploy:
       resources:
@@ -132,9 +138,6 @@ services:
           memory: 512M
           cpus: '0.5'
     environment:
-      NEXT_PUBLIC_API_KEY: ${API_KEY}
-      NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
-      NEXT_PUBLIC_RESULTS_URL: https://data.${DOMAIN}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
 
 volumes:
