@@ -62,8 +62,13 @@ Set a threshold that allows higher error rate during the spike (up to 10%).`;
 Generate k6 stages that gradually increase load to find the breaking point:
 - Ramp up from 0 to ${peak} VUs over ${duration}
 - Do NOT hold — just keep ramping linearly
-- Add a threshold: p(95) < 2000ms, error rate < 5%
-The goal is to observe where response times degrade.`;
+- The goal is to find where the system breaks, not to run the full ramp regardless — once p(95)/error-rate thresholds are breached there's nothing more to learn, so use k6's abortOnFail to stop the test early instead of the plain string threshold form used elsewhere. Set options.thresholds to exactly:
+  thresholds: {
+    http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }],
+    http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }],
+    checks: ['rate>0.9'],
+  }
+  (delayAbortEval: '10s' gives each new ramp level a moment to produce enough samples before a breach can trigger an abort, so one slow request right after a ramp-up doesn't abort prematurely.)`;
 
     case 'soak':
       return `Load profile: SOAK TEST
@@ -85,6 +90,7 @@ Focus on memory leaks and degradation over time. Set a strict p(95) < 500ms thre
 const BACKEND_PROMPT = (test: TestRequest): string => {
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; discardResponseBodies?: boolean }; headers?: Record<string, string> };
   const fallback = profileInstructions(opts);
+  const isCapacity = opts.profile === 'capacity';
   const { p95, errorRateFrac } = k6Thresholds(test.thresholds);
   const http = opts.httpOptions;
   const httpSection = http ? `
@@ -117,7 +123,9 @@ Requirements:
 - Use k6 JavaScript API (import from 'k6/http' and 'k6')
 - Include realistic think time between requests (sleep 1-3s)
 - Add checks for HTTP status AND at least one body/header assertion per request
-- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a request that returns 200 but with the wrong body)
+${isCapacity
+  ? '- This is a capacity/stress profile — use EXACTLY the options.thresholds object given in the capacity load-profile instructions above (with abortOnFail), not the plain-string form'
+  : `- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a request that returns 200 but with the wrong body)`}
 - Log failures: if res.status is 0 or >= 400, console.error a line with the status and URL (e.g. \`console.error(\`FAILED \${res.status} \${res.request.url}\`)\`) right after the check — this is the only way a failed request shows up in the execution log, since k6 does not print anything for a failing check or a non-2xx response on its own
 - For JSON APIs: set Content-Type: application/json header, use JSON.stringify for request body, call res.json() to parse
 - For authenticated endpoints: read credentials from __ENV.USERNAME / __ENV.PASSWORD / __ENV.API_TOKEN — never hardcode secrets
@@ -227,6 +235,7 @@ const FLOW_PROMPT = (test: TestRequest): string => {
   const steps = test.steps!;
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number };
   const fallback = profileInstructions(opts);
+  const isCapacity = opts.profile === 'capacity';
   const { p95, errorRateFrac } = k6Thresholds(test.thresholds);
 
   const hasExtractions = steps.some(s => s.extract && Object.keys(s.extract).length > 0);
@@ -336,7 +345,9 @@ Requirements:
   * Create/POST: assert the returned object has the expected field(s) from the request body
   * Wrap body assertions in try/catch inside the check callback so a parse failure is a check failure (false), not an exception
 - After all groups, add sleep(1)
-- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a step that returns 2xx but with the wrong body)
+${isCapacity
+  ? '- This is a capacity/stress profile — use EXACTLY the options.thresholds object given in the capacity load-profile instructions above (with abortOnFail), not the plain-string form'
+  : `- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a step that returns 2xx but with the wrong body)`}
 - Return ONLY the JavaScript code, no markdown fences, no explanation
 
 Structure:

@@ -1,5 +1,13 @@
 import { BackendTestOptions } from '@alt/shared';
 
+// k6's object-form threshold — lets a threshold breach abort the run early
+// instead of running the full configured duration after already proving the
+// point. Used only for the capacity/breakpoint profile: the goal there is
+// specifically to find where the system breaks, so once a threshold is
+// breached there's nothing more to learn from continuing.
+interface AbortingThreshold { threshold: string; abortOnFail: true; delayAbortEval: string }
+type ThresholdEntry = string | AbortingThreshold;
+
 export const buildK6Options = (opts: BackendTestOptions): string => {
   const { vus, duration, profile = 'load', peakVus, httpOptions } = opts;
   const peak = peakVus ?? vus * 10;
@@ -9,7 +17,7 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
     ...(httpOptions?.discardResponseBodies ? { discardResponseBodies: true } : {}),
   };
 
-  const obj = ((): { stages: { duration: string; target: number }[]; thresholds: Record<string, string[]> } => {
+  const obj = ((): { stages: { duration: string; target: number }[]; thresholds: Record<string, ThresholdEntry[]> } => {
     switch (profile) {
       case 'spike': return {
         stages: [
@@ -27,7 +35,15 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
           { duration: duration, target: peak },
           { duration: '30s',   target: 0    },
         ],
-        thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.05'], checks: ['rate>0.9'] }
+        // 10s delayAbortEval gives each new stage/VU-target a moment to
+        // produce enough samples before the threshold is evaluated for
+        // abort, so the very first slow request at a new ramp level doesn't
+        // trigger a premature abort.
+        thresholds: {
+          http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }],
+          http_req_failed:   [{ threshold: 'rate<0.05',   abortOnFail: true, delayAbortEval: '10s' }],
+          checks: ['rate>0.9'],
+        }
       };
       case 'soak': return {
         stages: [

@@ -136,6 +136,29 @@ describe('buildK6Options', () => {
       expect(parsed.thresholds.checks).toEqual(['rate>0.9']);
     }
   });
+
+  it('capacity profile aborts early on a threshold breach instead of running the full duration', () => {
+    const result = buildK6Options({ vus: 10, duration: '5m', profile: 'capacity' });
+    const parsed = JSON.parse(result);
+
+    expect(parsed.thresholds.http_req_duration).toEqual([
+      { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' },
+    ]);
+    expect(parsed.thresholds.http_req_failed).toEqual([
+      { threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' },
+    ]);
+  });
+
+  it('non-capacity profiles keep plain-string thresholds — no abortOnFail', () => {
+    const profiles = ['load', 'spike', 'soak'] as const;
+
+    for (const profile of profiles) {
+      const result = buildK6Options({ vus: 10, duration: '1m', profile });
+      const parsed = JSON.parse(result);
+      expect(typeof parsed.thresholds.http_req_duration[0]).toBe('string');
+      expect(typeof parsed.thresholds.http_req_failed[0]).toBe('string');
+    }
+  });
 });
 
 // ─── buildK6Options — httpOptions ─────────────────────────────────────────────

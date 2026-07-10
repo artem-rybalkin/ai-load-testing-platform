@@ -107,6 +107,16 @@ describe('FLOW_PROMPT — thresholds', () => {
     const prompt = await getLastPrompt();
     expect(prompt).toMatch(/checks rate > 0\.9/);
   });
+
+  it('instructs the capacity profile to abort early on a threshold breach instead of running the full duration', async () => {
+    const test = baseFlow();
+    test.options = { vus: 10, duration: '2m', profile: 'capacity', peakVus: 100 } as never;
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain("http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }]");
+    expect(prompt).toContain("http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }]");
+    expect(prompt).not.toMatch(/Always include thresholds: p\(95\)/);
+  });
 });
 
 describe('FLOW_PROMPT — {{varName}} placeholder substitution', () => {
@@ -352,6 +362,23 @@ describe('BACKEND_PROMPT — profileInstructions', () => {
   it('includes CAPACITY / STRESS TEST instructions for capacity profile', async () => {
     await generateScript(makeBackendWithProfile('capacity'));
     expect(await getLastPrompt()).toContain('CAPACITY');
+  });
+
+  it('instructs the capacity profile to abort early on a threshold breach instead of running the full duration', async () => {
+    await generateScript(makeBackendWithProfile('capacity'));
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain("http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }]");
+    expect(prompt).toContain("http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }]");
+    // The generic plain-string Requirements line must be suppressed for capacity — it would
+    // otherwise conflict with the abortOnFail form given in the load-profile instructions.
+    expect(prompt).not.toMatch(/Always include thresholds: p\(95\)/);
+  });
+
+  it('does not add abortOnFail thresholds to non-capacity profiles', async () => {
+    await generateScript(makeBackendWithProfile('spike'));
+    const prompt = await getLastPrompt();
+    expect(prompt).not.toContain('abortOnFail');
+    expect(prompt).toMatch(/Always include thresholds: p\(95\)/);
   });
 
   it('includes SOAK TEST instructions for soak profile', async () => {

@@ -175,6 +175,8 @@ User-controlled text is wrapped in `fenceUserContent()` (`<user_data>` tags + an
 
 LLM calls go through `@alt/shared`'s `generateAIText()` — provider-agnostic, tries `setting.provider` then each `fallbacks` entry in order, each provider skipped if its API key env var is unset. `getProviderSetting()` caches the team's provider chain from results-service for 30s.
 
+The `capacity` load profile (`BACKEND_PROMPT`/`FLOW_PROMPT`) is the one place `options.thresholds` uses k6's object-form threshold instead of a plain string — `{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }` (fixed 2026-07-10) — so a capacity/stress test stops as soon as it proves the system broke instead of burning worker/compute time on the rest of the configured ramp. `buildK6Options()` (api-service `options.ts`) mirrors the same shape for cache-hit re-injection.
+
 Retry has two independent layers: an *inner* 429-backoff (up to 3 attempts, 60s/120s waits) inside `generateScript`/`compareDescriptions`, and an *outer* queue-level retry (`x-retry-count` header, immediate requeue, `MAX_RETRIES=3` then DLQ) in `processAiRequest`'s catch block.
 
 ### api-service — ingress / routing
