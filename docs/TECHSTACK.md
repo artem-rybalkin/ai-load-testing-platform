@@ -6,7 +6,7 @@ Tech stack across all services. Single source for technology decisions.
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Runtime | Node.js | 20 (LTS) |
+| Runtime | Node.js | 22 (LTS) |
 | Language | TypeScript | strict mode, ES2022 target |
 | Package manager | npm | workspaces monorepo |
 
@@ -74,7 +74,7 @@ Fastify (v5) across all HTTP-serving services, with @fastify/cors + @fastify/coo
 | Containers | Docker |
 | Orchestration | docker-compose (dev / prod overlays) |
 | Reverse proxy | Caddy (prod only, auto-TLS via Let's Encrypt) |
-| Base images | node:20-alpine |
+| Base images | node:22-alpine |
 
 ## Logging
 

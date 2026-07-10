@@ -238,7 +238,7 @@ API client (`lib/api/*.ts`) used to be inconsistent about error handling: `teams
 | schema_migrations table | Numbered migration entries applied exactly once; idempotent ADD COLUMN IF NOT EXISTS pattern still used within each migration but guarded by version tracking |
 | DB-backed opaque session tokens | Replaces HMAC-signed cookies (no revocation — gap A-U4). Random 32-byte token in cookie, SHA-256 hash stored in `sessions` table; `revoked_at` enables instant logout. `SESSION_SECRET` empty still = auth disabled, so local dev needs no config change |
 | projects table reused as "team" | Avoids an ~81-site rename of `project_id`/`projectId` across services, UI, and docs; `team_members` + `sessions.team_id` add RBAC on top of the existing project-scoping filters unchanged |
-| bcryptjs for password hashing | Pure JS, no native build step — keeps Alpine-based Docker images (`node:20-alpine`) simple, unlike `bcrypt` which needs node-gyp |
+| bcryptjs for password hashing | Pure JS, no native build step — keeps Alpine-based Docker images (`node:22-alpine`) simple, unlike `bcrypt` which needs node-gyp |
 | Vite proxy for /api + /data | Avoids CORS issues with cookies; same-origin requests mean SameSite=Strict cookies work without credentials: 'include' |
 | @fastify/cookie v11 | v9.x only supported Fastify 4.x; v11 is the first release compatible with Fastify 5 |
 | INP from Lighthouse preferred | Lighthouse `interaction-to-next-paint` audit measures the full interaction timeline (more accurate than PerformanceObserver event type which only measures pre-paint duration) |
