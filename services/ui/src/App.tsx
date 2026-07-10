@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Outlet, Navigate } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Outlet, Navigate } from 'react-router-dom';
 import { ResultsSocketProvider } from '@/lib/ResultsSocketContext';
 import { HealthProvider } from '@/lib/HealthContext';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
@@ -9,6 +9,8 @@ import ActiveTests from '@/app/components/ActiveTests';
 import WorkerHealth from '@/app/components/WorkerHealth';
 import SystemHealth from '@/app/components/SystemHealth';
 import AIStatus from '@/app/components/AIStatus';
+import ErrorBoundary, { RouteErrorBoundary } from '@/app/components/ErrorBoundary';
+import Skeleton from '@/app/components/Skeleton';
 import { lazy, Suspense, useState } from 'react';
 
 const HomePage         = lazy(() => import('@/app/page'));
@@ -52,7 +54,7 @@ function RootLayout() {
         <AIStatus />
         <SystemHealth />
         <main className="flex-1">
-          <Suspense fallback={null}>
+          <Suspense fallback={<div className="p-5"><Skeleton height={240} /></div>}>
             <Outlet />
           </Suspense>
         </main>
@@ -61,37 +63,79 @@ function RootLayout() {
   );
 }
 
+// Each leaf page route gets its own errorElement (rather than relying on one
+// shared ancestor boundary) so a crash on one page doesn't also unmount
+// RootLayout's Sidebar/TopBar — matches the two-boundary design this app
+// already used with the plain ErrorBoundary class component.
+const router = createBrowserRouter([
+  {
+    path: '/login',
+    element: <Suspense fallback={null}><LoginPage /></Suspense>,
+    errorElement: <RouteErrorBoundary />,
+  },
+  {
+    element: <AuthGate />,
+    errorElement: <RouteErrorBoundary />,
+    children: [
+      {
+        element: <RootLayout />,
+        children: [
+          { path: '/', element: <HomePage />, errorElement: <RouteErrorBoundary /> },
+          { path: '/chat', element: <ChatPage />, errorElement: <RouteErrorBoundary /> },
+          { path: '/results', element: <ResultsPage />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: '/results/compare',
+            element: <ComparePage />,
+            loader: (args) => import('@/app/results/compare/page').then(m => m.loader(args)),
+            errorElement: <RouteErrorBoundary />,
+          },
+          { path: '/results/:testId', element: <ResultDetailPage />, errorElement: <RouteErrorBoundary /> },
+          { path: '/presets', element: <PresetsPage />, errorElement: <RouteErrorBoundary /> },
+          { path: '/library', element: <LibraryPage />, errorElement: <RouteErrorBoundary /> },
+          { path: '/schedules', element: <SchedulesPage />, errorElement: <RouteErrorBoundary /> },
+          { path: '/webhooks', element: <WebhooksPage />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: '/team',
+            element: <TeamPage />,
+            loader: () => import('@/app/team/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
+          {
+            path: '/org',
+            element: <OrgPage />,
+            loader: () => import('@/app/org/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
+          {
+            path: '/workspaces',
+            element: <WorkspacesPage />,
+            loader: () => import('@/app/workspaces/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
+          {
+            path: '/settings',
+            element: <SettingsPage />,
+            loader: () => import('@/app/settings/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
+        ],
+      },
+    ],
+  },
+]);
+
 export default function App() {
   return (
-    <AuthProvider>
-      <WorkspaceProvider>
-      <ResultsSocketProvider>
-        <HealthProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<Suspense fallback={null}><LoginPage /></Suspense>} />
-              <Route element={<AuthGate />}>
-                <Route element={<RootLayout />}>
-                  <Route path="/"                element={<HomePage />} />
-                  <Route path="/chat"            element={<ChatPage />} />
-                  <Route path="/results"         element={<ResultsPage />} />
-                  <Route path="/results/compare" element={<ComparePage />} />
-                  <Route path="/results/:testId" element={<ResultDetailPage />} />
-                  <Route path="/presets"         element={<PresetsPage />} />
-                  <Route path="/library"         element={<LibraryPage />} />
-                  <Route path="/schedules"       element={<SchedulesPage />} />
-                  <Route path="/webhooks"        element={<WebhooksPage />} />
-                  <Route path="/team"            element={<TeamPage />} />
-                  <Route path="/org"             element={<OrgPage />} />
-                  <Route path="/workspaces"      element={<WorkspacesPage />} />
-                  <Route path="/settings"        element={<SettingsPage />} />
-                </Route>
-              </Route>
-            </Routes>
-          </BrowserRouter>
-        </HealthProvider>
-      </ResultsSocketProvider>
-      </WorkspaceProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <WorkspaceProvider>
+          <ResultsSocketProvider>
+            <HealthProvider>
+              <RouterProvider router={router} />
+            </HealthProvider>
+          </ResultsSocketProvider>
+        </WorkspaceProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

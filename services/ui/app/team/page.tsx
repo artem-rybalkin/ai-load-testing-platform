@@ -1,8 +1,8 @@
-'use client';
-
 import { useEffect, useState } from 'react';
+import { useLoaderData, useRevalidator } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import {
+  getMe,
   getTeamMembers, addTeamMember, updateTeamMemberRole, removeTeamMember,
   getTeamQuota, updateTeamQuota,
   getTeamApiKeys, createTeamApiKey, revokeTeamApiKey,
@@ -32,112 +32,140 @@ const QUOTA_FIELDS: { key: keyof TeamQuota; label: string; usageKey?: keyof Team
   { key: 'maxGeminiCallsPerDay', label: 'AI (Gemini) Calls / Day', usageKey: 'geminiCallsToday' },
 ];
 
+interface TeamLoaderData {
+  teamId: string | null;
+  isAdmin: boolean;
+  members: TeamMemberRow[];
+  membersError: string | null;
+  quota: TeamQuota | null;
+  usage: TeamUsage | null;
+  quotaError: string | null;
+  apiKeys: TeamApiKeyRow[];
+  apiKeyError: string | null;
+  auditLog: AuditLogEntry[];
+  auditError: string | null;
+  aiProvider: AiProviderConfig | null;
+  aiProviderError: string | null;
+}
+
+const EMPTY_LOADER_DATA = (teamId: string | null, isAdmin: boolean): TeamLoaderData => ({
+  teamId, isAdmin,
+  members: [], membersError: null,
+  quota: null, usage: null, quotaError: null,
+  apiKeys: [], apiKeyError: null,
+  auditLog: [], auditError: null,
+  aiProvider: null, aiProviderError: null,
+});
+
+// getMe() (not the AuthContext) so this loader has no React context dependency
+// — loaders run outside the component tree. Mirrors the Promise.allSettled
+// partial-failure-tolerant fetch the page used to run in a mount-time useEffect.
+export async function loader(): Promise<TeamLoaderData> {
+  const user = await getMe();
+  const teamId = user.currentTeamId;
+  const isAdmin = user.role === 'admin';
+  const empty = EMPTY_LOADER_DATA(teamId, isAdmin);
+
+  if (!teamId || teamId === 'dev') return empty;
+
+  if (isAdmin) {
+    const [membersRes, quotaRes, apiKeysRes, auditRes, aiRes] = await Promise.allSettled([
+      getTeamMembers(teamId),
+      getTeamQuota(teamId),
+      getTeamApiKeys(teamId),
+      getAuditLog(teamId),
+      getAiProvider(teamId),
+    ]);
+    return {
+      ...empty,
+      members: membersRes.status === 'fulfilled' ? membersRes.value : [],
+      membersError: membersRes.status === 'fulfilled' ? null : 'Failed to load team members',
+      quota: quotaRes.status === 'fulfilled' ? quotaRes.value.quota : null,
+      usage: quotaRes.status === 'fulfilled' ? quotaRes.value.usage : null,
+      quotaError: quotaRes.status === 'fulfilled' ? null : 'Failed to load usage & limits',
+      apiKeys: apiKeysRes.status === 'fulfilled' ? apiKeysRes.value : [],
+      apiKeyError: apiKeysRes.status === 'fulfilled' ? null : 'Failed to load API keys',
+      auditLog: auditRes.status === 'fulfilled' ? auditRes.value.entries : [],
+      auditError: auditRes.status === 'fulfilled' ? null : 'Failed to load audit log',
+      aiProvider: aiRes.status === 'fulfilled' ? aiRes.value : null,
+      aiProviderError: aiRes.status === 'fulfilled' ? null : 'Failed to load AI provider settings',
+    };
+  }
+
+  const [membersRes, quotaRes] = await Promise.allSettled([
+    getTeamMembers(teamId),
+    getTeamQuota(teamId),
+  ]);
+  return {
+    ...empty,
+    members: membersRes.status === 'fulfilled' ? membersRes.value : [],
+    membersError: membersRes.status === 'fulfilled' ? null : 'Failed to load team members',
+    quota: quotaRes.status === 'fulfilled' ? quotaRes.value.quota : null,
+    usage: quotaRes.status === 'fulfilled' ? quotaRes.value.usage : null,
+    quotaError: quotaRes.status === 'fulfilled' ? null : 'Failed to load usage & limits',
+  };
+}
+
 export default function TeamPage() {
   const { user } = useAuth();
-  const teamId = user?.currentTeamId;
-  const isAdmin = user?.role === 'admin';
+  const data = useLoaderData() as TeamLoaderData;
+  const revalidator = useRevalidator();
+  const teamId = data.teamId;
+  const isAdmin = data.isAdmin;
 
-  const [members, setMembers] = useState<TeamMemberRow[]>([]);
+  const [members, setMembers] = useState<TeamMemberRow[]>(data.members);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<TeamRole>('member');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(data.membersError ?? '');
   const [saving, setSaving] = useState(false);
 
-  const [quota, setQuota] = useState<TeamQuota | null>(null);
-  const [usage, setUsage] = useState<TeamUsage | null>(null);
-  const [quotaDraft, setQuotaDraft] = useState<Partial<TeamQuota>>({});
-  const [quotaError, setQuotaError] = useState('');
+  const [quota, setQuota] = useState<TeamQuota | null>(data.quota);
+  const [usage, setUsage] = useState<TeamUsage | null>(data.usage);
+  const [quotaDraft, setQuotaDraft] = useState<Partial<TeamQuota>>(data.quota ?? {});
+  const [quotaError, setQuotaError] = useState(data.quotaError ?? '');
   const [savingQuota, setSavingQuota] = useState(false);
 
-  const [apiKeys, setApiKeys] = useState<TeamApiKeyRow[]>([]);
+  const [apiKeys, setApiKeys] = useState<TeamApiKeyRow[]>(data.apiKeys);
   const [apiKeyName, setApiKeyName] = useState('');
-  const [apiKeyError, setApiKeyError] = useState('');
+  const [apiKeyError, setApiKeyError] = useState(data.apiKeyError ?? '');
   const [creatingKey, setCreatingKey] = useState(false);
   const [newKey, setNewKey] = useState<TeamApiKeyCreated | null>(null);
 
-  const [aiProvider, setAiProviderState] = useState<AiProviderConfig | null>(null);
-  const [aiProviderDraft, setAiProviderDraft] = useState<{ provider: AiProviderName; fallbacks: AiProviderName[] }>({ provider: 'gemini', fallbacks: [] });
-  const [aiProviderError, setAiProviderError] = useState('');
+  const [aiProvider, setAiProviderState] = useState<AiProviderConfig | null>(data.aiProvider);
+  const [aiProviderDraft, setAiProviderDraft] = useState<{ provider: AiProviderName; fallbacks: AiProviderName[] }>(
+    data.aiProvider ? { provider: data.aiProvider.provider, fallbacks: data.aiProvider.fallbacks } : { provider: 'gemini', fallbacks: [] },
+  );
+  const [aiProviderError, setAiProviderError] = useState(data.aiProviderError ?? '');
   const [savingAiProvider, setSavingAiProvider] = useState(false);
 
-  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
-  const [auditError, setAuditError] = useState('');
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>(data.auditLog);
+  const [auditError, setAuditError] = useState(data.auditError ?? '');
 
   const [eraseConfirming, setEraseConfirming] = useState(false);
   const [erasing, setErasing] = useState(false);
   const [eraseError, setEraseError] = useState('');
   const [eraseResult, setEraseResult] = useState<string | null>(null);
 
-  const load = async () => {
-    if (!teamId || teamId === 'dev') return;
+  // Re-syncs all loader-sourced state whenever the loader re-runs (revalidator.revalidate(),
+  // called by the mutation handlers below) — mirrors the original load()'s role, just
+  // triggered by the router instead of a mount-time useEffect fetch.
+  useEffect(() => {
+    setMembers(data.members);
+    setError(data.membersError ?? '');
+    setQuota(data.quota);
+    setUsage(data.usage);
+    setQuotaDraft(data.quota ?? {});
+    setQuotaError(data.quotaError ?? '');
+    setApiKeys(data.apiKeys);
+    setApiKeyError(data.apiKeyError ?? '');
+    setAiProviderState(data.aiProvider);
+    setAiProviderDraft(data.aiProvider ? { provider: data.aiProvider.provider, fallbacks: data.aiProvider.fallbacks } : { provider: 'gemini', fallbacks: [] });
+    setAiProviderError(data.aiProviderError ?? '');
+    setAuditLog(data.auditLog);
+    setAuditError(data.auditError ?? '');
+  }, [data]);
 
-    if (isAdmin) {
-      const [membersRes, quotaRes, apiKeysRes, auditRes, aiRes] = await Promise.allSettled([
-        getTeamMembers(teamId),
-        getTeamQuota(teamId),
-        getTeamApiKeys(teamId),
-        getAuditLog(teamId),
-        getAiProvider(teamId),
-      ]);
-
-      if (membersRes.status === 'fulfilled') {
-        setMembers(membersRes.value);
-      } else {
-        setError('Failed to load team members');
-      }
-
-      if (quotaRes.status === 'fulfilled') {
-        const { quota: q, usage: u } = quotaRes.value;
-        setQuota(q);
-        setUsage(u);
-        setQuotaDraft(q);
-      } else {
-        setQuotaError('Failed to load usage & limits');
-      }
-
-      if (apiKeysRes.status === 'fulfilled') {
-        setApiKeys(apiKeysRes.value);
-      } else {
-        setApiKeyError('Failed to load API keys');
-      }
-
-      if (auditRes.status === 'fulfilled') {
-        setAuditLog(auditRes.value.entries);
-      } else {
-        setAuditError('Failed to load audit log');
-      }
-
-      if (aiRes.status === 'fulfilled') {
-        const cfg = aiRes.value;
-        setAiProviderState(cfg);
-        setAiProviderDraft({ provider: cfg.provider, fallbacks: cfg.fallbacks });
-      } else {
-        setAiProviderError('Failed to load AI provider settings');
-      }
-    } else {
-      const [membersRes, quotaRes] = await Promise.allSettled([
-        getTeamMembers(teamId),
-        getTeamQuota(teamId),
-      ]);
-
-      if (membersRes.status === 'fulfilled') {
-        setMembers(membersRes.value);
-      } else {
-        setError('Failed to load team members');
-      }
-
-      if (quotaRes.status === 'fulfilled') {
-        const { quota: q, usage: u } = quotaRes.value;
-        setQuota(q);
-        setUsage(u);
-        setQuotaDraft(q);
-      } else {
-        setQuotaError('Failed to load usage & limits');
-      }
-    }
-  };
-
-  useEffect(() => { load(); }, [teamId]);
+  const load = async () => { await revalidator.revalidate(); };
 
   if (!teamId || teamId === 'dev') {
     return (

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useLoaderData } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { getLiveMetricWindow, setLiveMetricWindow, LiveMetricWindowSec } from '@/lib/api';
+import { getMe, getLiveMetricWindow, setLiveMetricWindow, LiveMetricWindowSec } from '@/lib/api';
 
 const WINDOW_OPTIONS: { id: LiveMetricWindowSec; label: string }[] = [
   { id: 10, label: '10s' },
@@ -8,22 +9,36 @@ const WINDOW_OPTIONS: { id: LiveMetricWindowSec; label: string }[] = [
   { id: 60, label: '1min' },
 ];
 
+interface LoaderData {
+  isAdmin: boolean;
+  windowSec: LiveMetricWindowSec | null;
+  loadError: string | null;
+}
+
+export async function loader(): Promise<LoaderData> {
+  // getMe() (not the AuthContext) so this loader has no React context dependency —
+  // loaders run outside the component tree.
+  const user = await getMe();
+  const isAdmin = user.role === 'admin';
+  if (!isAdmin) return { isAdmin, windowSec: null, loadError: null };
+  try {
+    const { windowSec } = await getLiveMetricWindow();
+    return { isAdmin, windowSec, loadError: null };
+  } catch {
+    return { isAdmin, windowSec: null, loadError: 'Failed to load current setting' };
+  }
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const { windowSec, loadError } = useLoaderData() as LoaderData;
 
-  const [current, setCurrent] = useState<LiveMetricWindowSec | null>(null);
-  const [draft, setDraft] = useState<LiveMetricWindowSec>(10);
+  const [current, setCurrent] = useState<LiveMetricWindowSec | null>(windowSec);
+  const [draft, setDraft] = useState<LiveMetricWindowSec>(windowSec ?? 10);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    getLiveMetricWindow()
-      .then(({ windowSec }) => { setCurrent(windowSec); setDraft(windowSec); })
-      .catch(() => setError('Failed to load current setting'));
-  }, [isAdmin]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -58,7 +73,7 @@ export default function SettingsPage() {
               <span className="font-display text-[16px] font-semibold">Live metrics window</span>
             </div>
             {current === null ? (
-              <div className="p-8 text-center text-[13px] text-tx-3">{error || 'Loading…'}</div>
+              <div className="p-8 text-center text-[13px] text-tx-3">{loadError || 'Loading…'}</div>
             ) : (
               <div className="p-4 space-y-3">
                 <p className="text-[11px] text-tx-4">

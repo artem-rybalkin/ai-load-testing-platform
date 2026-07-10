@@ -1,9 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import TeamPage from '../app/team/page';
+import { createRoutesStub } from 'react-router';
+import TeamPage, { loader } from '../app/team/page';
 import type { SessionUser, TeamMemberRow, TeamQuota, TeamUsage, TeamApiKeyRow, TeamApiKeyCreated, AiProviderConfig } from '../lib/api';
 
+// TeamPage now fetches its own data via a route loader (React Router data
+// router) instead of a mount-time useEffect — render it through a routes stub
+// so useLoaderData()/useRevalidator() have the router context they need.
+function renderTeamPage() {
+  const Stub = createRoutesStub([{ path: '/team', Component: TeamPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={['/team']} />);
+}
+
+const mockGetMe               = vi.hoisted(() => vi.fn());
 const mockGetTeamMembers      = vi.hoisted(() => vi.fn());
 const mockAddTeamMember       = vi.hoisted(() => vi.fn());
 const mockUpdateTeamMemberRole = vi.hoisted(() => vi.fn());
@@ -20,6 +30,7 @@ const mockSetTeamAiProvider    = vi.hoisted(() => vi.fn());
 const mockClearTeamAiProvider  = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
+  getMe: mockGetMe,
   getTeamMembers: mockGetTeamMembers,
   addTeamMember: mockAddTeamMember,
   updateTeamMemberRole: mockUpdateTeamMemberRole,
@@ -38,6 +49,14 @@ vi.mock('@/lib/api', () => ({
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/AuthContext', () => ({ useAuth: mockUseAuth }));
+
+// Sets both the component's own useAuth() (role-gating render logic) and the
+// loader's getMe() (data fetching) to the same user — they're two independent
+// calls post-migration, but tests need them consistent.
+function setUser(user: SessionUser) {
+  mockUseAuth.mockReturnValue({ user });
+  mockGetMe.mockResolvedValue(user);
+}
 
 const adminUser: SessionUser = {
   id: 'u1', email: 'admin@example.com', name: 'Admin',
@@ -88,33 +107,33 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('TeamPage — dev mode (no team)', () => {
-  it('shows a not-available message when currentTeamId is "dev"', () => {
-    mockUseAuth.mockReturnValue({ user: { ...adminUser, currentTeamId: 'dev', teams: [{ id: 'dev', name: 'dev', role: 'admin' }] } });
-    render(<TeamPage />);
-    expect(screen.getByText(/not available/i)).toBeInTheDocument();
+  it('shows a not-available message when currentTeamId is "dev"', async () => {
+    setUser({ ...adminUser, currentTeamId: 'dev', teams: [{ id: 'dev', name: 'dev', role: 'admin' }] });
+    renderTeamPage();
+    expect(await screen.findByText(/not available/i)).toBeInTheDocument();
   });
 });
 
 describe('TeamPage — admin', () => {
-  beforeEach(() => mockUseAuth.mockReturnValue({ user: adminUser }));
+  beforeEach(() => setUser(adminUser));
 
   it('renders the team name and member list', async () => {
-    render(<TeamPage />);
-    expect(screen.getByText(/team-alpha/)).toBeInTheDocument();
+    renderTeamPage();
+    expect(await screen.findByText(/team-alpha/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('admin@example.com')).toBeInTheDocument());
     expect(screen.getByText('member@example.com')).toBeInTheDocument();
   });
 
   it('shows the Add Member form', async () => {
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamMembers).toHaveBeenCalledWith('t1'));
-    expect(screen.getByPlaceholderText('teammate@example.com')).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText('teammate@example.com')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^add$/i })).toBeInTheDocument();
   });
 
   it('calls addTeamMember and reloads the list on submit', async () => {
     mockAddTeamMember.mockResolvedValue({ success: true });
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(screen.getByText('admin@example.com')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('teammate@example.com'), { target: { value: 'new@example.com' } });
@@ -126,7 +145,7 @@ describe('TeamPage — admin', () => {
 
   it('shows an error message when addTeamMember rejects', async () => {
     mockAddTeamMember.mockRejectedValue(new Error('No user with that email'));
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(screen.getByText('admin@example.com')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('teammate@example.com'), { target: { value: 'ghost@example.com' } });
@@ -138,7 +157,7 @@ describe('TeamPage — admin', () => {
   it('allows changing a member role and removing a member', async () => {
     mockUpdateTeamMemberRole.mockResolvedValue({ success: true });
     mockRemoveTeamMember.mockResolvedValue({ success: true });
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
 
     const selects = screen.getAllByRole('combobox');
@@ -153,16 +172,16 @@ describe('TeamPage — admin', () => {
 });
 
 describe('TeamPage — non-admin (member)', () => {
-  beforeEach(() => mockUseAuth.mockReturnValue({ user: memberUser }));
+  beforeEach(() => setUser(memberUser));
 
   it('does not show the Add Member form', async () => {
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(screen.getByText('admin@example.com')).toBeInTheDocument());
     expect(screen.queryByPlaceholderText('teammate@example.com')).not.toBeInTheDocument();
   });
 
   it('shows read-only role labels instead of selects', async () => {
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(screen.getByText('admin@example.com')).toBeInTheDocument());
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
     expect(screen.getByText('admin')).toBeInTheDocument();
@@ -172,10 +191,10 @@ describe('TeamPage — non-admin (member)', () => {
 
 describe('TeamPage — Usage & Limits', () => {
   it('admin sees editable limits and usage values, and can save', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockUpdateTeamQuota.mockResolvedValue({ quota: { ...defaultQuota, maxConcurrentTests: 8 } });
 
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalledWith('t1'));
 
     expect(await screen.findByText('Usage & Limits')).toBeInTheDocument();
@@ -193,17 +212,17 @@ describe('TeamPage — Usage & Limits', () => {
   });
 
   it('shows an error if loading quota fails', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockGetTeamQuota.mockRejectedValue(new Error('boom'));
 
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(screen.getByText(/failed to load usage/i)).toBeInTheDocument());
   });
 
   it('non-admin member sees read-only usage / limit values', async () => {
-    mockUseAuth.mockReturnValue({ user: memberUser });
+    setUser(memberUser);
 
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalledWith('t1'));
 
     expect(await screen.findByText('Usage & Limits')).toBeInTheDocument();
@@ -219,11 +238,11 @@ describe('TeamPage — API Keys', () => {
     { id: 'k2', name: 'Old key', createdAt: '2026-01-01T00:00:00.000Z', lastUsedAt: null, revoked: true },
   ];
 
-  beforeEach(() => mockUseAuth.mockReturnValue({ user: adminUser }));
+  beforeEach(() => setUser(adminUser));
 
   it('admin sees the API Keys section with existing keys', async () => {
     mockGetTeamApiKeys.mockResolvedValue(existingKeys);
-    render(<TeamPage />);
+    renderTeamPage();
 
     expect(await screen.findByText('API Keys')).toBeInTheDocument();
     expect(await screen.findByText(/CI key/)).toBeInTheDocument();
@@ -234,7 +253,7 @@ describe('TeamPage — API Keys', () => {
 
   it('shows "No API keys" when the team has none', async () => {
     mockGetTeamApiKeys.mockResolvedValue([]);
-    render(<TeamPage />);
+    renderTeamPage();
     expect(await screen.findByText('No API keys')).toBeInTheDocument();
   });
 
@@ -243,10 +262,10 @@ describe('TeamPage — API Keys', () => {
     const created: TeamApiKeyCreated = { id: 'k3', name: 'CI pipeline', key: 'rawkey-abc123', createdAt: '2026-01-05T00:00:00.000Z' };
     mockCreateTeamApiKey.mockResolvedValue(created);
 
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamApiKeys).toHaveBeenCalledTimes(1));
 
-    fireEvent.change(screen.getByPlaceholderText(/key name/i), { target: { value: 'CI pipeline' } });
+    fireEvent.change(await screen.findByPlaceholderText(/key name/i), { target: { value: 'CI pipeline' } });
     fireEvent.click(screen.getByRole('button', { name: /generate key/i }));
 
     await waitFor(() => expect(mockCreateTeamApiKey).toHaveBeenCalledWith('t1', 'CI pipeline'));
@@ -257,10 +276,10 @@ describe('TeamPage — API Keys', () => {
 
   it('shows an error when generating a key fails without a name', async () => {
     mockGetTeamApiKeys.mockResolvedValue([]);
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamApiKeys).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /generate key/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /generate key/i }));
     expect(await screen.findByText(/name is required/i)).toBeInTheDocument();
     expect(mockCreateTeamApiKey).not.toHaveBeenCalled();
   });
@@ -269,7 +288,7 @@ describe('TeamPage — API Keys', () => {
     mockGetTeamApiKeys.mockResolvedValue(existingKeys);
     mockRevokeTeamApiKey.mockResolvedValue({ success: true });
 
-    render(<TeamPage />);
+    renderTeamPage();
     await waitFor(() => expect(screen.getByText(/CI key/)).toBeInTheDocument());
 
     const revokeButtons = screen.getAllByRole('button', { name: /revoke/i });
@@ -281,7 +300,7 @@ describe('TeamPage — API Keys', () => {
 });
 
 describe('TeamPage — Audit Log', () => {
-  beforeEach(() => mockUseAuth.mockReturnValue({ user: adminUser }));
+  beforeEach(() => setUser(adminUser));
 
   it('admin sees the Audit Log section with entries', async () => {
     mockGetAuditLog.mockResolvedValue({
@@ -289,7 +308,7 @@ describe('TeamPage — Audit Log', () => {
         { id: 'a1', action: 'export_csv', resourceType: 'test_result', resourceId: '12345678-aaaa-bbbb-cccc-000000000001', createdAt: '2026-01-05T00:00:00.000Z', userEmail: 'admin@example.com' },
       ],
     });
-    render(<TeamPage />);
+    renderTeamPage();
 
     expect(await screen.findByText('Audit Log')).toBeInTheDocument();
     expect(await screen.findByText(/export_csv/)).toBeInTheDocument();
@@ -299,13 +318,13 @@ describe('TeamPage — Audit Log', () => {
 
   it('shows "No audit log entries" when the team has none', async () => {
     mockGetAuditLog.mockResolvedValue({ entries: [] });
-    render(<TeamPage />);
+    renderTeamPage();
     expect(await screen.findByText('No audit log entries')).toBeInTheDocument();
   });
 
   it('non-admin members do not see the Audit Log section', async () => {
-    mockUseAuth.mockReturnValue({ user: memberUser });
-    render(<TeamPage />);
+    setUser(memberUser);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
     expect(screen.queryByText('Audit Log')).not.toBeInTheDocument();
     expect(mockGetAuditLog).not.toHaveBeenCalled();
@@ -314,10 +333,10 @@ describe('TeamPage — Audit Log', () => {
 
 describe('TeamPage — Danger Zone (data erasure)', () => {
   it('admin sees the Danger Zone and erases data after confirming twice', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockEraseTeamData.mockResolvedValue({ success: true, deleted: { testResults: 3, scripts: 1, schedules: 0 } });
 
-    render(<TeamPage />);
+    renderTeamPage();
     expect(await screen.findByText('Danger Zone')).toBeInTheDocument();
 
     const button = screen.getByRole('button', { name: /erase all data/i });
@@ -331,10 +350,10 @@ describe('TeamPage — Danger Zone (data erasure)', () => {
   });
 
   it('shows an error if erasure fails', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockEraseTeamData.mockRejectedValue(new Error('boom'));
 
-    render(<TeamPage />);
+    renderTeamPage();
     const button = await screen.findByRole('button', { name: /erase all data/i });
     fireEvent.click(button);
     fireEvent.click(await screen.findByRole('button', { name: /click again to confirm/i }));
@@ -343,8 +362,8 @@ describe('TeamPage — Danger Zone (data erasure)', () => {
   });
 
   it('non-admin members do not see the Danger Zone', async () => {
-    mockUseAuth.mockReturnValue({ user: memberUser });
-    render(<TeamPage />);
+    setUser(memberUser);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
     expect(screen.queryByText('Danger Zone')).not.toBeInTheDocument();
   });
@@ -352,8 +371,8 @@ describe('TeamPage — Danger Zone (data erasure)', () => {
 
 describe('TeamPage — AI Provider', () => {
   it('admin sees the AI Provider section with the current provider selected', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
-    render(<TeamPage />);
+    setUser(adminUser);
+    renderTeamPage();
 
     expect(await screen.findByText('AI Provider')).toBeInTheDocument();
     await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalled());
@@ -364,9 +383,9 @@ describe('TeamPage — AI Provider', () => {
   });
 
   it('saves the selected primary provider and fallbacks for this team', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockSetTeamAiProvider.mockResolvedValue({ provider: 'openai', fallbacks: ['gemini'], isOverride: true });
-    render(<TeamPage />);
+    renderTeamPage();
 
     await screen.findByText('AI Provider');
     await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalled());
@@ -382,9 +401,9 @@ describe('TeamPage — AI Provider', () => {
   });
 
   it('shows an error message when saving fails', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockSetTeamAiProvider.mockRejectedValue(new Error('Admin role required'));
-    render(<TeamPage />);
+    renderTeamPage();
 
     await screen.findByText('AI Provider');
     await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalled());
@@ -394,16 +413,16 @@ describe('TeamPage — AI Provider', () => {
   });
 
   it('non-admin members do not see the AI Provider section', async () => {
-    mockUseAuth.mockReturnValue({ user: memberUser });
-    render(<TeamPage />);
+    setUser(memberUser);
+    renderTeamPage();
     await waitFor(() => expect(mockGetTeamQuota).toHaveBeenCalled());
     expect(screen.queryByText('AI Provider')).not.toBeInTheDocument();
     expect(mockGetAiProvider).not.toHaveBeenCalled();
   });
 
   it('shows "Using platform default" badge and no revert button when there is no team override', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
-    render(<TeamPage />);
+    setUser(adminUser);
+    renderTeamPage();
 
     await screen.findByText('AI Provider');
     await waitFor(() => expect(mockGetAiProvider).toHaveBeenCalledWith('t1'));
@@ -413,9 +432,9 @@ describe('TeamPage — AI Provider', () => {
   });
 
   it('shows "Custom for this team" badge and a revert button when a team override exists', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockGetAiProvider.mockResolvedValue({ ...defaultAiProvider, provider: 'anthropic', isOverride: true });
-    render(<TeamPage />);
+    renderTeamPage();
 
     await screen.findByText('AI Provider');
     expect(await screen.findByText('Custom for this team')).toBeInTheDocument();
@@ -423,12 +442,12 @@ describe('TeamPage — AI Provider', () => {
   });
 
   it('reverts the team override to the platform default', async () => {
-    mockUseAuth.mockReturnValue({ user: adminUser });
+    setUser(adminUser);
     mockGetAiProvider
       .mockResolvedValueOnce({ ...defaultAiProvider, provider: 'anthropic', isOverride: true })
       .mockResolvedValueOnce(defaultAiProvider);
     mockClearTeamAiProvider.mockResolvedValue({ success: true });
-    render(<TeamPage />);
+    renderTeamPage();
 
     await screen.findByText('AI Provider');
     const revertButton = await screen.findByRole('button', { name: /revert to platform default/i });

@@ -1,5 +1,4 @@
-import { useEffect, useState, Suspense } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useLoaderData, Link, type LoaderFunctionArgs } from 'react-router-dom';
 import { compareResults, TestResult } from '@/lib/api';
 
 const PerfBadge = ({ status }: { status?: string }) => {
@@ -46,26 +45,20 @@ const clientMetrics = [
   { key: 'cls',  label: 'CLS',  unit: '' },
 ];
 
-function CompareContent() {
-  const [params] = useSearchParams();
-  const a = params.get('a') ?? '';
-  const b = params.get('b') ?? '';
-  const [results, setResults] = useState<{ resultA: TestResult; resultB: TestResult } | null>(null);
-  const [error, setError] = useState('');
+export async function loader({ request }: LoaderFunctionArgs): Promise<{ resultA: TestResult; resultB: TestResult }> {
+  const url = new URL(request.url);
+  const a = url.searchParams.get('a') ?? '';
+  const b = url.searchParams.get('b') ?? '';
+  if (!a || !b) throw new Error('Provide ?a=<id>&b=<id> in the URL');
+  try {
+    return await compareResults(a, b);
+  } catch {
+    throw new Error('Failed to load results');
+  }
+}
 
-  useEffect(() => {
-    if (!a || !b) { setError('Provide ?a=<id>&b=<id> in the URL'); return; }
-    compareResults(a, b).then(setResults).catch(() => setError('Failed to load results'));
-  }, [a, b]);
-
-  if (error) return (
-    <div className="flex items-center justify-center h-40 text-red-fg text-[13px]">{error}</div>
-  );
-  if (!results) return (
-    <div className="flex items-center justify-center h-40 text-tx-4 text-[13px]">Loading…</div>
-  );
-
-  const { resultA, resultB } = results;
+export default function ComparePage() {
+  const { resultA, resultB } = useLoaderData() as { resultA: TestResult; resultB: TestResult };
   const isBackend = resultA.type === 'backend';
   const rows = isBackend ? backendMetrics : clientMetrics;
 
@@ -118,13 +111,5 @@ function CompareContent() {
         </div>
       </div>
     </div>
-  );
-}
-
-export default function ComparePage() {
-  return (
-    <Suspense fallback={<main className="min-h-screen bg-bg flex items-center justify-center"><p className="text-tx-4">Loading...</p></main>}>
-      <CompareContent />
-    </Suspense>
   );
 }

@@ -1,13 +1,18 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useLoaderData, useRevalidator } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import { useWorkspace } from '@/lib/WorkspaceContext';
-import { createWorkspace, updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api';
+import { createWorkspace, updateWorkspace, deleteWorkspace, getWorkspaces, type Workspace } from '@/lib/api';
+
+export async function loader(): Promise<{ workspaces: Workspace[] }> {
+  return getWorkspaces();
+}
 
 export default function WorkspacesPage() {
   const { user } = useAuth();
-  const { workspaces, activeWorkspaceId, setActiveWorkspaceId, refetch } = useWorkspace();
+  const { activeWorkspaceId, setActiveWorkspaceId, refetch } = useWorkspace();
+  const { workspaces } = useLoaderData() as { workspaces: Workspace[] };
+  const revalidator = useRevalidator();
   const role = user?.role;
 
   const [newName, setNewName] = useState('');
@@ -20,7 +25,12 @@ export default function WorkspacesPage() {
   const [editDesc, setEditDesc] = useState('');
   const [editError, setEditError] = useState('');
 
-  useEffect(() => { refetch(); }, [refetch]);
+  // Refreshes both this page's own loader-backed view and the shared
+  // WorkspaceContext the sidebar switcher reads from — they're independent
+  // fetches of the same underlying list, so a mutation here needs both.
+  const refreshAll = async (): Promise<void> => {
+    await Promise.all([revalidator.revalidate(), refetch()]);
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,7 +39,7 @@ export default function WorkspacesPage() {
     try {
       await createWorkspace({ name: newName.trim(), description: newDesc.trim() || undefined });
       setNewName(''); setNewDesc('');
-      await refetch();
+      await refreshAll();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -46,7 +56,7 @@ export default function WorkspacesPage() {
     try {
       await updateWorkspace(id, { name: editName.trim(), description: editDesc.trim() || undefined });
       setEditingId(null);
-      await refetch();
+      await refreshAll();
     } catch (err) {
       setEditError((err as Error).message);
     }
@@ -57,7 +67,7 @@ export default function WorkspacesPage() {
     try {
       await deleteWorkspace(id);
       if (activeWorkspaceId === id) setActiveWorkspaceId(null);
-      await refetch();
+      await refreshAll();
     } catch (err) {
       alert((err as Error).message);
     }

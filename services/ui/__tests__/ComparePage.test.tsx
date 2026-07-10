@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import ComparePage from '../app/results/compare/page';
+import { createRoutesStub, useRouteError } from 'react-router';
+import ComparePage, { loader } from '../app/results/compare/page';
 import type { TestResult } from '../lib/api';
 
 const mockCompareResults = vi.hoisted(() => vi.fn());
@@ -10,6 +10,23 @@ const mockCompareResults = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
   compareResults: mockCompareResults,
 }));
+
+// A minimal error-boundary stand-in for the real app's RouteErrorBoundary
+// (services/ui/app/components/ErrorBoundary.tsx), which also just renders
+// useRouteError()'s message — the loader throws for missing params or a
+// failed fetch, so these tests need a router-level error boundary to observe
+// that message, same as production.
+function TestErrorBoundary() {
+  const error = useRouteError();
+  return <div>{error instanceof Error ? error.message : String(error)}</div>;
+}
+
+function renderAt(path: string) {
+  const Stub = createRoutesStub([
+    { path: '/results/compare', Component: ComparePage, loader, HydrateFallback: () => null, ErrorBoundary: TestErrorBoundary },
+  ]);
+  return render(<Stub initialEntries={[path]} />);
+}
 
 const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
   id: 'r1',
@@ -44,13 +61,6 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-const renderAt = (path: string) =>
-  render(
-    <MemoryRouter initialEntries={[path]}>
-      <ComparePage />
-    </MemoryRouter>
-  );
-
 describe('ComparePage — missing params', () => {
   it('shows an error when a/b params are missing', async () => {
     renderAt('/results/compare');
@@ -62,14 +72,6 @@ describe('ComparePage — missing params', () => {
     renderAt('/results/compare?a=t1');
     await waitFor(() => expect(screen.getByText('Provide ?a=<id>&b=<id> in the URL')).toBeInTheDocument());
     expect(mockCompareResults).not.toHaveBeenCalled();
-  });
-});
-
-describe('ComparePage — loading state', () => {
-  it('shows Loading… while the comparison is pending', async () => {
-    mockCompareResults.mockReturnValue(new Promise(() => {}));
-    renderAt('/results/compare?a=t1&b=t2');
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
   });
 });
 

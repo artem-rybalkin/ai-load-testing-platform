@@ -1,17 +1,28 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import WorkspacesPage from '../app/workspaces/page';
+import { createRoutesStub } from 'react-router';
+import WorkspacesPage, { loader } from '../app/workspaces/page';
 import type { Workspace } from '../lib/api';
+
+// WorkspacesPage now fetches its project list via a route loader instead of
+// WorkspaceContext — render it through a routes stub so useLoaderData()/
+// useRevalidator() have the router context they need.
+function renderWorkspacesPage() {
+  const Stub = createRoutesStub([{ path: '/workspaces', Component: WorkspacesPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={['/workspaces']} />);
+}
 
 const mockCreateWorkspace = vi.hoisted(() => vi.fn());
 const mockUpdateWorkspace = vi.hoisted(() => vi.fn());
 const mockDeleteWorkspace = vi.hoisted(() => vi.fn());
+const mockGetWorkspaces = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   createWorkspace: mockCreateWorkspace,
   updateWorkspace: mockUpdateWorkspace,
   deleteWorkspace: mockDeleteWorkspace,
+  getWorkspaces: mockGetWorkspaces,
 }));
 
 const mockSetActiveWorkspaceId = vi.hoisted(() => vi.fn());
@@ -48,6 +59,7 @@ beforeEach(() => {
   mockActiveWorkspaceId = null;
   mockUser.mockReturnValue({ role: 'admin' });
   mockRefetch.mockResolvedValue(undefined);
+  mockGetWorkspaces.mockImplementation(() => Promise.resolve({ workspaces: mockWorkspaces }));
   mockCreateWorkspace.mockResolvedValue({ workspace: makeWorkspace() });
   mockUpdateWorkspace.mockResolvedValue({ workspace: makeWorkspace({ name: 'Updated' }) });
   mockDeleteWorkspace.mockResolvedValue(undefined);
@@ -57,26 +69,27 @@ afterEach(() => cleanup());
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
 describe('WorkspacesPage — empty state', () => {
-  it('shows empty state message when no workspaces', () => {
-    render(<WorkspacesPage />);
-    expect(screen.getByText(/No projects yet/)).toBeInTheDocument();
+  it('shows empty state message when no workspaces', async () => {
+    renderWorkspacesPage();
+    expect(await screen.findByText(/No projects yet/)).toBeInTheDocument();
   });
 
-  it('shows the create form for admin role', () => {
-    render(<WorkspacesPage />);
-    expect(screen.getByPlaceholderText('Project name')).toBeInTheDocument();
+  it('shows the create form for admin role', async () => {
+    renderWorkspacesPage();
+    expect(await screen.findByPlaceholderText('Project name')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create/i })).toBeInTheDocument();
   });
 
-  it('shows the create form for member role', () => {
+  it('shows the create form for member role', async () => {
     mockUser.mockReturnValue({ role: 'member' });
-    render(<WorkspacesPage />);
-    expect(screen.getByPlaceholderText('Project name')).toBeInTheDocument();
+    renderWorkspacesPage();
+    expect(await screen.findByPlaceholderText('Project name')).toBeInTheDocument();
   });
 
-  it('hides create form for viewer role', () => {
+  it('hides create form for viewer role', async () => {
     mockUser.mockReturnValue({ role: 'viewer' });
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
+    expect(await screen.findByText(/No projects yet/)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Project name')).not.toBeInTheDocument();
   });
 });
@@ -84,50 +97,52 @@ describe('WorkspacesPage — empty state', () => {
 // ─── List rendering ───────────────────────────────────────────────────────────
 
 describe('WorkspacesPage — list rendering', () => {
-  it('renders workspace name and description', () => {
+  it('renders workspace name and description', async () => {
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
-    expect(screen.getByText('My Project')).toBeInTheDocument();
+    renderWorkspacesPage();
+    expect(await screen.findByText('My Project')).toBeInTheDocument();
     expect(screen.getByText('Test project')).toBeInTheDocument();
   });
 
-  it('renders creation date', () => {
+  it('renders creation date', async () => {
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
-    expect(screen.getByText('2024-01-15')).toBeInTheDocument();
+    renderWorkspacesPage();
+    expect(await screen.findByText('2024-01-15')).toBeInTheDocument();
   });
 
-  it('shows "Active" badge for the active workspace', () => {
+  it('shows "Active" badge for the active workspace', async () => {
     mockWorkspaces = [makeWorkspace({ id: 'ws-active' })];
     mockActiveWorkspaceId = 'ws-active';
-    render(<WorkspacesPage />);
-    expect(screen.getByText('Active')).toBeInTheDocument();
+    renderWorkspacesPage();
+    expect(await screen.findByText('Active')).toBeInTheDocument();
   });
 
-  it('does not show "Active" badge when workspace is not selected', () => {
+  it('does not show "Active" badge when workspace is not selected', async () => {
     mockWorkspaces = [makeWorkspace({ id: 'ws-1' })];
     mockActiveWorkspaceId = 'ws-other';
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
+    expect(await screen.findByText('My Project')).toBeInTheDocument();
     expect(screen.queryByText('Active')).not.toBeInTheDocument();
   });
 
-  it('shows Edit button for admin', () => {
+  it('shows Edit button for admin', async () => {
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
-    expect(screen.getByRole('button', { name: /Edit/i })).toBeInTheDocument();
+    renderWorkspacesPage();
+    expect(await screen.findByRole('button', { name: /Edit/i })).toBeInTheDocument();
   });
 
-  it('hides Delete button for member role', () => {
+  it('hides Delete button for member role', async () => {
     mockUser.mockReturnValue({ role: 'member' });
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
+    expect(await screen.findByText('My Project')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Delete/i })).not.toBeInTheDocument();
   });
 
-  it('shows Delete button for admin', () => {
+  it('shows Delete button for admin', async () => {
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
-    expect(screen.getByRole('button', { name: /Delete/i })).toBeInTheDocument();
+    renderWorkspacesPage();
+    expect(await screen.findByRole('button', { name: /Delete/i })).toBeInTheDocument();
   });
 });
 
@@ -136,8 +151,8 @@ describe('WorkspacesPage — list rendering', () => {
 describe('WorkspacesPage — active selection', () => {
   it('clicking the radio button selects the workspace', async () => {
     mockWorkspaces = [makeWorkspace({ id: 'ws-click' })];
-    render(<WorkspacesPage />);
-    const radio = screen.getByTitle('Set as active project');
+    renderWorkspacesPage();
+    const radio = await screen.findByTitle('Set as active project');
     fireEvent.click(radio);
     expect(mockSetActiveWorkspaceId).toHaveBeenCalledWith('ws-click');
   });
@@ -145,8 +160,8 @@ describe('WorkspacesPage — active selection', () => {
   it('clicking the active workspace radio deselects it', async () => {
     mockWorkspaces = [makeWorkspace({ id: 'ws-deselect' })];
     mockActiveWorkspaceId = 'ws-deselect';
-    render(<WorkspacesPage />);
-    const radio = screen.getByTitle('Deselect project');
+    renderWorkspacesPage();
+    const radio = await screen.findByTitle('Deselect project');
     fireEvent.click(radio);
     expect(mockSetActiveWorkspaceId).toHaveBeenCalledWith(null);
   });
@@ -156,8 +171,8 @@ describe('WorkspacesPage — active selection', () => {
 
 describe('WorkspacesPage — create flow', () => {
   it('calls createWorkspace with name and description on submit', async () => {
-    render(<WorkspacesPage />);
-    fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'New WS' } });
+    renderWorkspacesPage();
+    fireEvent.change(await screen.findByPlaceholderText('Project name'), { target: { value: 'New WS' } });
     fireEvent.change(screen.getByPlaceholderText('Description (optional)'), { target: { value: 'A description' } });
     fireEvent.click(screen.getByRole('button', { name: /Create/i }));
     await waitFor(() => expect(mockCreateWorkspace).toHaveBeenCalledWith({ name: 'New WS', description: 'A description' }));
@@ -165,8 +180,8 @@ describe('WorkspacesPage — create flow', () => {
   });
 
   it('clears the form after successful creation', async () => {
-    render(<WorkspacesPage />);
-    const nameInput = screen.getByPlaceholderText('Project name') as HTMLInputElement;
+    renderWorkspacesPage();
+    const nameInput = await screen.findByPlaceholderText('Project name') as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: 'Temporary' } });
     fireEvent.click(screen.getByRole('button', { name: /Create/i }));
     await waitFor(() => expect(nameInput.value).toBe(''));
@@ -174,15 +189,15 @@ describe('WorkspacesPage — create flow', () => {
 
   it('shows error message when createWorkspace fails', async () => {
     mockCreateWorkspace.mockRejectedValue(new Error('Name already taken'));
-    render(<WorkspacesPage />);
-    fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Dupe' } });
+    renderWorkspacesPage();
+    fireEvent.change(await screen.findByPlaceholderText('Project name'), { target: { value: 'Dupe' } });
     fireEvent.click(screen.getByRole('button', { name: /Create/i }));
     await waitFor(() => expect(screen.getByText('Name already taken')).toBeInTheDocument());
   });
 
   it('does not call createWorkspace when name is empty', async () => {
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Create/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Create/i }));
     expect(mockCreateWorkspace).not.toHaveBeenCalled();
   });
 });
@@ -190,28 +205,28 @@ describe('WorkspacesPage — create flow', () => {
 // ─── Edit flow ────────────────────────────────────────────────────────────────
 
 describe('WorkspacesPage — edit flow', () => {
-  it('opens inline editor when Edit is clicked', () => {
+  it('opens inline editor when Edit is clicked', async () => {
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit/i }));
     expect(screen.getByDisplayValue('My Project')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Test project')).toBeInTheDocument();
   });
 
   it('saves changes and calls updateWorkspace', async () => {
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit/i }));
     fireEvent.change(screen.getByDisplayValue('My Project'), { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByRole('button', { name: /Save/i }));
     await waitFor(() => expect(mockUpdateWorkspace).toHaveBeenCalledWith('ws-1', { name: 'Renamed', description: 'Test project' }));
     expect(mockRefetch).toHaveBeenCalled();
   });
 
-  it('cancels edit without saving', () => {
+  it('cancels edit without saving', async () => {
     mockWorkspaces = [makeWorkspace()];
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit/i }));
     fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
     expect(mockUpdateWorkspace).not.toHaveBeenCalled();
     expect(screen.getByText('My Project')).toBeInTheDocument();
@@ -220,8 +235,8 @@ describe('WorkspacesPage — edit flow', () => {
   it('shows error when updateWorkspace fails', async () => {
     mockWorkspaces = [makeWorkspace()];
     mockUpdateWorkspace.mockRejectedValue(new Error('Name collision'));
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit/i }));
     fireEvent.click(screen.getByRole('button', { name: /Save/i }));
     await waitFor(() => expect(screen.getByText('Name collision')).toBeInTheDocument());
   });
@@ -233,8 +248,8 @@ describe('WorkspacesPage — delete flow', () => {
   it('calls deleteWorkspace after confirm dialog', async () => {
     mockWorkspaces = [makeWorkspace()];
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Delete/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/i }));
     await waitFor(() => expect(mockDeleteWorkspace).toHaveBeenCalledWith('ws-1'));
     expect(mockRefetch).toHaveBeenCalled();
   });
@@ -242,8 +257,8 @@ describe('WorkspacesPage — delete flow', () => {
   it('does not call deleteWorkspace when confirm is cancelled', async () => {
     mockWorkspaces = [makeWorkspace()];
     vi.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Delete/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/i }));
     expect(mockDeleteWorkspace).not.toHaveBeenCalled();
   });
 
@@ -251,8 +266,8 @@ describe('WorkspacesPage — delete flow', () => {
     mockWorkspaces = [makeWorkspace({ id: 'ws-del' })];
     mockActiveWorkspaceId = 'ws-del';
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Delete/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/i }));
     await waitFor(() => expect(mockSetActiveWorkspaceId).toHaveBeenCalledWith(null));
   });
 
@@ -260,8 +275,8 @@ describe('WorkspacesPage — delete flow', () => {
     mockWorkspaces = [makeWorkspace({ id: 'ws-other-del' })];
     mockActiveWorkspaceId = 'ws-different';
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<WorkspacesPage />);
-    fireEvent.click(screen.getByRole('button', { name: /Delete/i }));
+    renderWorkspacesPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/i }));
     await waitFor(() => expect(mockDeleteWorkspace).toHaveBeenCalled());
     expect(mockSetActiveWorkspaceId).not.toHaveBeenCalled();
   });

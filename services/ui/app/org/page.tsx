@@ -1,21 +1,43 @@
-'use client';
-
 import { useEffect, useState } from 'react';
+import { useLoaderData } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import {
-  getOrg, addOrgMember, updateOrgMemberRole, removeOrgMember, createOrgTeam,
+  getMe, getOrg, addOrgMember, updateOrgMemberRole, removeOrgMember, createOrgTeam,
   OrgDetail, OrgRole,
 } from '@/lib/api';
 
 const ORG_ROLES: OrgRole[] = ['owner', 'admin', 'member'];
 
+interface OrgLoaderData {
+  orgId: string;
+  detail: OrgDetail | null;
+  error: string | null;
+}
+
+// getMe() (not the AuthContext) so this loader has no React context dependency —
+// loaders run outside the component tree. Only fetches the user's first org;
+// switching the dropdown to a different org is still handled client-side below,
+// same as it always was — the loader just covers the initial page load.
+export async function loader(): Promise<OrgLoaderData> {
+  const user = await getMe();
+  const orgId = user.orgs?.[0]?.id ?? '';
+  if (!orgId) return { orgId: '', detail: null, error: null };
+  try {
+    const detail = await getOrg(orgId);
+    return { orgId, detail, error: null };
+  } catch (err) {
+    return { orgId, detail: null, error: err instanceof Error ? err.message : 'Failed to load organization' };
+  }
+}
+
 export default function OrgPage() {
   const { user } = useAuth();
   const orgs = user?.orgs ?? [];
+  const data = useLoaderData() as OrgLoaderData;
 
-  const [orgId, setOrgId] = useState<string>(orgs[0]?.id ?? '');
-  const [detail, setDetail] = useState<OrgDetail | null>(null);
-  const [error, setError] = useState('');
+  const [orgId, setOrgId] = useState<string>(data.orgId);
+  const [detail, setDetail] = useState<OrgDetail | null>(data.detail);
+  const [error, setError] = useState(data.error ?? '');
 
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<OrgRole>('member');
@@ -34,7 +56,11 @@ export default function OrgPage() {
     }
   };
 
-  useEffect(() => { load(orgId); }, [orgId]);
+  // Only re-fetch client-side when the user actively switches the org dropdown
+  // away from what the loader already fetched for the initial render.
+  useEffect(() => {
+    if (orgId !== data.orgId) load(orgId);
+  }, [orgId]);
 
   if (orgs.length === 0) {
     return (

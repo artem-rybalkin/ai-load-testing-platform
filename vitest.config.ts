@@ -10,6 +10,16 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'services/ui'),
+      // react-router-dom v7 is just react-router + a couple of DOM-only extras
+      // (HydratedRouter, unused here) re-exported under a separate package
+      // entrypoint. Left un-aliased, app code importing hooks from
+      // 'react-router-dom' and tests importing `createRoutesStub` from
+      // 'react-router' resolve to two distinct module instances, each with
+      // their own DataRouterContext — so useLoaderData() throws "must be
+      // used within a data router" even though a stub router is rendered.
+      // Forcing both specifiers to the same module keeps context identity
+      // consistent.
+      'react-router-dom': 'react-router',
     },
   },
   test: {

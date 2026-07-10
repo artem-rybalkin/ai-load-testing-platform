@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import OrgPage from '../app/org/page';
+import { createRoutesStub } from 'react-router';
+import OrgPage, { loader } from '../app/org/page';
 import type { SessionUser, OrgDetail } from '../lib/api';
 
+const mockGetMe               = vi.hoisted(() => vi.fn());
 const mockGetOrg              = vi.hoisted(() => vi.fn());
 const mockAddOrgMember        = vi.hoisted(() => vi.fn());
 const mockUpdateOrgMemberRole = vi.hoisted(() => vi.fn());
@@ -11,6 +13,7 @@ const mockRemoveOrgMember     = vi.hoisted(() => vi.fn());
 const mockCreateOrgTeam       = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
+  getMe: mockGetMe,
   getOrg: mockGetOrg,
   addOrgMember: mockAddOrgMember,
   updateOrgMemberRole: mockUpdateOrgMemberRole,
@@ -20,6 +23,22 @@ vi.mock('@/lib/api', () => ({
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/AuthContext', () => ({ useAuth: mockUseAuth }));
+
+// OrgPage now fetches its first-org detail via a route loader instead of a
+// mount-time useEffect — render it through a routes stub so useLoaderData()
+// has the router context it needs.
+function renderOrgPage() {
+  const Stub = createRoutesStub([{ path: '/org', Component: OrgPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={['/org']} />);
+}
+
+// Sets both the component's own useAuth() (role-gating render logic) and the
+// loader's getMe() (data fetching) to the same user — they're two independent
+// calls post-migration, but tests need them consistent.
+function setUser(user: SessionUser) {
+  mockUseAuth.mockReturnValue({ user });
+  mockGetMe.mockResolvedValue(user);
+}
 
 const ownerUser: SessionUser = {
   id: 'u1', email: 'owner@example.com', name: 'Owner',
@@ -66,20 +85,20 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('OrgPage — no organization', () => {
-  it('shows a not-a-member message when user has no orgs', () => {
-    mockUseAuth.mockReturnValue({ user: noOrgUser });
-    render(<OrgPage />);
-    expect(screen.getByText('Organization')).toBeInTheDocument();
+  it('shows a not-a-member message when user has no orgs', async () => {
+    setUser(noOrgUser);
+    renderOrgPage();
+    expect(await screen.findByText('Organization')).toBeInTheDocument();
     expect(screen.getByText(/not a member of any organization/i)).toBeInTheDocument();
     expect(mockGetOrg).not.toHaveBeenCalled();
   });
 });
 
 describe('OrgPage — owner/admin', () => {
-  beforeEach(() => mockUseAuth.mockReturnValue({ user: ownerUser }));
+  beforeEach(() => setUser(ownerUser));
 
   it('loads org details and renders org name and members', async () => {
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(mockGetOrg).toHaveBeenCalledWith('org1'));
     expect(await screen.findByText(/Acme Org/)).toBeInTheDocument();
     expect(screen.getByText('owner@example.com')).toBeInTheDocument();
@@ -88,7 +107,7 @@ describe('OrgPage — owner/admin', () => {
 
   it('shows the Add Member form and calls addOrgMember on submit', async () => {
     mockAddOrgMember.mockResolvedValue({ success: true });
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('teammate@example.com'), { target: { value: 'new@example.com' } });
@@ -100,7 +119,7 @@ describe('OrgPage — owner/admin', () => {
 
   it('shows an error message when addOrgMember rejects', async () => {
     mockAddOrgMember.mockRejectedValue(new Error('No user with that email'));
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('teammate@example.com'), { target: { value: 'ghost@example.com' } });
@@ -112,7 +131,7 @@ describe('OrgPage — owner/admin', () => {
   it('allows changing a member role and removing a member', async () => {
     mockUpdateOrgMemberRole.mockResolvedValue({ success: true });
     mockRemoveOrgMember.mockResolvedValue({ success: true });
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
 
     const selects = screen.getAllByRole('combobox');
@@ -127,7 +146,7 @@ describe('OrgPage — owner/admin', () => {
 
   it('lists teams with quota/usage summary and allows creating a new team', async () => {
     mockCreateOrgTeam.mockResolvedValue({ id: 't2', name: 'team-beta', role: 'admin' });
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(screen.getByText('Teams')).toBeInTheDocument());
 
     expect(screen.getByText('team-alpha')).toBeInTheDocument();
@@ -145,18 +164,18 @@ describe('OrgPage — owner/admin', () => {
 
 describe('OrgPage — non-admin member', () => {
   beforeEach(() => {
-    mockUseAuth.mockReturnValue({ user: memberUser });
+    setUser(memberUser);
     mockGetOrg.mockResolvedValue(memberDetail);
   });
 
   it('does not show the Add Member form', async () => {
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
     expect(screen.queryByPlaceholderText('teammate@example.com')).not.toBeInTheDocument();
   });
 
   it('shows read-only role labels instead of selects', async () => {
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
     expect(screen.getByText('owner')).toBeInTheDocument();
@@ -164,7 +183,7 @@ describe('OrgPage — non-admin member', () => {
   });
 
   it('does not show the new team form', async () => {
-    render(<OrgPage />);
+    renderOrgPage();
     await waitFor(() => expect(screen.getByText('Teams')).toBeInTheDocument());
     expect(screen.queryByPlaceholderText('New team name')).not.toBeInTheDocument();
   });
