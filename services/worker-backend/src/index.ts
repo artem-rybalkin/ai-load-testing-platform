@@ -49,7 +49,19 @@ const MAX_TEST_DURATION_MS = parseInt(process.env.K6_MAX_DURATION_MS ?? '600000'
 const WORKER_CONCURRENCY   = parseInt(process.env.WORKER_CONCURRENCY ?? '1');
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// DB usage here is only script-caching + result bookkeeping around each k6
+// run, not held for the run's duration — sized off WORKER_CONCURRENCY (how
+// many tests this replica runs at once) with headroom, not results-service's
+// max: 20 (which fronts the whole REST API surface).
+// connectionTimeoutMillis: node-postgres defaults to 0 (wait forever) for a
+// pool slot — a bounded timeout fails fast instead of a request hanging
+// indefinitely when the pool is exhausted or Postgres is unreachable.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Math.max(5, WORKER_CONCURRENCY + 3),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+});
 // Pool extends EventEmitter — an idle client that hits a backend error (Postgres
 // restart, network blip, connection drop) emits an unhandled 'error' event, which
 // Node treats as an uncaught exception and crashes the whole process. Without this

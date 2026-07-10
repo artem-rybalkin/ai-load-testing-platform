@@ -28,9 +28,16 @@ type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
 // A real class, not vi.fn().mockImplementation(() => ({...})) — an arrow
 // function has no [[Construct]], so `new Pool(...)` would throw "is not a
 // constructor" the moment a test actually imports the real module.
+// Captures the constructor options so the pool-sizing test below can assert
+// on them without a real pg connection.
 const mockQuery = vi.hoisted(() => vi.fn());
+const capturedPoolOptions = vi.hoisted(() => ({ current: undefined as Record<string, unknown> | undefined }));
 vi.mock('pg', () => ({
-  Pool: class { query = mockQuery; on = vi.fn(); },
+  Pool: class {
+    query = mockQuery;
+    on = vi.fn();
+    constructor(options: Record<string, unknown>) { capturedPoolOptions.current = options; }
+  },
 }));
 
 // ── amqplib mock ─────────────────────────────────────────────────────────
@@ -147,6 +154,24 @@ describe('worker-backend index.ts', () => {
     expect(channel.assertQueue).toHaveBeenCalledWith('backend-tests.dlq', { durable: true });
     expect(channel.assertQueue).toHaveBeenCalledWith('test-results', { durable: true });
     expect(channel.prefetch).toHaveBeenCalledWith(4);
+    delete process.env.WORKER_CONCURRENCY;
+  });
+
+  it('sizes the Postgres pool off WORKER_CONCURRENCY, with headroom, instead of a bare default', async () => {
+    process.env.WORKER_CONCURRENCY = '4';
+    await import('../index');
+
+    expect(capturedPoolOptions.current?.max).toBe(7); // WORKER_CONCURRENCY (4) + 3
+    expect(capturedPoolOptions.current?.idleTimeoutMillis).toBe(30_000);
+    expect(capturedPoolOptions.current?.connectionTimeoutMillis).toBe(5_000);
+    delete process.env.WORKER_CONCURRENCY;
+  });
+
+  it('floors the pool size at 5 for a low WORKER_CONCURRENCY', async () => {
+    process.env.WORKER_CONCURRENCY = '1';
+    await import('../index');
+
+    expect(capturedPoolOptions.current?.max).toBe(5); // max(5, 1 + 3)
     delete process.env.WORKER_CONCURRENCY;
   });
 

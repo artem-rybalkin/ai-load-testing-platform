@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
-import { findExistingScript, stepsToKey, incrementUsedCount } from '../scripts';
+import { findExistingScript, stepsToKey, incrementUsedCount, pool as scriptsPool } from '../scripts';
 import type { FlowStep, BackendTestOptions } from '@alt/shared';
 
 let pool: Pool;
@@ -278,5 +278,13 @@ describe('incrementUsedCount', () => {
     const mockPool = { query: vi.fn().mockResolvedValue({ rows: [] }) };
     const result = await incrementUsedCount('uuid-def', mockPool as unknown as Pool);
     expect(result).toBeUndefined();
+  });
+});
+
+describe('pool config', () => {
+  it('sets explicit max/idleTimeoutMillis/connectionTimeoutMillis instead of relying on pg defaults', () => {
+    expect(scriptsPool.options.max).toBe(10);
+    expect(scriptsPool.options.idleTimeoutMillis).toBe(30_000);
+    expect(scriptsPool.options.connectionTimeoutMillis).toBe(5_000);
   });
 });

@@ -68,6 +68,17 @@ describe('POST /auth/register', () => {
     expect(res.json().error).toMatch(/password/i);
   });
 
+  it('returns 400 for a password over 72 bytes (bcrypt silent-truncation guard)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/auth/register', payload: { email: 'a@example.com', password: 'x'.repeat(73), teamName: 'team-x' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/72 bytes/i);
+  });
+
+  it('accepts a password exactly at the 72-byte boundary', async () => {
+    const res = await registerUser('boundary@example.com', 'team-boundary', 'x'.repeat(72));
+    expect(res.statusCode).toBe(200);
+  });
+
   it('returns 400 when teamName is missing', async () => {
     const res = await app.inject({ method: 'POST', url: '/auth/register', payload: { email: 'a@example.com', password: 'password123' } });
     expect(res.statusCode).toBe(400);

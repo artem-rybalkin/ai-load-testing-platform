@@ -3,8 +3,23 @@ import { log } from './logger';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
 
+// results-service fronts nearly the entire REST API surface (results, teams,
+// orgs, webhooks, schedules, presets, auth, AI endpoints, workspaces, system
+// health) — the highest concurrent-request service, hence the largest pool.
+// connectionTimeoutMillis: node-postgres defaults to 0 (wait forever) for a
+// pool slot — a bounded timeout fails fast instead of a request hanging
+// indefinitely when the pool is exhausted or Postgres is unreachable.
+const POOL_MAX = 20;
+const IDLE_TIMEOUT_MS = 30_000;
+const CONNECTION_TIMEOUT_MS = 5_000;
+
 /** Primary pool — all writes + migrations go here. */
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: POOL_MAX,
+  idleTimeoutMillis: IDLE_TIMEOUT_MS,
+  connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+});
 // Pool extends EventEmitter — an idle client that hits a backend error (Postgres
 // restart, network blip, connection drop) emits an unhandled 'error' event, which
 // Node treats as an uncaught exception and crashes the whole process. Without this
@@ -18,7 +33,12 @@ pool.on('error', (err) => log.error({ err }, 'Idle Postgres client error (primar
  * deployments need no config change.
  */
 export const readPool: Pool = process.env.READ_DATABASE_URL
-  ? new Pool({ connectionString: process.env.READ_DATABASE_URL })
+  ? new Pool({
+      connectionString: process.env.READ_DATABASE_URL,
+      max: POOL_MAX,
+      idleTimeoutMillis: IDLE_TIMEOUT_MS,
+      connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+    })
   : pool;
 // Only a distinct object (READ_DATABASE_URL set) needs its own handler — otherwise
 // readPool === pool and it already has one, registering twice would just double-log.

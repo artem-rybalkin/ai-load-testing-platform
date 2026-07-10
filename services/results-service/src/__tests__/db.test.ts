@@ -1,7 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { Pool, QueryResult } from 'pg';
 import { createTestDatabase } from '../../../../test-support/sharedPostgres';
-import { createSchema, queryWithRetry } from '../db';
+import { createSchema, queryWithRetry, pool, readPool } from '../db';
+
+// ─── Pool sizing/timeouts (not left as pg's bare defaults) ────────────────────
+
+describe('pool config', () => {
+  it('sets explicit max/idleTimeoutMillis/connectionTimeoutMillis instead of relying on pg defaults', () => {
+    expect(pool.options.max).toBe(20);
+    expect(pool.options.idleTimeoutMillis).toBe(30_000);
+    expect(pool.options.connectionTimeoutMillis).toBe(5_000);
+  });
+
+  it('readPool falls back to the primary pool when READ_DATABASE_URL is unset', () => {
+    // Test env never sets READ_DATABASE_URL — this is the single-node-deployment path.
+    expect(readPool).toBe(pool);
+  });
+});
 
 let dbUri: string;
 let dropDb: () => Promise<void>;

@@ -31,7 +31,17 @@ export const stepsToKey = (steps: FlowStep[]): string => {
 };
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Moderate traffic (test creation + script-cache lookups) — smaller than
+// results-service's pool, which fronts the rest of the REST API surface.
+// connectionTimeoutMillis: node-postgres defaults to 0 (wait forever) for a
+// pool slot — a bounded timeout fails fast instead of a request hanging
+// indefinitely when the pool is exhausted or Postgres is unreachable.
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+});
 // Pool extends EventEmitter — an idle client that hits a backend error (Postgres
 // restart, network blip, connection drop) emits an unhandled 'error' event, which
 // Node treats as an uncaught exception and crashes the whole process. Without this
