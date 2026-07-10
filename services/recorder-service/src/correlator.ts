@@ -405,7 +405,7 @@ If all domains are relevant, return: []`;
       log.debug({ domains, text }, 'Ignore-pattern suggestion: no JSON array in response');
       return [];
     }
-    const patterns: unknown[] = JSON.parse(match[0]);
+    const patterns = JSON.parse(match[0]) as unknown[];
     const filtered = patterns.filter((p): p is string => typeof p === 'string' && p.length > 0);
     log.debug({ domains, suggested: filtered }, 'Ignore-pattern suggestion complete');
     return filtered;
@@ -478,7 +478,7 @@ Return ONLY valid JSON array with one name string per step (same order, same cou
     const text = (await generateAIText(prompt, setting)).trim();
     const match = text.match(/\[[\s\S]*\]/);
     if (!match) return steps;
-    const names: string[] = JSON.parse(match[0]);
+    const names = JSON.parse(match[0]) as string[];
     if (!Array.isArray(names) || names.length !== steps.length) return steps;
     return steps.map((s, i) => ({ ...s, name: names[i] || s.name }));
   } catch (err) {
@@ -514,7 +514,7 @@ export async function detectCorrelations(
       return steps;
     }
 
-    const parsed: CorrelationResult = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(jsonMatch[0]) as CorrelationResult;
     if (!Array.isArray(parsed.correlations)) {
       return steps;
     }

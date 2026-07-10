@@ -353,7 +353,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         body: JSON.stringify({ projectId: request.projectId ?? null }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body: unknown = await res.json().catch(() => ({}));
         return reply.code(res.status).send(body);
       }
 

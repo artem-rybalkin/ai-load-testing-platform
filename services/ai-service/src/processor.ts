@@ -11,13 +11,25 @@ export const BACKEND_QUEUE = 'backend-tests';
 export const CLIENT_QUEUE  = 'client-tests';
 export const MAX_RETRIES   = 3;
 
+// A minimal Message shape — only what this module actually reads (msg.content,
+// msg.properties.headers). A real amqplib.Message satisfies this trivially; test
+// fixtures don't need to fabricate the internal `fields` or the rest of
+// amqplib's full MessageProperties (contentType, deliveryMode, priority, etc.).
+interface MinimalMessage {
+  content: Buffer;
+  properties: { headers?: amqplib.MessagePropertyHeaders };
+}
+
 export interface ProcessorDeps {
-  channel:    Pick<amqplib.Channel, 'sendToQueue' | 'publish' | 'ack'>;
-  // Real Message (needed since channel.ack() below requires it), loosened to allow
-  // the lighter test-fixture shape (missing amqplib's internal `fields`) — tests
-  // never need `fields`, and only `content`/`properties` are actually read here.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-redundant-type-constituents
-  msg:        amqplib.Message | any;
+  // Custom (not Pick<amqplib.Channel, ...>) method signatures accepting MinimalMessage —
+  // a real amqplib.Channel structurally satisfies this (method-syntax parameters are
+  // checked bivariantly), while test mocks can pass a lighter msg fixture too.
+  channel: {
+    sendToQueue(queue: string, content: Buffer, options?: amqplib.Options.Publish): boolean;
+    publish(exchange: string, routingKey: string, content: Buffer, options?: amqplib.Options.Publish): boolean;
+    ack(message: MinimalMessage, allUpTo?: boolean): void;
+  };
+  msg:        MinimalMessage;
   resultsUrl: string;
   /** Override for testing — defaults to real generateScript */
   generateScript?:     typeof generateScript;

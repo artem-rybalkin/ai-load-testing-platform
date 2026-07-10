@@ -70,7 +70,7 @@ export const saveScript = async (
     );
     return scriptId;
   }
-  const { rows } = await pool.query(
+  const { rows } = await pool.query<{ id: string }>(
     `INSERT INTO test_scripts (target_url, test_type, script, description, project_id, workspace_id)
      VALUES ($1, 'backend', $2, $3, $4, $5)
      ON CONFLICT (target_url, test_type) DO UPDATE
@@ -256,7 +256,7 @@ export const start = async (): Promise<void> => {
       if (span) { span.setAttribute('test.id', test.id); span.setAttribute('test.url', test.targetUrl); }
 
       // r2: skip if already cancelled
-      const { rows: statusRows } = await pool.query(
+      const { rows: statusRows } = await pool.query<{ status: string }>(
         `SELECT status FROM test_results WHERE test_id = $1`, [test.id]
       );
       if (statusRows[0]?.status === 'cancelled') {
