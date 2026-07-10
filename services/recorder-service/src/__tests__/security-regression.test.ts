@@ -461,4 +461,25 @@ describe('Finding #7 — Pino redact list covers no recorder-specific fields', (
     // ever appear in recorder-service logs — so capturedSecret appears in plaintext.
     expect(output).not.toContain('supersecret-auth-token-xyz');
   });
+
+  it('redacts a nested request header one level deep (e.g. logging { request: { requestHeaders } })', () => {
+    const logLines: string[] = [];
+    const dest = new Writable({
+      write(chunk: Buffer, _encoding: BufferEncoding, cb: () => void) {
+        logLines.push(chunk.toString());
+        cb();
+      },
+    });
+
+    const testLog = pino(
+      { level: 'info', base: { service: 'recorder-service' }, redact: { paths: SENSITIVE_PATHS, censor: '[REDACTED]' } },
+      dest,
+    );
+
+    const capturedSecret = 'Bearer nested-secret-token-abc';
+    testLog.info({ request: { requestHeaders: { authorization: capturedSecret } } }, 'Captured request (nested)');
+
+    const output = logLines.join('');
+    expect(output).not.toContain('nested-secret-token-abc');
+  });
 });

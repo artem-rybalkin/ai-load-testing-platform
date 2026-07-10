@@ -17,6 +17,18 @@ export const SENSITIVE_PATHS = [
   'requestHeaders["x-csrf-token"]',
   // Response headers can carry Set-Cookie with session tokens
   'responseHeaders["set-cookie"]',
+  // fast-redact paths only match the literal key hierarchy — the above only
+  // protects a top-level `{ envVars, requestHeaders, ... }` log object. A
+  // one-level wildcard also covers the common `{ test: { envVars } }` /
+  // `{ request: { requestHeaders } }` shape of logging a whole object as a field.
+  '*.envVars',
+  '*.testData',
+  '*.csvData',
+  '*.requestHeaders.authorization',
+  '*.requestHeaders["x-api-key"]',
+  '*.requestHeaders["x-auth-token"]',
+  '*.requestHeaders["x-csrf-token"]',
+  '*.responseHeaders["set-cookie"]',
 ];
 
 export const log = pino({
