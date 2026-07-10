@@ -4,7 +4,7 @@ import importPlugin from 'eslint-plugin-import';
 
 export default [
   {
-    ignores: ['**/dist/**', '**/node_modules/**']
+    ignores: ['**/dist/**', '**/node_modules/**', 'coverage/**']
   },
   {
     files: ['services/*/src/**/*.ts', 'packages/*/src/**/*.ts'],
@@ -38,7 +38,7 @@ export default [
       // the plugin's own legacy-style kebab-case config export instead;
       // structurally it's still just a plain rules object.
       ...tseslint.configs['recommended-type-checked'].rules,
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
       '@typescript-eslint/explicit-function-return-type': 'warn',
       '@typescript-eslint/no-explicit-any': 'warn',
       'no-console': 'off',
