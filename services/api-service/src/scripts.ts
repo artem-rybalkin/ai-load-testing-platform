@@ -32,6 +32,12 @@ export const stepsToKey = (steps: FlowStep[]): string => {
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variable is required');
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Pool extends EventEmitter — an idle client that hits a backend error (Postgres
+// restart, network blip, connection drop) emits an unhandled 'error' event, which
+// Node treats as an uncaught exception and crashes the whole process. Without this
+// handler, a single idle-connection hiccup takes down the entire service, not just
+// the one query.
+pool.on('error', (err) => log.error({ err }, 'Idle Postgres client error'));
 
 export const checkDbHealth = (): Promise<void> => pool.query('SELECT 1').then(() => undefined);
 

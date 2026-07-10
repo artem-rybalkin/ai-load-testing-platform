@@ -30,7 +30,7 @@ type MockFn = ReturnType<typeof vi.fn<(...args: any[]) => any>>;
 // constructor" the moment a test actually imports the real module.
 const mockQuery = vi.hoisted(() => vi.fn());
 vi.mock('pg', () => ({
-  Pool: class { query = mockQuery; },
+  Pool: class { query = mockQuery; on = vi.fn(); },
 }));
 
 // ── amqplib mock ─────────────────────────────────────────────────────────

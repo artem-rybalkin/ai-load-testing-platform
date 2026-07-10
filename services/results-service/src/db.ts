@@ -5,6 +5,12 @@ if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL environment variabl
 
 /** Primary pool — all writes + migrations go here. */
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Pool extends EventEmitter — an idle client that hits a backend error (Postgres
+// restart, network blip, connection drop) emits an unhandled 'error' event, which
+// Node treats as an uncaught exception and crashes the whole process. Without this
+// handler, a single idle-connection hiccup takes down the entire service, not just
+// the one query.
+pool.on('error', (err) => log.error({ err }, 'Idle Postgres client error (primary pool)'));
 
 /**
  * Read replica pool — GET-heavy queries are routed here when READ_DATABASE_URL
@@ -14,6 +20,11 @@ export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const readPool: Pool = process.env.READ_DATABASE_URL
   ? new Pool({ connectionString: process.env.READ_DATABASE_URL })
   : pool;
+// Only a distinct object (READ_DATABASE_URL set) needs its own handler — otherwise
+// readPool === pool and it already has one, registering twice would just double-log.
+if (readPool !== pool) {
+  readPool.on('error', (err) => log.error({ err }, 'Idle Postgres client error (read pool)'));
+}
 
 // ── Migration registry ────────────────────────────────────────────────────────
 // Each entry runs exactly once, identified by its version number.
