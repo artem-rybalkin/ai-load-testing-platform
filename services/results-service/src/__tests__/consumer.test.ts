@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool, QueryResult } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { handleResult } from '../consumer';
 import { createSchema } from '../db';
 import type { TestResult, BackendMetrics } from '@alt/shared';
@@ -65,7 +65,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
+  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
   mockFetch.mockReset();
   // Default: analyser-service returns non-ok so consumer falls back to local analyzeResult;
   // webhook calls also return ok. Tests that need different behaviour override per-test.

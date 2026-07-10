@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { DEFAULT_TEAM_QUOTA } from '@alt/shared';
 import { getTeamQuota, checkTestQuota } from '../quotas';
 
@@ -60,7 +60,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE test_results, team_quotas, projects CASCADE');
+  await truncateAll(pool, 'TRUNCATE test_results, team_quotas, projects CASCADE');
   const teamResult = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-a') RETURNING id`);
   teamId = teamResult.rows[0].id;
 });
