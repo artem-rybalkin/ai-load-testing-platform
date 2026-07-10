@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../app';
 import { createSchema } from '../db';
@@ -39,7 +39,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
+  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
   mockFetch.mockReset();
 });
 

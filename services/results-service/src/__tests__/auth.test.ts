@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../app';
 import { createSchema } from '../db';
@@ -50,7 +50,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE test_results, test_scripts, webhooks, schedules, test_presets, log_sources, sessions, team_members, users, projects CASCADE');
+  await truncateAll(pool, 'TRUNCATE test_results, test_scripts, webhooks, schedules, test_presets, log_sources, sessions, team_members, users, projects CASCADE');
 });
 
 // ─── POST /auth/register ──────────────────────────────────────────────────────

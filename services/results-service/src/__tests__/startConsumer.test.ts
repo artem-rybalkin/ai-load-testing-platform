@@ -19,7 +19,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { createSchema } from '../db';
 import type { TestResult, BackendMetrics } from '@alt/shared';
 
@@ -91,7 +91,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
+  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
   process.env.RABBITMQ_URL = 'amqp://test:test@localhost:5672';
 });
 

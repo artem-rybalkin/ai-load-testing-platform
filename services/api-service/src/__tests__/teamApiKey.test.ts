@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { createHash, randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
 
@@ -86,7 +86,7 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
-  await pool.query('TRUNCATE team_api_keys, projects CASCADE');
+  await truncateAll(pool, 'TRUNCATE team_api_keys, projects CASCADE');
 });
 
 const validBody = {

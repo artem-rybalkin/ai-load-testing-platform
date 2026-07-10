@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import cron from 'node-cron';
 import { startScheduler, reloadSchedule, removeSchedule } from '../scheduler';
 import { createSchema } from '../db';
@@ -41,7 +41,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets CASCADE');
+  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets CASCADE');
   mockFetch.mockReset();
   mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
   mockCronSchedule.mockClear();

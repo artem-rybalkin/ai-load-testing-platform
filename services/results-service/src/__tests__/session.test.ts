@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { createTestDatabase } from '../../../../test-support/sharedPostgres';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { createSchema } from '../db';
 import { createSession, getSession, revokeSession, switchSessionTeam } from '../session';
 
@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE sessions, team_members, users, projects CASCADE');
+  await truncateAll(pool, 'TRUNCATE sessions, team_members, users, projects CASCADE');
 
   const userResult = await pool.query<{ id: string }>(
     `INSERT INTO users (email, password_hash, name) VALUES ('alice@example.com', 'hash', 'Alice') RETURNING id`
