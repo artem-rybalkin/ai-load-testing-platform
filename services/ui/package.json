@@ -10,8 +10,6 @@
   },
   "dependencies": {
     "@alt/shared": "*",
-    "@fontsource-variable/geist": "^5.1.1",
-    "@fontsource-variable/geist-mono": "^5.1.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-router-dom": "^7.6.0",
@@ -21,8 +19,12 @@
     "@tailwindcss/vite": "^4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@typescript-eslint/eslint-plugin": "^8.59.1",
+    "@typescript-eslint/parser": "^8.59.1",
     "@vitejs/plugin-react": "^4.0.0",
     "eslint": "^9",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vite": "^6.0.0"
