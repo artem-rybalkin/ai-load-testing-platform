@@ -35,6 +35,13 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
       if (!password || password.length < 8) {
         return reply.code(400).send({ error: 'Password must be at least 8 characters' });
       }
+      // bcrypt silently truncates at 72 bytes — OWASP's Password Storage Cheat Sheet
+      // warns that two different passwords sharing the same first 72 bytes verify as
+      // matching. Reject before that point instead of accepting a password whose
+      // effective strength is capped without the user knowing.
+      if (Buffer.byteLength(password, 'utf8') > 72) {
+        return reply.code(400).send({ error: 'Password must be 72 bytes or fewer' });
+      }
       if (!teamName?.trim()) {
         return reply.code(400).send({ error: 'teamName is required' });
       }
@@ -50,7 +57,10 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
           return reply.code(409).send({ error: 'Email already registered' });
         }
 
-        const passwordHash = await bcrypt.hash(password, 10);
+        // 12 rounds — OWASP's stated minimum is 10; 12 gives a margin above the
+        // floor rather than sitting exactly on it, at an acceptable hashing-time
+        // cost on current hardware (bcryptjs is pure JS, already the slower path).
+        const passwordHash = await bcrypt.hash(password, 12);
         const userResult = await client.query<{ id: string }>(
           'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id',
           [normalizedEmail, passwordHash, name?.trim() || null],
