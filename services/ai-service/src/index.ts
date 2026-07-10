@@ -48,6 +48,9 @@ const scheduleReconnect = (): void => {
       log.error({ attempt, err: err.message, nextDelayMs }, 'RabbitMQ reconnect failed — retrying'),
   }).then(() => {
     reconnecting = false;
+  }).catch((err: unknown) => {
+    reconnecting = false;
+    log.error({ err: (err as Error).message }, 'RabbitMQ reconnect loop exited unexpectedly');
   });
 };
 
@@ -61,7 +64,7 @@ export const startConsumer = async (): Promise<void> => {
   });
 
   connection.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ connection error');
+    log.error({ err: err.message }, 'RabbitMQ connection error');
   });
   connection.on('close', () => {
     log.warn('RabbitMQ connection closed — reconnecting');
@@ -71,7 +74,7 @@ export const startConsumer = async (): Promise<void> => {
 
   const channel = await connection.createChannel();
   channel.on('error', (err) => {
-    log.error({ err: (err as Error).message }, 'RabbitMQ channel error');
+    log.error({ err: err.message }, 'RabbitMQ channel error');
     queueConnected = false;
   });
 
@@ -80,7 +83,7 @@ export const startConsumer = async (): Promise<void> => {
   await channel.assertQueue(BACKEND_QUEUE, { durable: true });
   await channel.assertQueue(CLIENT_QUEUE,  { durable: true });
 
-  channel.prefetch(WORKER_CONCURRENCY);
+  await channel.prefetch(WORKER_CONCURRENCY);
   queueConnected = true;
   activeConnection = connection;
   activeChannel = channel;
@@ -88,6 +91,10 @@ export const startConsumer = async (): Promise<void> => {
 
   const resultsUrl = process.env.RESULTS_URL || 'http://results-service:3004';
 
+  // async callback intentional — the whole body is wrapped in its own try/catch/finally
+  // (never actually rejects) and tests capture this handler directly via
+  // channel.consume.mock.calls[0][1] and await it to synchronize with the real work.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
   const { consumerTag } = await channel.consume(CONSUME_QUEUE, async (msg) => {
     if (!msg) return;
 
@@ -157,5 +164,5 @@ const start = async (): Promise<void> => {
 };
 
 if (!process.env.VITEST) {
-  start();
+  void start();
 }

@@ -189,7 +189,7 @@ export async function startSession(
       requestId: event.requestId,
       url,
       method,
-      headers: headers as Record<string, string>,
+      headers,
       body: postData,
       timestamp: Date.now(),
     });
@@ -206,47 +206,49 @@ export async function startSession(
     }
     responseHeaders.set(event.requestId, {
       status,
-      headers: headers as Record<string, string>,
+      headers,
       contentType: mimeType ?? '',
     });
   });
 
   // ── CDP: assemble complete exchange ───────────────────────────────────────
-  cdp.on('Network.loadingFinished', async (event) => {
-    const req = pending.get(event.requestId);
-    const resp = responseHeaders.get(event.requestId);
-    if (!req || !resp) return;
-    pending.delete(event.requestId);
-    responseHeaders.delete(event.requestId);
+  cdp.on('Network.loadingFinished', (event) => {
+    void (async (): Promise<void> => {
+      const req = pending.get(event.requestId);
+      const resp = responseHeaders.get(event.requestId);
+      if (!req || !resp) return;
+      pending.delete(event.requestId);
+      responseHeaders.delete(event.requestId);
 
-    // Try to read response body (for JSON responses only — for correlation)
-    let responseBody: string | undefined;
-    const ct = resp.contentType.toLowerCase();
-    if (ct.includes('json')) {
-      try {
-        const { body } = await cdp.send('Network.getResponseBody', { requestId: event.requestId });
-        responseBody = body;
-      } catch {
-        // body may not be available for some requests — ignore
+      // Try to read response body (for JSON responses only — for correlation)
+      let responseBody: string | undefined;
+      const ct = resp.contentType.toLowerCase();
+      if (ct.includes('json')) {
+        try {
+          const { body } = await cdp.send('Network.getResponseBody', { requestId: event.requestId });
+          responseBody = body;
+        } catch {
+          // body may not be available for some requests — ignore
+        }
       }
-    }
 
-    completed.push({
-      requestId: req.requestId,
-      url: req.url,
-      method: req.method,
-      headers: req.headers,
-      body: req.body,
-      responseStatus: resp.status,
-      responseHeaders: resp.headers,
-      responseBody,
-      timestamp: req.timestamp,
-    });
+      completed.push({
+        requestId: req.requestId,
+        url: req.url,
+        method: req.method,
+        headers: req.headers,
+        body: req.body,
+        responseStatus: resp.status,
+        responseHeaders: resp.headers,
+        responseBody,
+        timestamp: req.timestamp,
+      });
 
-    session.stepCount = completed.length;
-    session.lastActivityAt = Date.now();
-    onStep();
-    log.debug({ url: req.url, status: resp.status }, 'Captured request');
+      session.stepCount = completed.length;
+      session.lastActivityAt = Date.now();
+      onStep();
+      log.debug({ url: req.url, status: resp.status }, 'Captured request');
+    })();
   });
 
   const session: RecordingSessionInternal = {

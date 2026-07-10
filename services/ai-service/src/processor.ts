@@ -12,8 +12,11 @@ export const CLIENT_QUEUE  = 'client-tests';
 export const MAX_RETRIES   = 3;
 
 export interface ProcessorDeps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  channel:    Pick<amqplib.Channel, 'sendToQueue' | 'publish' | 'ack'> | any;
+  channel:    Pick<amqplib.Channel, 'sendToQueue' | 'publish' | 'ack'>;
+  // Real Message (needed since channel.ack() below requires it), loosened to allow
+  // the lighter test-fixture shape (missing amqplib's internal `fields`) — tests
+  // never need `fields`, and only `content`/`properties` are actually read here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-redundant-type-constituents
   msg:        amqplib.Message | any;
   resultsUrl: string;
   /** Override for testing — defaults to real generateScript */

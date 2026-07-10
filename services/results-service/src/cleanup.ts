@@ -94,12 +94,14 @@ export const runStaleCleanup = async (
 };
 
 export const startStaleCleanup = (pool: Pool, runningMinutes: number, pendingMinutes: number): void => {
-  setInterval(async () => {
-    try {
-      await runStaleCleanup(pool, runningMinutes, pendingMinutes);
-    } catch (err) {
-      log.error({ err: (err as Error).message }, 'Stale test cleanup failed');
-    }
+  setInterval(() => {
+    void (async (): Promise<void> => {
+      try {
+        await runStaleCleanup(pool, runningMinutes, pendingMinutes);
+      } catch (err) {
+        log.error({ err: (err as Error).message }, 'Stale test cleanup failed');
+      }
+    })();
   }, CLEANUP_INTERVAL_MS);
 
   log.info({ staleRunningMinutes: runningMinutes, stalePendingMinutes: pendingMinutes }, 'Stale test cleanup started');
