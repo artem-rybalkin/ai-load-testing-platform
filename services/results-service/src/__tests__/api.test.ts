@@ -430,6 +430,13 @@ describe('schedules', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('returns 400 when PUT body has an invalid cron expression (regression — POST already validated this, PUT did not)', async () => {
+    const create = await app.inject({ method: 'POST', url: '/schedules', payload: schedulePayload });
+    const id = create.json().schedule.id;
+    const res = await app.inject({ method: 'PUT', url: `/schedules/${id}`, payload: { cron: 'not-a-cron' } });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('deletes a schedule and returns 204', async () => {
     const create = await app.inject({ method: 'POST', url: '/schedules', payload: schedulePayload });
     const id = create.json().schedule.id;
@@ -749,6 +756,10 @@ describe('GET /results/:testId/report.pdf', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('application/pdf');
     expect(res.rawPayload.length).toBeGreaterThan(100);
+    // Confirms the streamed response (reply.hijack() + doc.pipe(reply.raw)) delivers
+    // a complete, well-formed PDF — not just "some bytes" — since streaming instead of
+    // buffering could plausibly truncate the response if the pipe/finish wiring were wrong.
+    expect(res.rawPayload.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
 
   it('returns 404 for unknown test', async () => {

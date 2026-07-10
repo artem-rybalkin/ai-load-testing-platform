@@ -5,7 +5,7 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 
-export async function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }): Promise<void> {
+export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }): void {
 
   // ── GET /workspaces ───────────────────────────────────────────────────────────
 

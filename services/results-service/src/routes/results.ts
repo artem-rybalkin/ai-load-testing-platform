@@ -13,7 +13,7 @@ import { analyzeResult } from '../analyzer';
 import { getAiCapability } from './helpers';
 import { downsampleLivePoints } from '../liveMetricsDownsample';
 
-export async function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): Promise<void> {
+export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): void {
 
   // ── POST /results/:testId/message (internal) ──────────────────────────────
   app.post<{ Params: { testId: string }; Body: { message: string } }>(
@@ -464,8 +464,6 @@ Return only the summary text, no JSON, no markdown.`,
       }
 
       const doc = new PDFDocument({ margin: 50, size: 'A4' });
-      const chunks: Buffer[] = [];
-      doc.on('data', (c: Buffer) => chunks.push(c));
 
       doc.fontSize(20).font('Helvetica-Bold').text('Load Test Report', { align: 'center' });
       doc.moveDown(0.5);
@@ -554,14 +552,26 @@ Return only the summary text, no JSON, no markdown.`,
         }
       }
 
+      // Stream directly to the client instead of buffering the whole PDF in memory
+      // first — PDFKit is a Node Readable stream, and Fastify accepts one directly
+      // via reply.raw. reply.hijack() tells Fastify not to manage the response
+      // itself since we're writing to the raw http.ServerResponse ourselves.
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="report-${testId.slice(0, 8)}.pdf"`,
+      });
+      const streamDone = new Promise<void>((resolve, reject) => {
+        reply.raw.on('finish', resolve);
+        reply.raw.on('error', reject);
+      });
+      doc.pipe(reply.raw);
       doc.end();
-      await new Promise<void>(resolve => doc.on('end', resolve));
-      await recordAudit(pool, { teamId: projectId, userId: request.user?.id, action: 'export_pdf', resourceType: 'test_result', resourceId: testId });
-      const pdf = Buffer.concat(chunks);
-      return reply
-        .header('Content-Type', 'application/pdf')
-        .header('Content-Disposition', `attachment; filename="report-${testId.slice(0, 8)}.pdf"`)
-        .send(pdf);
+      await Promise.all([
+        streamDone,
+        recordAudit(pool, { teamId: projectId, userId: request.user?.id, action: 'export_pdf', resourceType: 'test_result', resourceId: testId }),
+      ]);
+      return;
     },
   );
 
@@ -579,7 +589,10 @@ Return only the summary text, no JSON, no markdown.`,
 
       const result = rows[0];
       const csvEscape = (v: unknown): string => {
-        const s = String(v ?? '');
+        // Object/array column values (e.g. a jsonb column selected via SELECT *)
+        // previously rendered as the literal string "[object Object]" here —
+        // String() on a plain object always uses Object's default toString().
+        const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
       const lines: string[] = ['metric,value'];

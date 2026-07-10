@@ -8,7 +8,7 @@ import { validateSsrfSafeUrl } from '@alt/shared';
 import { checkScheduleQuota } from '../quotas';
 import { reloadSchedule, removeSchedule } from '../scheduler';
 
-export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): Promise<void> {
+export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): void {
 
   // ── Webhook CRUD ─────────────────────────────────────────────────────────────
 
@@ -165,6 +165,9 @@ export async function resourceRoutes(app: FastifyInstance, { pool, rPool }: { po
     async (request, reply) => {
       const { id } = request.params;
       const updates = request.body;
+      if (updates.cron !== undefined && !cronValidator.validate(updates.cron)) {
+        return reply.code(400).send({ error: 'Invalid cron expression' });
+      }
       const sets: string[] = [];
       const vals: unknown[] = [];
       let i = 1;

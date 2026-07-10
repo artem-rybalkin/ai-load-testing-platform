@@ -5,11 +5,11 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
-import type { SessionUser, TeamRole } from '@alt/shared';
+import type { SessionUser } from '@alt/shared';
 import { createSession, revokeSession, switchSessionTeam, getSession } from '../session';
 import { loadUserTeams, loadUserOrgs, DEV_USER, EMAIL_RE } from './helpers';
 
-export async function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): Promise<void> {
+export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): void {
   const sessionSecret = process.env.SESSION_SECRET || '';
   const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX) || 10;
   const cookieOpts = {
@@ -197,7 +197,7 @@ export async function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; r
       name: rows[0].name,
       teams,
       currentTeamId: teamId,
-      role: team.role as TeamRole,
+      role: team.role,
       orgs,
     };
     return result;

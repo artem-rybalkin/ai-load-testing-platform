@@ -19,7 +19,7 @@ import {
 import { isConsumerConnected } from '../consumer';
 import { redisClient } from '../redis';
 
-export async function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): Promise<void> {
+export function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): void {
   // ── GET /health ───────────────────────────────────────────────────────────
   app.get('/health', async (_request, reply) => {
     const checks: Record<string, string> = {};

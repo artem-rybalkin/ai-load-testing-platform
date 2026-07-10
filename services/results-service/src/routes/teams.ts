@@ -16,7 +16,7 @@ import { recordAudit } from '../audit';
 import { removeSchedule } from '../scheduler';
 import { hashApiKey } from '../session';
 
-export async function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): Promise<void> {
+export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): void {
   const sessionSecret = process.env.SESSION_SECRET || '';
 
   // ── Helper: resolve org role for a given user in a given org ─────────────

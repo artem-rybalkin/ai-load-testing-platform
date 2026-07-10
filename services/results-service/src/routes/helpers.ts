@@ -73,7 +73,8 @@ const summarizeOpenApiSpec = (spec: Record<string, unknown>, sourceUrl?: string)
   const paths = spec.paths as Record<string, unknown> | undefined;
   if (!paths || typeof paths !== 'object') return '[No paths found in spec]';
 
-  const title = (spec.info as Record<string, unknown> | undefined)?.title ?? 'API';
+  const rawTitle = (spec.info as Record<string, unknown> | undefined)?.title;
+  const title = typeof rawTitle === 'string' ? rawTitle : 'API';
 
   // Resolve the base URL so the AI can construct absolute step URLs
   let baseUrl = '';

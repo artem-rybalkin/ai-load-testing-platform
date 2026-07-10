@@ -32,7 +32,7 @@ import {
   isValidDiagnoseResponse,
 } from './helpers';
 
-export async function aiRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): Promise<void> {
+export function aiRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): void {
   const AI_RATE_LIMIT_MAX = Number(process.env.AI_RATE_LIMIT_MAX) || 20;
 
   // ── POST /ai/cron ─────────────────────────────────────────────────────────
