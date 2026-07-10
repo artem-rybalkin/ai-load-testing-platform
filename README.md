@@ -75,6 +75,7 @@ under the previous Next.js-based UI).
 | [API Reference](docs/api.md) | Full REST API for all services |
 | [Configuration](docs/configuration.md) | All environment variables and tuning options |
 | [Production Deployment](docs/how-to/production.md) | Caddy HTTPS, DNS, security hardening |
+| [Free-Tier Demo Deployment](docs/how-to/free-demo-deployment.md) | Shareable public URL at zero cost (Render + Neon + CloudAMQP) |
 | [Development Guide](docs/how-to/development.md) | Hot-reload dev mode, test suite, adding services |
 | [Grafana Integration](docs/how-to/grafana-integration.md) | Connect Prometheus, Loki, and Tempo for AI-enriched analysis |
 | [AI Features](docs/AI-FEATURES.md) | Every AI capability, including LLM observability and guardrails |

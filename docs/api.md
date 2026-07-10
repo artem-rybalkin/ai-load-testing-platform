@@ -63,7 +63,7 @@ Create a new user account, a new team, and sign in as that team's admin.
 | Field | Type | Description |
 |-------|------|-------------|
 | `email` | string | Valid email address |
-| `password` | string | At least 8 characters |
+| `password` | string | 8–72 bytes (UTF-8) — bcrypt silently truncates beyond 72 bytes, so longer passwords are rejected rather than accepted with reduced effective strength |
 | `name` | string? | Optional display name |
 | `teamName` | string | New team name (1–80 chars, lowercased); `409` if already taken |
 

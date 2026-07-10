@@ -129,69 +129,82 @@ services/results-service/src/
 
 ## services/ui — Port 3006
 
+Not Next.js — Vite + `react-router` v7 data router (`createBrowserRouter`), see `docs/vite-migration.md`. As of the 2026-07-10 router migration, `Team`/`Org`/`Workspaces`/`Settings`/`Presets`/`Schedules`/`Webhooks`/`Results`/`Compare` fetch their data via a route `loader()` + `useLoaderData()` instead of a mount-time `useEffect`; loaders run outside the React tree (no context access), so any loader needing the active team/workspace calls `getMe()` / reads `localStorage` directly rather than `useAuth()`/`useWorkspace()`. `app/page.tsx` (home), `app/chat/page.tsx`, and `results/testId/page.tsx` are the 3 pages still on mount-time `useEffect` (deliberately out of scope so far — see `TODO.md`).
+
 ```
 services/ui/
 ├── index.html        # Vite entry HTML
 ├── vite.config.ts    # Vite config: tailwind plugin, @/ alias, polling watcher, /api+/data proxy
 ├── src/
 │   ├── main.tsx      # React entry (ReactDOM.createRoot)
-│   └── App.tsx       # BrowserRouter + routes + RootLayout + AuthGate
+│   └── App.tsx       # createBrowserRouter + route loaders + RootLayout (Sidebar/TopBar/ActiveTests/WorkerHealth) + AuthGate + per-route errorElement
 ├── lib/
-│   ├── api.ts              # All fetch wrappers (API + Results service) + types; login/logout/getMe
-│   ├── AuthContext.tsx     # AuthProvider + useAuth hook; SessionUser type; getMe on mount
-│   └── ResultsSocketContext.tsx  # WebSocket context (useResultsSocket hook)
+│   ├── api.ts               # Barrel re-exporting lib/api/*.ts + types; login/logout/getMe
+│   ├── api/                 # Per-domain fetch wrappers: auth, tests, teams, orgs, workspaces, presets,
+│   │                         #   schedules, webhooks, apiKeys, logSources, system, ai, recording, core (shared res.ok/throw helper)
+│   ├── AuthContext.tsx       # AuthProvider + useAuth hook; SessionUser type; getMe on mount
+│   ├── HealthContext.tsx     # Worker/service health + activeTests polling
+│   ├── WorkspaceContext.tsx  # Active workspace selection (persisted to localStorage per team); storageKey() exported for route loaders
+│   ├── ResultsSocketContext.tsx  # WebSocket context (useResultsSocket hook)
+│   └── useDarkMode.ts / useFetch.ts / useMediaQuery.ts / useResultsSocket.ts
 ├── app/
 │   ├── globals.css   # Tailwind 4 CSS-first config + Command Center CSS vars
-│   ├── layout.tsx    # Shell: Sidebar + TopBar + ActiveTests + main + BottomNav
-│   ├── page.tsx      # New Test form (2-col bento) + flow runner + script mode + INP/TBT SLOs
-│   ├── login/
-│   │   └── page.tsx          # Login form — username + project name → POST /auth/login
+│   ├── page.tsx       # New Test form (2-col bento) + flow runner + script mode + INP/TBT SLOs — useEffect-fetched
+│   ├── chat/page.tsx  # AI chat-driven test creation flow — useEffect-fetched
+│   ├── library/page.tsx  # Built-in k6/Puppeteer script template library
+│   ├── login/page.tsx    # Login form — email + password → POST /auth/login
 │   ├── results/
-│   │   ├── page.tsx           # Results list (table + mobile cards)
-│   │   ├── [testId]/page.tsx  # Test detail (bento grid + charts + analysis)
-│   │   └── compare/page.tsx   # Side-by-side metric diff
-│   ├── webhooks/page.tsx      # Webhook CRUD + Log Sources CRUD
-│   ├── schedules/page.tsx     # Schedule CRUD + manual trigger
-│   └── presets/page.tsx       # Preset CRUD + load into form
+│   │   ├── page.tsx         # Results list (table + mobile cards) — loader
+│   │   ├── testId/page.tsx  # Test detail (bento grid + charts + analysis) — useEffect-fetched (live WebSocket)
+│   │   └── compare/page.tsx # Side-by-side metric diff — loader
+│   ├── webhooks/page.tsx    # Webhook CRUD + Log Sources CRUD — loader (webhooks only; log sources still useEffect)
+│   ├── schedules/page.tsx   # Schedule CRUD + manual trigger — loader
+│   ├── presets/page.tsx     # Preset CRUD + load into form — loader
+│   ├── team/page.tsx        # Team members, quota/usage, API keys, audit log, per-team AI provider override — loader
+│   ├── org/page.tsx         # Organization (multi-team) management — loader
+│   ├── workspaces/page.tsx  # Workspace/sub-project CRUD — loader
+│   └── settings/page.tsx    # Platform-admin settings: live-metrics window, platform-default AI provider — loader
 └── app/components/
-    ├── Sidebar.tsx          # Collapsible icon-rail sidebar
-    ├── BottomNav.tsx        # Mobile bottom tab bar
-    ├── TopBar.tsx           # Mobile top bar
-    ├── ActiveTests.tsx      # Running tests strip (WS-driven)
-    ├── SystemHealth.tsx     # Amber warning strip (polls /system/health 15s)
-    ├── WorkerHealth.tsx     # CPU/memory/active bars per worker
-    ├── BackendChart.tsx     # Bar charts: response time + request breakdown
-    ├── ClientChart.tsx      # Radar + VitalCards (Core Web Vitals incl. INP/TBT) + Page Health + Resource Breakdown
-    ├── FlowStepChart.tsx    # Grouped bar: avg+p95 per step
-    ├── AnalysisPanel.tsx    # Perf badge + threshold violations + AI insights
-    ├── RealtimeChart.tsx    # 4-panel live metrics (response time, error rate, virtual users, throughput) + table-view toggle
-    ├── TrendChart.tsx       # p95/LCP trend line across runs for same URL
-    └── FlowBuilder.tsx      # Multi-step flow editor + HAR import + Record button + per-step "Request headers" editor
-└── __tests__/
-    ├── setup.ts                       # jest-dom matchers
-    ├── ActiveTests.test.tsx           # (5 tests)
-    ├── AnalysisPanel.test.tsx         # (9 tests)
-    ├── AuthContext.test.tsx           # AuthProvider + AuthGate (6 tests)
-    ├── HealthContext.test.tsx         # activeTests fetch/error/debounced WS re-fetch (6 tests)
-    ├── FlowBuilder.test.tsx           # (new)
-    ├── home.test.tsx                  # form validation, presets, INP/TBT SLOs (14 tests)
-    ├── LoginPage.test.tsx             # login form + API calls (5 tests)
-    ├── ResultsSocketContext.test.tsx  # (new)
-    ├── results.test.tsx               # compare bar, checkboxes, Re-run button (9 tests)
-    ├── SettingsPage.test.tsx          # admin-gated live-metric-window setting (15 tests)
-    ├── SystemHealth.test.tsx          # (new)
-    ├── WorkerHealth.test.tsx          # (new)
-    └── interpolateLogSourceUrl.test.tsx  # (new)
+    ├── Sidebar.tsx          # Icon-rail sidebar incl. workspace switcher (calls useRevalidator().revalidate() on switch so loader-backed pages refresh)
+    ├── TopBar.tsx            # Mobile top bar
+    ├── ActiveTests.tsx       # Running tests strip (WS-driven)
+    ├── SystemHealth.tsx      # Amber warning strip (polls /system/health 15s)
+    ├── WorkerHealth.tsx      # CPU/memory/active bars per worker
+    ├── AIStatus.tsx          # AI provider availability/degraded-mode banner
+    ├── ErrorBoundary.tsx     # Class component + RouteErrorBoundary (per-route errorElement)
+    ├── Skeleton.tsx          # Loading-state placeholder shared across pages
+    ├── AdvancedSettings.tsx / ThresholdSection.tsx  # New-test form subsections
+    ├── BackendChart.tsx      # Bar charts: response time + request breakdown
+    ├── ClientChart.tsx       # Radar + VitalCards (Core Web Vitals incl. INP/TBT) + Page Health + Resource Breakdown
+    ├── FlowStepChart.tsx     # Grouped bar: avg+p95 per step
+    ├── AnalysisPanel.tsx     # Perf badge + threshold violations (incl. checksFailRate) + AI insights
+    ├── RealtimeChart.tsx     # 4-panel live metrics (response time, error rate, virtual users, throughput) + table-view toggle
+    ├── TrendChart.tsx        # p95/LCP trend line across runs for same URL
+    └── FlowBuilder.tsx       # Multi-step flow editor + HAR import + Record button + per-step "Request headers" editor
+└── __tests__/            # One file per page/component/context, `PageName.test.tsx` — render loader-backed
+                            # pages through react-router's `createRoutesStub`, not a bare `render(<Page/>)`
+    └── setup.ts          # jest-dom matchers
 ```
 
 ## E2E Tests
 
 ```
 e2e/
-├── happy-path.spec.ts  # fill URL → run → poll → completed
-├── cancel.spec.ts      # soak test → cancel → cancelled
-└── compare.spec.ts     # create 2 tests → select → compare view
+├── auth.setup.ts                             # registers a user, saves storageState for the chromium project's other specs
+├── auth.spec.ts                              # login validation, redirect-when-unauthenticated, session persistence, logout — fresh unauthenticated browser
+├── happy-path.spec.ts                       # fill URL → run → poll → completed
+├── cancel.spec.ts                           # soak test → cancel → cancelled
+├── compare.spec.ts                          # create 2 tests → select → compare view
+├── navigation.spec.ts                       # all main pages render without errors
+├── flow-builder.spec.ts                     # build a multi-step flow by hand — steps, extract-variable rules, ignore-list (client-side only, no test run)
+├── templates.spec.ts                        # save a preset from the home form, load it back, verify round-trip
+├── schedules-webhooks.spec.ts                # schedule + webhook CRUD
+├── result-detail.spec.ts                     # results/testId page interactions
+├── recorder.spec.ts                          # drives the recorded browser via noVNC (test.slow())
+└── error-handling-regressions.spec.ts        # 4 ui-service findings — non-2xx responses treated as success (TODO follow-up #5)
 ```
+
+`trace: 'retain-on-failure'` (`playwright.config.ts`) captures a Playwright trace on any failed run — no `--retries` needed to get one, since the project runs with `retries: 0`.
 
 ## Infrastructure
 

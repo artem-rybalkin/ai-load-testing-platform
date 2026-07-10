@@ -90,7 +90,11 @@ import { TestRequest, TestResult, FlowStep } from '@alt/shared';
 npm test
 ```
 
-~1359 tests across 64 files. Unit tests run in ~30–60 seconds; integration tests (Testcontainers) take 3–5 minutes.
+~1969 tests across 94 files (2026-07-10). Unit tests run in ~30–60 seconds; integration tests (Testcontainers) take 3–5 minutes.
+
+`vitest.config.ts`'s `test.mockReset`/`test.clearMocks` are both `true` — every mock is reset (implementation cleared, not just call history) before each test. A `vi.mock('./x', () => ({ fn: vi.fn().mockResolvedValue(...) }))` factory or a `beforeAll()` only sets that default implementation *once*; if more than one `it()` relies on it, re-establish it in `beforeEach()` instead, or the second test silently gets a bare `vi.fn()` that returns `undefined`.
+
+**Don't run an individual `npx vitest run <file>` (below) while a full `npm test` is also running.** All Testcontainers-backed integration tests share one PostgreSQL container for the whole run, coordinated via `test-support/.shared-pg.json` (written by `globalSetup`, deleted by `globalTeardown`) — every `vitest run` invocation runs its own `globalSetup`/`globalTeardown` regardless of which files it targets, so a second invocation's teardown can delete the file / stop the container the first invocation is still relying on, producing spurious `ENOENT '.shared-pg.json'` / `dropDb is not a function` failures across unrelated files. Not a real test failure — just don't overlap the two.
 
 ### Watch mode
 
@@ -116,8 +120,8 @@ npx vitest run services/results-service/src/__tests__/analyzer.test.ts
 |----------|-------|---------------|
 | Unit | `parser.test.ts`, `analyzer.test.ts`, `options.test.ts`, `generator.test.ts` | Pure functions — no external deps |
 | Integration | `api.test.ts`, `consumer.test.ts`, `scripts.test.ts`, `stale.test.ts`, `scheduler.test.ts` | Real PostgreSQL via Testcontainers |
-| UI | `home.test.tsx`, `results.test.tsx`, `AnalysisPanel.test.tsx`, `ActiveTests.test.tsx` | React components with RTL + jsdom |
-| E2E | `e2e/happy-path.spec.ts`, `cancel.spec.ts`, `compare.spec.ts` | Full stack via Playwright |
+| UI | `home.test.tsx`, `results.test.tsx`, `AnalysisPanel.test.tsx`, `ActiveTests.test.tsx` | React components with RTL + jsdom; loader-backed pages render through `createRoutesStub` (react-router), not a bare `render(<Page/>)` |
+| E2E | `e2e/happy-path.spec.ts`, `cancel.spec.ts`, `compare.spec.ts`, + 8 more (see `docs/CODEMAP.md`) | Full stack via Playwright |
 
 ### Playwright E2E tests
 
@@ -133,6 +137,8 @@ npm run test:e2e
 # With interactive UI
 npm run test:e2e:ui
 ```
+
+On failure, a trace is saved (`trace: 'retain-on-failure'`) — view it with `npx playwright show-trace <path>` instead of reproducing the failure locally.
 
 ---
 
@@ -156,21 +162,27 @@ describe('analyzeResult', () => {
 
 ### Integration test example (Testcontainers)
 
+Don't start a container per file (`new PostgreSqlContainer().start()`) — every test file shares one container for the whole run (`test-support/globalSetup.ts`), each creating its own isolated database on it via `createTestDatabase()`:
+
 ```typescript
-import { PostgreSqlContainer } from '@testcontainers/postgresql';
-import { Pool } from 'pg';
+import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { createSchema } from '../db';
 
 let pool: Pool;
+let dropDb: () => Promise<void>;
 
 beforeAll(async () => {
-  const container = await new PostgreSqlContainer().start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  ({ pool, drop: dropDb } = await createTestDatabase());
   await createSchema(pool);
 });
+
+afterAll(async () => { await dropDb(); });
+beforeEach(async () => { await truncateAll(pool, 'TRUNCATE test_results, test_scripts CASCADE'); });
 ```
 
 ### UI test example (RTL)
+
+A plain component with no route loader:
 
 ```typescript
 import { render, screen } from '@testing-library/react';
@@ -184,6 +196,24 @@ it('shows threshold violations', () => {
   };
   render(<AnalysisPanel analysis={analysis} />);
   expect(screen.getByText('p95 1200ms > 1000ms')).toBeInTheDocument();
+});
+```
+
+A page whose data comes from a route `loader()` (Team/Org/Workspaces/Settings/Presets/Schedules/Webhooks/Results/Compare) needs a router context for `useLoaderData()` to work — render it through `createRoutesStub`, not a bare `render(<Page/>)`:
+
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import { createRoutesStub } from 'react-router';
+import PresetsPage, { loader } from '../app/presets/page';
+
+function renderPresetsPage() {
+  const Stub = createRoutesStub([{ path: '/presets', Component: PresetsPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={['/presets']} />);
+}
+
+it('shows the empty state once loaded', async () => {
+  renderPresetsPage();
+  await waitFor(() => expect(screen.getByText(/No presets yet/)).toBeInTheDocument());
 });
 ```
 

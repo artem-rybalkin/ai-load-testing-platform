@@ -10,6 +10,7 @@ Step-by-step instructions for common tasks. Start with [Getting Started](getting
 | [Custom k6 Scripts](custom-scripts.md) | Upload or paste your own k6 script instead of AI generation |
 | [Grafana Integration](grafana-integration.md) | Connect Prometheus, Loki and Tempo for AI-enriched analysis |
 | [Production Deployment](production.md) | Deploy with Caddy HTTPS, environment variables, security checklist |
+| [Free-Tier Demo Deployment](free-demo-deployment.md) | Shareable public URL at zero cost (Render + Neon + CloudAMQP) |
 | [Development Guide](development.md) | Hot-reload dev setup, test suite, adding services |
 
 ---
