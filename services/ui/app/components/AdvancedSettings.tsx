@@ -1,5 +1,5 @@
 import type { HomeFormState, EnvVar } from '../home-types';
-import { DURATION_OPTIONS } from '../home-types';
+import { DURATION_OPTIONS, DEVICE_OPTIONS } from '../home-types';
 import type React from 'react';
 
 interface Props {
@@ -77,6 +77,14 @@ export default function AdvancedSettings({ form, setForm, showAdvanced, setShowA
               </select>
             </div>
           </div>
+          {form.type === 'client-side' && (
+            <div>
+              <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Device emulation</div>
+              <select value={form.device} onChange={e => setForm(f => ({ ...f, device: e.target.value }))} className={inputCls}>
+                {DEVICE_OPTIONS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+              </select>
+            </div>
+          )}
           {form.type !== 'client-side' && (
             <div>
               <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Ramp-up <span className="normal-case font-normal text-tx-4">(optional, e.g. 30s, 1m)</span></div>

@@ -45,8 +45,22 @@ export const revokeSession = async (pool: Pool, token: string | undefined): Prom
   await pool.query(`UPDATE sessions SET revoked_at = NOW() WHERE token_hash = $1`, [hashToken(token)]);
 };
 
-/** Updates the "current team" for a session (team switching). */
-export const switchSessionTeam = async (pool: Pool, token: string | undefined, teamId: string): Promise<void> => {
-  if (!token) return;
-  await pool.query(`UPDATE sessions SET team_id = $1 WHERE token_hash = $2`, [teamId, hashToken(token)]);
+/**
+ * Rotates the session on team switch: issues a fresh token scoped to the new
+ * team and revokes the old one, returning the new raw token to set in the
+ * cookie (or undefined for the no-op undefined-token case). Rotating instead
+ * of mutating team_id in place means a leaked pre-switch token can't be
+ * replayed against the new team's scope (OWASP Session Management Cheat
+ * Sheet: regenerate the session ID on any privilege-scope change).
+ */
+export const switchSessionTeam = async (
+  pool: Pool,
+  token: string | undefined,
+  userId: string,
+  teamId: string
+): Promise<string | undefined> => {
+  if (!token) return undefined;
+  const newToken = await createSession(pool, userId, teamId);
+  await revokeSession(pool, token);
+  return newToken;
 };

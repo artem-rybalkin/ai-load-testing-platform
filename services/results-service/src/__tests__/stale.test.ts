@@ -326,27 +326,30 @@ describe('startStaleCleanup', () => {
   });
 
   it('does not call runStaleCleanup immediately on start', () => {
-    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    startStaleCleanup(mockPool as unknown as Pool);
     expect(mockPool.query).not.toHaveBeenCalled();
   });
 
   it('calls runStaleCleanup after 60 seconds', async () => {
-    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    startStaleCleanup(mockPool as unknown as Pool);
     await vi.advanceTimersByTimeAsync(60_000);
-    // runStaleCleanup issues 5 queries: running UPDATE, pending UPDATE, live_metrics DELETE,
-    // sessions DELETE, audit_log DELETE (test_results DELETE is skipped — retention disabled by default)
-    expect(mockPool.query).toHaveBeenCalledTimes(5);
+    // Per tick: 2 settings lookups (staleRunningMinutes, stalePendingMinutes) up front,
+    // then runStaleCleanup's own 8 queries: running UPDATE, pending UPDATE, live-metrics
+    // retention-days lookup, live_metrics DELETE, test-results retention-days lookup
+    // (DELETE skipped — disabled by default), audit-log retention-days lookup, audit_log
+    // DELETE, sessions DELETE.
+    expect(mockPool.query).toHaveBeenCalledTimes(10);
   });
 
   it('fires repeatedly on every subsequent 60-second tick', async () => {
-    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    startStaleCleanup(mockPool as unknown as Pool);
     await vi.advanceTimersByTimeAsync(180_000); // 3 × 60 s
-    expect(mockPool.query).toHaveBeenCalledTimes(15); // 3 fires × 5 queries
+    expect(mockPool.query).toHaveBeenCalledTimes(30); // 3 fires × 10 queries
   });
 
   it('does not propagate errors when runStaleCleanup rejects', async () => {
     mockPool.query.mockRejectedValue(new Error('DB connection lost'));
-    startStaleCleanup(mockPool as unknown as Pool, 15, 30);
+    startStaleCleanup(mockPool as unknown as Pool);
     // The interval catches errors internally; advancing time should not throw
     await expect(vi.advanceTimersByTimeAsync(60_000)).resolves.not.toThrow();
   });

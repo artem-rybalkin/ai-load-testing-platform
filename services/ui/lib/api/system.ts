@@ -49,3 +49,24 @@ export const setLiveMetricWindow = (windowSec: LiveMetricWindowSec): Promise<{ w
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ windowSec }),
   }).then(orgJson<{ windowSec: LiveMetricWindowSec }>());
+
+/** Previously env-var-only retention/GDPR + rate-limit knobs. */
+export interface OperationalSettings {
+  staleRunningMinutes: number;
+  stalePendingMinutes: number;
+  liveMetricsRetentionDays: number;
+  testResultsRetentionDays: number;
+  auditLogRetentionDays: number;
+  rateLimitMax: number;
+  aiRateLimitMax: number;
+}
+
+export const getOperationalSettings = (): Promise<OperationalSettings> =>
+  f(`${RESULTS_URL}/system/operational-settings`, { cache: 'no-store' }).then(orgJson<OperationalSettings>());
+
+export const setOperationalSettings = (updates: Partial<OperationalSettings>): Promise<OperationalSettings> =>
+  f(`${RESULTS_URL}/system/operational-settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  }).then(orgJson<OperationalSettings>());

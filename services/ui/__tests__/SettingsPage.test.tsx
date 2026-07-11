@@ -12,12 +12,16 @@ const mockGetLiveMetricWindow = vi.hoisted(() => vi.fn());
 const mockSetLiveMetricWindow = vi.hoisted(() => vi.fn());
 const mockGetAiProvider = vi.hoisted(() => vi.fn());
 const mockSetAiProvider = vi.hoisted(() => vi.fn());
+const mockGetOperationalSettings = vi.hoisted(() => vi.fn());
+const mockSetOperationalSettings = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
   getMe: mockGetMe,
   getLiveMetricWindow: mockGetLiveMetricWindow,
   setLiveMetricWindow: mockSetLiveMetricWindow,
   getAiProvider: mockGetAiProvider,
   setAiProvider: mockSetAiProvider,
+  getOperationalSettings: mockGetOperationalSettings,
+  setOperationalSettings: mockSetOperationalSettings,
 }));
 
 import SettingsPage, { loader } from '../app/settings/page';
@@ -47,12 +51,24 @@ const defaultAiProvider = {
   available: { gemini: true, openai: false, anthropic: false },
 };
 
+const defaultOperationalSettings = {
+  staleRunningMinutes: 15,
+  stalePendingMinutes: 30,
+  liveMetricsRetentionDays: 30,
+  testResultsRetentionDays: 0,
+  auditLogRetentionDays: 180,
+  rateLimitMax: 600,
+  aiRateLimitMax: 20,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetLiveMetricWindow.mockResolvedValue({ windowSec: 10 });
   mockSetLiveMetricWindow.mockResolvedValue({ windowSec: 10 });
   mockGetAiProvider.mockResolvedValue(defaultAiProvider);
   mockSetAiProvider.mockResolvedValue({ provider: 'gemini', fallbacks: [] });
+  mockGetOperationalSettings.mockResolvedValue(defaultOperationalSettings);
+  mockSetOperationalSettings.mockResolvedValue(defaultOperationalSettings);
 });
 
 describe('SettingsPage — non-admin', () => {
@@ -63,6 +79,7 @@ describe('SettingsPage — non-admin', () => {
     expect(await screen.findByText(/Admin access required/i)).toBeInTheDocument();
     expect(mockGetLiveMetricWindow).not.toHaveBeenCalled();
     expect(mockGetAiProvider).not.toHaveBeenCalled();
+    expect(mockGetOperationalSettings).not.toHaveBeenCalled();
   });
 
   it('does not render the live-metrics-window panel at all', async () => {
@@ -72,6 +89,7 @@ describe('SettingsPage — non-admin', () => {
     expect(await screen.findByText(/Admin access required/i)).toBeInTheDocument();
     expect(screen.queryByText('Live metrics window')).not.toBeInTheDocument();
     expect(screen.queryByText('Platform-default AI provider')).not.toBeInTheDocument();
+    expect(screen.queryByText('Retention & rate limits')).not.toBeInTheDocument();
   });
 });
 
@@ -273,5 +291,73 @@ describe('SettingsPage — platform-default AI provider', () => {
     expect(screen.queryByRole('checkbox', { name: /^gemini/i })).not.toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /openai/i })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /claude/i })).toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage — retention & rate limits', () => {
+  it('fetches the current operational settings on mount and renders all 7 fields', async () => {
+    setUser(adminUser);
+    renderSettingsPage();
+
+    await waitFor(() => expect(mockGetOperationalSettings).toHaveBeenCalledOnce());
+    expect(await screen.findByText('Retention & rate limits')).toBeInTheDocument();
+    expect(screen.getByText('Stale "running" timeout')).toBeInTheDocument();
+    expect(screen.getByText('Global rate limit')).toBeInTheDocument();
+    expect(screen.getByText('AI rate limit')).toBeInTheDocument();
+  });
+
+  it('shows an error message when the fetch fails, instead of the fields', async () => {
+    mockGetOperationalSettings.mockRejectedValue(new Error('network error'));
+    setUser(adminUser);
+    renderSettingsPage();
+
+    await waitFor(() => expect(screen.getByText('Failed to load operational settings')).toBeInTheDocument());
+    expect(screen.queryByText('Global rate limit')).not.toBeInTheDocument();
+  });
+
+  it('disables Save settings until a field is changed', async () => {
+    setUser(adminUser);
+    renderSettingsPage();
+    await screen.findByText('Retention & rate limits');
+
+    expect(screen.getByRole('button', { name: /save settings/i })).toBeDisabled();
+  });
+
+  it('calls setOperationalSettings with the full edited draft on Save settings', async () => {
+    setUser(adminUser);
+    mockSetOperationalSettings.mockResolvedValue({ ...defaultOperationalSettings, rateLimitMax: 1000 });
+    renderSettingsPage();
+    await screen.findByText('Retention & rate limits');
+
+    const rateInput = screen.getByDisplayValue('600');
+    fireEvent.change(rateInput, { target: { value: '1000' } });
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+    await waitFor(() => expect(mockSetOperationalSettings).toHaveBeenCalledWith({ ...defaultOperationalSettings, rateLimitMax: 1000 }));
+  });
+
+  it('shows "Saved" after a successful save', async () => {
+    setUser(adminUser);
+    renderSettingsPage();
+    await screen.findByText('Retention & rate limits');
+
+    const rateInput = screen.getByDisplayValue('600');
+    fireEvent.change(rateInput, { target: { value: '1000' } });
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+    await waitFor(() => expect(screen.getAllByText('Saved').length).toBeGreaterThan(0));
+  });
+
+  it('shows the error message when saving fails', async () => {
+    setUser(adminUser);
+    mockSetOperationalSettings.mockRejectedValue(new Error('invalid value'));
+    renderSettingsPage();
+    await screen.findByText('Retention & rate limits');
+
+    const rateInput = screen.getByDisplayValue('600');
+    fireEvent.change(rateInput, { target: { value: '1000' } });
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+    await waitFor(() => expect(screen.getByText('invalid value')).toBeInTheDocument());
   });
 });

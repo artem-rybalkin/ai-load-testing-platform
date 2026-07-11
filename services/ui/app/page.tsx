@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, Suspense } from 'react';
-import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams, useLoaderData, Link } from 'react-router-dom';
 import { createTest, getResult, getPresets, createPreset, getResults, getLiveMetrics, suggestThresholds, suggestSettings, translatePlaywright, suggestPresetName, previewThresholds, ThresholdPreview, Preset, FlowStep, TestResult, ActiveTest, LiveMetricPoint, BackendMetrics } from '@/lib/api';
 import { useHealth } from '@/lib/HealthContext';
 import FlowBuilder from '@/app/components/FlowBuilder';
@@ -150,16 +150,35 @@ function RecentRuns({ recent }: { recent: TestResult[] }) {
 }
 
 
+interface HomeLoaderData {
+  presets: Preset[];
+  recent: TestResult[];
+}
+
+// Fetches the two lists the home dashboard needs on first paint (recent
+// results + saved presets). Not workspace-scoped — matches the pre-loader
+// behavior, which never filtered these by activeWorkspaceId either. Failures
+// are swallowed (matching the previous .catch(() => {}) on both calls) since
+// neither is essential to using the form; the page works fine with empty lists.
+export async function loader(): Promise<HomeLoaderData> {
+  const [presetsResult, resultsResult] = await Promise.allSettled([getPresets(), getResults()]);
+  return {
+    presets: presetsResult.status === 'fulfilled' ? (presetsResult.value.presets ?? []) : [],
+    recent: resultsResult.status === 'fulfilled' ? (resultsResult.value.results?.slice(0, 10) ?? []) : [],
+  };
+}
+
 function HomeContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { activeWorkspaceId } = useWorkspace();
   const { activeTests: active } = useHealth();
+  const loaderData = useLoaderData() as HomeLoaderData;
   const isViewer = user?.role === 'viewer';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [presets, setPresets] = useState<Preset[]>([]);
+  const [presets, setPresets] = useState<Preset[]>(loaderData.presets);
   const [savingPreset, setSavingPreset] = useState(false);
   const [showThresholds, setShowThresholds] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -169,7 +188,7 @@ function HomeContent() {
   const [previewingThresholds, setPreviewingThresholds] = useState(false);
   const [thresholdPreview, setThresholdPreview] = useState<ThresholdPreview | null>(null);
   const [thresholdPreviewError, setThresholdPreviewError] = useState<string | null>(null);
-  const [recent, setRecent] = useState<TestResult[]>([]);
+  const [recent, setRecent] = useState<TestResult[]>(loaderData.recent);
   const [rerunFrom, setRerunFrom] = useState<string | null>(null);
   const [form, setForm] = useState<HomeFormState>({
     type: 'backend',
@@ -181,6 +200,7 @@ function HomeContent() {
     duration: '30s',
     rampUp: '',
     collectWebVitals: true,
+    device: '',
     profile: 'load',
     httpKeepAlive: true,
     httpTimeout: '',
@@ -255,10 +275,14 @@ function HomeContent() {
     if (event.type === 'tests:changed' || event.type === 'test:status' || event.type === 'reconnected') refreshOverview();
   });
 
+  // Re-syncs local state whenever the loader re-runs — on the Sidebar's
+  // workspace switcher calling revalidator.revalidate(), or a real navigation.
   useEffect(() => {
-    getPresets().then(d => setPresets(d.presets ?? [])).catch(() => {});
-    refreshOverview();
+    setPresets(loaderData.presets);
+    setRecent(loaderData.recent);
+  }, [loaderData]);
 
+  useEffect(() => {
     const rerun = searchParams.get('rerun');
     if (rerun) {
       getResult(rerun).then(({ result }) => {
@@ -420,7 +444,7 @@ function HomeContent() {
       } catch { /* non-fatal, use fallback name */ }
 
       const options = form.type === 'client-side'
-        ? { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals }
+        ? { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals, ...(form.device ? { device: form.device } : {}) }
         : { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}) };
       const savedThresholds = showThresholds ? buildThresholds() : null;
       await createPreset({
@@ -559,7 +583,7 @@ function HomeContent() {
             type: 'client-side',
             targetUrl: flowSteps[0]?.url ?? '',
             description,
-            options: { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals },
+            options: { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals, ...(form.device ? { device: form.device } : {}) },
             steps: flowSteps,
             envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
             thresholds: buildThresholds(),
@@ -591,7 +615,7 @@ function HomeContent() {
       const customHeadersOpt = buildCustomHeaders();
       const options = form.type === 'backend'
         ? { vus: form.vus, duration: form.duration, profile: form.profile, peakVus: form.peakVus, ...(form.rampUp ? { rampUp: form.rampUp } : {}), ...(httpOpts ? { httpOptions: httpOpts } : {}), ...(customHeadersOpt ? { headers: customHeadersOpt } : {}) }
-        : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals, ...(customHeadersOpt ? { headers: customHeadersOpt } : {}) };
+        : { sessions: form.sessions, duration: form.duration, collectWebVitals: form.collectWebVitals, ...(form.device ? { device: form.device } : {}), ...(customHeadersOpt ? { headers: customHeadersOpt } : {}) };
 
       const isCustomScript = form.type === 'backend' && scriptMode === 'custom' && customScript.trim();
       // In custom script mode the URL is optional — extract from the script or fall back to localhost

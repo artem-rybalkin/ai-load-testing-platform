@@ -145,12 +145,12 @@ describe('PUT /system/live-metric-window', () => {
     const memberReg = await registerUser('lmw-member3@example.com', 'lmw-member3-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
     const res = await app.inject({
       method: 'PUT', url: '/system/live-metric-window',
       payload: { windowSec: 60 },
-      headers: { cookie: sessionCookie(memberReg) },
+      headers: { cookie: sessionCookie(switched) },
     });
     expect(res.statusCode).toBe(403);
   });

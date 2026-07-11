@@ -8,7 +8,7 @@ import { Pool } from 'pg';
 import type { SLOThresholds, BackendMetrics, ClientMetrics, ChatMessage, ChatAttachment, ChatMode } from '@alt/shared';
 import { isProviderConfigured, generateAIText, extractAndParseAIJson, fenceUserContent, USER_DATA_INSTRUCTION, redactPII } from '@alt/shared';
 import { checkGeminiQuota, checkAndIncrementGeminiUsage } from '../quotas';
-import { getEffectiveAiProviderSetting } from '../settings';
+import { getEffectiveAiProviderSetting, getAiRateLimitMax } from '../settings';
 import { analyzeResult } from '../analyzer';
 import { fetchExternalMetrics } from '../externalMetrics';
 import {
@@ -32,12 +32,22 @@ import {
 } from './helpers';
 
 export function aiRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): void {
-  const AI_RATE_LIMIT_MAX = Number(process.env.AI_RATE_LIMIT_MAX) || 20;
+  // Cached (not re-queried per request) and scoped to this route-plugin
+  // registration — admin-configurable via the Settings page (falls back to
+  // AI_RATE_LIMIT_MAX env var, then a hardcoded default; see ../settings.ts).
+  let cachedAiRateLimitMax: { value: number; at: number } | null = null;
+  const AI_RATE_LIMIT_CACHE_MS = 30_000;
+  const aiRateLimitMax = async (): Promise<number> => {
+    if (cachedAiRateLimitMax && Date.now() - cachedAiRateLimitMax.at < AI_RATE_LIMIT_CACHE_MS) return cachedAiRateLimitMax.value;
+    const value = await getAiRateLimitMax(pool);
+    cachedAiRateLimitMax = { value, at: Date.now() };
+    return value;
+  };
 
   // ── POST /ai/cron ─────────────────────────────────────────────────────────
   app.post<{ Body: { phrase: string } }>(
     '/ai/cron',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { phrase } = request.body;
       if (!phrase) return reply.code(400).send({ error: 'phrase is required' });
@@ -66,7 +76,7 @@ Return ONLY valid JSON: {"cron": "* * * * *", "preview": "Every minute"}`,
   // ── POST /ai/trend-narrative ──────────────────────────────────────────────
   app.post<{ Body: { trend: Array<{ created_at: string; metrics: Record<string, number>; perf_status?: string }> } }>(
     '/ai/trend-narrative',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { trend } = request.body;
       if (!trend || trend.length < 3) return reply.code(422).send({ error: 'Need at least 3 trend points' });
@@ -101,7 +111,7 @@ Return ONLY valid JSON: {"narrative": "<2 sentences>"}`,
   // ── GET /results/suggest-settings ────────────────────────────────────────
   app.get<{ Querystring: { url: string; type?: string } }>(
     '/results/suggest-settings',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
@@ -141,7 +151,7 @@ Return ONLY valid JSON:
   // ── POST /ai/webhook-noise ────────────────────────────────────────────────
   app.post<{ Body: { events: string[] } }>(
     '/ai/webhook-noise',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { events } = request.body;
       if (!events?.length) return reply.code(400).send({ error: 'events is required' });
@@ -184,7 +194,7 @@ Return ONLY valid JSON:
   // ── POST /ai/preset-name ──────────────────────────────────────────────────
   app.post<{ Body: { url: string; type: string; vus?: number; duration?: string; profile?: string; stepCount?: number } }>(
     '/ai/preset-name',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type, vus, duration, profile, stepCount } = request.body;
       const ai = await getAiCapability(pool);
@@ -213,7 +223,7 @@ Return ONLY valid JSON: {"name": "<name>", "tags": ["tag1", "tag2"]}`,
   // ── POST /ai/param-suggestions ────────────────────────────────────────────
   app.post<{ Body: { steps: Array<{ url: string; method: string; body?: string }> } }>(
     '/ai/param-suggestions',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { steps } = request.body;
       if (!steps || steps.length === 0) return reply.code(400).send({ error: 'steps is required' });
@@ -244,7 +254,7 @@ Return ONLY valid JSON:
   // ── POST /ai/translate ────────────────────────────────────────────────────
   app.post<{ Body: { script: string; targetUrl?: string } }>(
     '/ai/translate',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { script, targetUrl } = request.body ?? {};
       if (!script || script.length > 256 * 1024) {
@@ -283,7 +293,7 @@ ${fenceUserContent('playwright_script', script.slice(0, 8000))}`,
   // ── GET /results/suggest-thresholds ──────────────────────────────────────
   app.get<{ Querystring: { url: string; type?: string } }>(
     '/results/suggest-thresholds',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { url, type = 'backend' } = request.query;
       if (!url) return reply.code(400).send({ error: 'url is required' });
@@ -384,7 +394,7 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
   // ── GET /results/:testId/diagnose ─────────────────────────────────────────
   app.get<{ Params: { testId: string } }>(
     '/results/:testId/diagnose',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { testId } = request.params;
       const ai = await getAiCapability(pool);
@@ -460,7 +470,7 @@ Return ONLY valid JSON array. Include only categories with count > 0:
   // endpoints which use the global-only aiGenerateText() helper.
   app.post<{ Body: { messages: ChatMessage[]; attachments?: ChatAttachment[]; mode?: ChatMode } }>(
     '/chat/parse',
-    { config: { rateLimit: { max: AI_RATE_LIMIT_MAX, timeWindow: 60_000 } } },
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { messages, attachments, mode = 'english' } = request.body ?? {};
       if (!Array.isArray(messages) || messages.length === 0) {

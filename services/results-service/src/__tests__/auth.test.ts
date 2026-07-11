@@ -226,7 +226,13 @@ describe('POST /auth/switch-team', () => {
     expect(res.json().currentTeamId).toBe(team2.rows[0].id);
     expect(res.json().role).toBe('member');
 
-    const me = await app.inject({ method: 'GET', url: '/auth/me', headers: { cookie } });
+    // switch-team rotates the token — a stale pre-switch cookie must stop working...
+    const staleMe = await app.inject({ method: 'GET', url: '/auth/me', headers: { cookie } });
+    expect(staleMe.statusCode).toBe(401);
+
+    // ...while the freshly rotated cookie from the switch response keeps working.
+    const rotatedCookie = sessionCookie(res);
+    const me = await app.inject({ method: 'GET', url: '/auth/me', headers: { cookie: rotatedCookie } });
     expect(me.json().currentTeamId).toBe(team2.rows[0].id);
   });
 
@@ -295,7 +301,7 @@ describe('Session middleware', () => {
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'viewer')`, [teamId, viewerId]);
     const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(viewerReg) } });
     expect(switched.statusCode).toBe(200);
-    const viewerCookie = sessionCookie(viewerReg);
+    const viewerCookie = sessionCookie(switched);
 
     const res = await app.inject({ method: 'POST', url: '/webhooks', payload: { url: 'http://example.com/hook' }, headers: { cookie: viewerCookie } });
     expect(res.statusCode).toBe(403);
@@ -312,9 +318,9 @@ describe('Session middleware', () => {
     const viewerReg = await registerUser('viewer2@example.com', 'team-viewer2-own');
     const viewerId = viewerReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'viewer')`, [teamId, viewerId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(viewerReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(viewerReg) } });
 
-    const res = await app.inject({ method: 'GET', url: '/results', headers: { cookie: sessionCookie(viewerReg) } });
+    const res = await app.inject({ method: 'GET', url: '/results', headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(200);
   });
 

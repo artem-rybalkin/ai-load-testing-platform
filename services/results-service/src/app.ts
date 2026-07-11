@@ -5,6 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import { Pool } from 'pg';
 import { setupWebSocketServer } from './ws';
 import { getSession, hashApiKey } from './session';
+import { getRateLimitMax } from './settings';
 import { redisClient } from './redis';
 import type { TeamRole, OrgRole } from '@alt/shared';
 import { authRoutes } from './routes/auth';
@@ -68,9 +69,19 @@ export const buildApp = async (
   };
   const isInternal = (url: string, method: string): boolean => publicPaths.has(url) || isInternalCallback(url, method);
 
+  // Cached (not re-queried per request) and scoped to this app instance —
+  // admin-configurable via the Settings page (falls back to RATE_LIMIT_MAX
+  // env var, then a hardcoded default; see settings.ts).
+  let cachedRateLimitMax: { value: number; at: number } | null = null;
+  const RATE_LIMIT_CACHE_MS = 30_000;
   await app.register(rateLimit, {
     global: true,
-    max: Number(process.env.RATE_LIMIT_MAX) || 600,
+    max: async () => {
+      if (cachedRateLimitMax && Date.now() - cachedRateLimitMax.at < RATE_LIMIT_CACHE_MS) return cachedRateLimitMax.value;
+      const value = await getRateLimitMax(pool);
+      cachedRateLimitMax = { value, at: Date.now() };
+      return value;
+    },
     timeWindow: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000,
     redis: redisClient,
     skipOnError: true,

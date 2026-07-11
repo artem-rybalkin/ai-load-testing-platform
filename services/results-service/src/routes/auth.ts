@@ -193,7 +193,8 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
     const team = teams.find(t => t.id === teamId);
     if (!team) return reply.code(403).send({ error: 'Not a member of this team' });
 
-    await switchSessionTeam(pool, request.cookies?.['alt_session'], teamId);
+    const newToken = await switchSessionTeam(pool, request.cookies?.['alt_session'], session.userId, teamId);
+    if (newToken) reply.setCookie('alt_session', newToken, cookieOpts);
 
     const { rows } = await pool.query<{ id: string; email: string; name: string | null }>(
       'SELECT id, email, name FROM users WHERE id = $1',

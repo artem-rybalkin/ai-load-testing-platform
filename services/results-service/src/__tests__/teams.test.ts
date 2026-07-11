@@ -167,10 +167,10 @@ describe('POST /teams/:id/members', () => {
     const memberReg = await registerUser('member5@example.com', 'member5-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
     await registerUser('target5@example.com', 'target5-own-team');
-    const res = await app.inject({ method: 'POST', url: `/teams/${teamId}/members`, payload: { email: 'target5@example.com' }, headers: { cookie: sessionCookie(memberReg) } });
+    const res = await app.inject({ method: 'POST', url: `/teams/${teamId}/members`, payload: { email: 'target5@example.com' }, headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(403);
 
     void adminCookie;
@@ -246,9 +246,9 @@ describe('PUT /teams/:id/members/:userId', () => {
     const viewerReg = await registerUser('viewer11@example.com', 'viewer11-own-team');
     const viewerId = viewerReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'viewer')`, [teamId, viewerId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(viewerReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(viewerReg) } });
 
-    const res = await app.inject({ method: 'PUT', url: `/teams/${teamId}/members/${viewerId}`, payload: { role: 'member' }, headers: { cookie: sessionCookie(viewerReg) } });
+    const res = await app.inject({ method: 'PUT', url: `/teams/${teamId}/members/${viewerId}`, payload: { role: 'member' }, headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(403);
   });
 });
@@ -311,9 +311,9 @@ describe('DELETE /teams/:id/members/:userId', () => {
     const memberReg = await registerUser('member16@example.com', 'member16-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
-    const res = await app.inject({ method: 'DELETE', url: `/teams/${teamId}/members/${memberId}`, headers: { cookie: sessionCookie(memberReg) } });
+    const res = await app.inject({ method: 'DELETE', url: `/teams/${teamId}/members/${memberId}`, headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(403);
   });
 });
@@ -329,9 +329,9 @@ describe('GET/PUT /teams/:id/quotas', () => {
     const memberReg = await registerUser('member-quota1@example.com', 'member-quota1-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
-    const res = await app.inject({ method: 'GET', url: `/teams/${teamId}/quotas`, headers: { cookie: sessionCookie(memberReg) } });
+    const res = await app.inject({ method: 'GET', url: `/teams/${teamId}/quotas`, headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.quota.maxConcurrentTests).toBeGreaterThan(0);
@@ -388,12 +388,12 @@ describe('GET/PUT /teams/:id/quotas', () => {
     const memberReg = await registerUser('member-quota5@example.com', 'member-quota5-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
     const res = await app.inject({
       method: 'PUT', url: `/teams/${teamId}/quotas`,
       payload: { maxConcurrentTests: 2 },
-      headers: { cookie: sessionCookie(memberReg) },
+      headers: { cookie: sessionCookie(switched) },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -427,9 +427,9 @@ describe('GET /teams/:id/audit-log', () => {
     const memberReg = await registerUser('member-audit2@example.com', 'member-audit2-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
-    const res = await app.inject({ method: 'GET', url: `/teams/${teamId}/audit-log`, headers: { cookie: sessionCookie(memberReg) } });
+    const res = await app.inject({ method: 'GET', url: `/teams/${teamId}/audit-log`, headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(403);
   });
 
@@ -516,9 +516,9 @@ describe('DELETE /teams/:id/data', () => {
     const memberReg = await registerUser('member-erase3@example.com', 'member-erase3-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
-    const res = await app.inject({ method: 'DELETE', url: `/teams/${teamId}/data`, payload: { confirm: true }, headers: { cookie: sessionCookie(memberReg) } });
+    const res = await app.inject({ method: 'DELETE', url: `/teams/${teamId}/data`, payload: { confirm: true }, headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(403);
   });
 

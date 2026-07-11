@@ -14,7 +14,7 @@ declare global {
   }
 }
 
-import puppeteer, { Browser } from 'puppeteer';
+import puppeteer, { Browser, KnownDevices } from 'puppeteer';
 import lighthouse from 'lighthouse';
 import { TestRequest, ClientMetrics, LighthouseScore, ResourceBreakdown, stripAnsi, internalHeaders, createBatcher } from '@alt/shared';
 import { log } from './logger';
@@ -128,7 +128,7 @@ export const runClientTest = async (
 
   try {
     const snapshots: WebVitalsSnapshot[] = [];
-    const options = test.options as { sessions: number; duration: string; headers?: Record<string, string> };
+    const options = test.options as { sessions: number; duration: string; headers?: Record<string, string>; device?: string };
     const sessions = options.sessions || 1;
 
     let totalJsErrors = 0;
@@ -162,6 +162,18 @@ export const runClientTest = async (
 
         if (options.headers && Object.keys(options.headers).length > 0) {
           await page.setExtraHTTPHeaders(options.headers);
+        }
+
+        // Opt-in mobile emulation (viewport + UA + touch) via Puppeteer's built-in
+        // device presets. Unrecognized names are logged and ignored rather than
+        // failing the session — matches this codebase's non-fatal-fallback convention.
+        if (options.device) {
+          const device = KnownDevices[options.device];
+          if (device) {
+            await page.emulate(device);
+          } else {
+            addLog('WARN', `[session ${i + 1}/${sessions}] Unknown device "${options.device}" — ignoring, using default desktop viewport`);
+          }
         }
 
         await page.goto(test.targetUrl, { waitUntil: 'networkidle2', timeout: navTimeoutMs });

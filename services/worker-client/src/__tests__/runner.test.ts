@@ -87,6 +87,7 @@ function makeMockPage(overrides: {
     close:                 vi.fn().mockResolvedValue(undefined),
     createCDPSession:      vi.fn().mockResolvedValue({ send: vi.fn().mockResolvedValue(undefined) }),
     setExtraHTTPHeaders:   vi.fn().mockResolvedValue(undefined),
+    emulate:               vi.fn().mockResolvedValue(undefined),
     goto:                  overrides.gotoError
       ? vi.fn().mockRejectedValue(overrides.gotoError)
       : vi.fn().mockResolvedValue(undefined),
@@ -490,6 +491,46 @@ describe('runClientTest — custom headers', () => {
     const { ctx } = makeCtx({ browser });
     await runClientTest(BASE_TEST, ctx);
     expect(page.setExtraHTTPHeaders).not.toHaveBeenCalled();
+  });
+});
+
+describe('runClientTest — device emulation', () => {
+  beforeEach(() => { vi.unstubAllGlobals(); });
+
+  it('calls page.emulate with the matching KnownDevices preset when options.device is recognized', async () => {
+    const page = makeMockPage();
+    const browser = makeMockBrowser({ newPageResult: page });
+    const { ctx } = makeCtx({ browser });
+    const test = {
+      ...BASE_TEST,
+      options: { sessions: 1, duration: '30s', collectWebVitals: true, device: 'iPhone 13' } as TestRequest['options'],
+    };
+    await runClientTest(test, ctx);
+    expect(page.emulate).toHaveBeenCalledOnce();
+    const emulated = page.emulate.mock.calls[0][0];
+    expect(emulated.userAgent).toContain('iPhone');
+    expect(emulated.viewport.isMobile).toBe(true);
+  });
+
+  it('does not call page.emulate when no device is set', async () => {
+    const page = makeMockPage();
+    const browser = makeMockBrowser({ newPageResult: page });
+    const { ctx } = makeCtx({ browser });
+    await runClientTest(BASE_TEST, ctx);
+    expect(page.emulate).not.toHaveBeenCalled();
+  });
+
+  it('skips emulation and logs a warning for an unrecognized device name', async () => {
+    const page = makeMockPage();
+    const browser = makeMockBrowser({ newPageResult: page });
+    const { ctx } = makeCtx({ browser });
+    const test = {
+      ...BASE_TEST,
+      options: { sessions: 1, duration: '30s', collectWebVitals: true, device: 'Not A Real Device' } as TestRequest['options'],
+    };
+    const result = await runClientTest(test, ctx);
+    expect(page.emulate).not.toHaveBeenCalled();
+    expect(result.executionLog).toContain('Unknown device "Not A Real Device"');
   });
 });
 

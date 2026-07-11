@@ -90,9 +90,9 @@ describe('POST /teams/:id/api-keys', () => {
     const memberReg = await registerUser('member3@example.com', 'member3-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
-    const res = await app.inject({ method: 'POST', url: `/teams/${teamId}/api-keys`, payload: { name: 'sneaky' }, headers: { cookie: sessionCookie(memberReg) } });
+    const res = await app.inject({ method: 'POST', url: `/teams/${teamId}/api-keys`, payload: { name: 'sneaky' }, headers: { cookie: sessionCookie(switched) } });
     expect(res.statusCode).toBe(403);
   });
 

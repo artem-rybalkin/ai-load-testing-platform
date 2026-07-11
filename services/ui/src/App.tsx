@@ -80,7 +80,12 @@ const router = createBrowserRouter([
       {
         element: <RootLayout />,
         children: [
-          { path: '/', element: <HomePage />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: '/',
+            element: <HomePage />,
+            loader: () => import('@/app/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
           { path: '/chat', element: <ChatPage />, errorElement: <RouteErrorBoundary /> },
           {
             path: '/results',

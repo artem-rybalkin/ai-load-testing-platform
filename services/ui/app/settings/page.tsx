@@ -1,7 +1,17 @@
 import { useState } from 'react';
 import { useLoaderData } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { getMe, getLiveMetricWindow, setLiveMetricWindow, LiveMetricWindowSec, getAiProvider, setAiProvider, AiProviderConfig, AiProviderName } from '@/lib/api';
+import { getMe, getLiveMetricWindow, setLiveMetricWindow, LiveMetricWindowSec, getAiProvider, setAiProvider, AiProviderConfig, AiProviderName, getOperationalSettings, setOperationalSettings, OperationalSettings } from '@/lib/api';
+
+const OPERATIONAL_SETTING_FIELDS: { key: keyof OperationalSettings; label: string; hint: string; min: number }[] = [
+  { key: 'staleRunningMinutes', label: 'Stale "running" timeout', hint: 'Minutes before a stuck running test is marked failed', min: 1 },
+  { key: 'stalePendingMinutes', label: 'Stale "pending" timeout', hint: 'Minutes before a stuck pending test is marked failed', min: 1 },
+  { key: 'liveMetricsRetentionDays', label: 'Live-metrics retention', hint: 'Days of streaming metric points kept per test', min: 1 },
+  { key: 'testResultsRetentionDays', label: 'Test-results retention (GDPR)', hint: 'Days before old test results are auto-purged — 0 disables auto-purge', min: 0 },
+  { key: 'auditLogRetentionDays', label: 'Audit-log retention', hint: 'Days before old audit-log entries are auto-purged — 0 disables auto-purge', min: 0 },
+  { key: 'rateLimitMax', label: 'Global rate limit', hint: 'Requests/min/IP across the whole API', min: 1 },
+  { key: 'aiRateLimitMax', label: 'AI rate limit', hint: 'Requests/min for /ai/* and suggest-*/diagnose endpoints', min: 1 },
+];
 
 const WINDOW_OPTIONS: { id: LiveMetricWindowSec; label: string }[] = [
   { id: 10, label: '10s' },
@@ -26,6 +36,8 @@ interface LoaderData {
   loadError: string | null;
   aiProvider: AiProviderConfig | null;
   aiProviderLoadError: string | null;
+  operationalSettings: OperationalSettings | null;
+  operationalSettingsLoadError: string | null;
 }
 
 export async function loader(): Promise<LoaderData> {
@@ -33,21 +45,33 @@ export async function loader(): Promise<LoaderData> {
   // loaders run outside the component tree.
   const user = await getMe();
   const isAdmin = user.role === 'admin';
-  if (!isAdmin) return { isAdmin, windowSec: null, loadError: null, aiProvider: null, aiProviderLoadError: null };
-  const [windowResult, aiProviderResult] = await Promise.allSettled([getLiveMetricWindow(), getAiProvider()]);
+  if (!isAdmin) {
+    return {
+      isAdmin, windowSec: null, loadError: null, aiProvider: null, aiProviderLoadError: null,
+      operationalSettings: null, operationalSettingsLoadError: null,
+    };
+  }
+  const [windowResult, aiProviderResult, operationalResult] = await Promise.allSettled([
+    getLiveMetricWindow(), getAiProvider(), getOperationalSettings(),
+  ]);
   return {
     isAdmin,
     windowSec: windowResult.status === 'fulfilled' ? windowResult.value.windowSec : null,
     loadError: windowResult.status === 'fulfilled' ? null : 'Failed to load current setting',
     aiProvider: aiProviderResult.status === 'fulfilled' ? aiProviderResult.value : null,
     aiProviderLoadError: aiProviderResult.status === 'fulfilled' ? null : 'Failed to load AI provider setting',
+    operationalSettings: operationalResult.status === 'fulfilled' ? operationalResult.value : null,
+    operationalSettingsLoadError: operationalResult.status === 'fulfilled' ? null : 'Failed to load operational settings',
   };
 }
 
 export default function SettingsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const { windowSec, loadError, aiProvider: initialAiProvider, aiProviderLoadError } = useLoaderData() as LoaderData;
+  const {
+    windowSec, loadError, aiProvider: initialAiProvider, aiProviderLoadError,
+    operationalSettings: initialOperationalSettings, operationalSettingsLoadError,
+  } = useLoaderData() as LoaderData;
 
   const [current, setCurrent] = useState<LiveMetricWindowSec | null>(windowSec);
   const [draft, setDraft] = useState<LiveMetricWindowSec>(windowSec ?? 10);
@@ -98,6 +122,29 @@ export default function SettingsPage() {
       setAiProviderError(err instanceof Error ? err.message : 'Failed to save AI provider');
     } finally {
       setSavingAiProvider(false);
+    }
+  };
+
+  const [operationalSettings, setOperationalSettingsState] = useState<OperationalSettings | null>(initialOperationalSettings);
+  const [operationalDraft, setOperationalDraft] = useState<OperationalSettings | null>(initialOperationalSettings);
+  const [operationalError, setOperationalError] = useState(operationalSettingsLoadError ?? '');
+  const [savingOperational, setSavingOperational] = useState(false);
+  const [operationalSaved, setOperationalSaved] = useState(false);
+
+  const handleSaveOperational = async () => {
+    if (!operationalDraft) return;
+    setSavingOperational(true);
+    setOperationalError('');
+    setOperationalSaved(false);
+    try {
+      const result = await setOperationalSettings(operationalDraft);
+      setOperationalSettingsState(result);
+      setOperationalDraft(result);
+      setOperationalSaved(true);
+    } catch (err) {
+      setOperationalError(err instanceof Error ? err.message : 'Failed to save settings');
+    } finally {
+      setSavingOperational(false);
     }
   };
 
@@ -211,6 +258,50 @@ export default function SettingsPage() {
                     className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
                   >
                     {savingAiProvider ? 'Saving…' : 'Save provider'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {isAdmin && (
+          <div className="bg-surface border border-border rounded-card overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <span className="font-display text-[16px] font-semibold">Retention &amp; rate limits</span>
+            </div>
+            {!operationalDraft ? (
+              <div className="p-8 text-center text-[13px] text-tx-3">{operationalError || 'Loading…'}</div>
+            ) : (
+              <div className="p-4 space-y-3">
+                <p className="text-[11px] text-tx-4">
+                  Previously env-var-only knobs — now editable here without a redeploy. Changes to the cleanup
+                  timers take effect on the next sweep (within a minute); rate limits take effect within 30s.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {OPERATIONAL_SETTING_FIELDS.map(field => (
+                    <div key={field.key}>
+                      <div className="text-[12px] text-tx mb-0.5">{field.label}</div>
+                      <div className="text-[10.5px] text-tx-4 mb-1">{field.hint}</div>
+                      <input
+                        type="number"
+                        min={field.min}
+                        value={operationalDraft[field.key]}
+                        onChange={e => setOperationalDraft(d => d && { ...d, [field.key]: Number(e.target.value) })}
+                        className="w-full border border-border rounded-control px-2.5 py-1.5 text-[12.5px] font-mono bg-surface focus:outline-none focus:border-ink-bd"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  {operationalError && <p className="text-red-fg text-[12px] mr-auto">{operationalError}</p>}
+                  {operationalSaved && !operationalError && <p className="text-green-fg text-[12px] mr-auto">Saved</p>}
+                  <button
+                    onClick={handleSaveOperational}
+                    disabled={savingOperational || JSON.stringify(operationalDraft) === JSON.stringify(operationalSettings)}
+                    className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white rounded-control text-[13px] font-medium disabled:opacity-50 transition-colors"
+                  >
+                    {savingOperational ? 'Saving…' : 'Save settings'}
                   </button>
                 </div>
               </div>

@@ -13,6 +13,7 @@ export interface HomeFormState {
   duration: string;
   rampUp: string;
   collectWebVitals: boolean;
+  device: string; // Puppeteer KnownDevices key, e.g. 'iPhone 13'; '' = no emulation (desktop)
   profile: LoadProfile;
   httpKeepAlive: boolean;
   httpTimeout: string;
@@ -31,6 +32,16 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
 };
 
 export const DURATION_OPTIONS = ['30s', '1m', '2m', '3m', '5m', '10m', '30m'];
+
+// Curated subset of Puppeteer's KnownDevices — '' means no emulation (desktop viewport).
+export const DEVICE_OPTIONS = [
+  { id: '', label: 'Desktop (no emulation)' },
+  { id: 'iPhone 13', label: 'iPhone 13' },
+  { id: 'iPhone SE', label: 'iPhone SE' },
+  { id: 'Pixel 5', label: 'Pixel 5' },
+  { id: 'Galaxy S9+', label: 'Galaxy S9+' },
+  { id: 'iPad', label: 'iPad' },
+];
 
 export const toSecs = (d: string): number => {
   const m = d.match(/^(\d+)(s|m|h)$/);

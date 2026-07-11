@@ -1,12 +1,12 @@
 import { Pool } from 'pg';
 import { log } from './logger';
 import { broadcast } from './ws';
+import {
+  getStaleRunningMinutes, getStalePendingMinutes,
+  getLiveMetricsRetentionDays, getTestResultsRetentionDays, getAuditLogRetentionDays,
+} from './settings';
 
 const CLEANUP_INTERVAL_MS = 60_000;
-const LIVE_METRICS_RETENTION_DAYS = parseInt(process.env.LIVE_METRICS_RETENTION_DAYS ?? '30');
-// GDPR data retention: 0 (default) disables auto-purge of test_results
-const TEST_RESULTS_RETENTION_DAYS = parseInt(process.env.TEST_RESULTS_RETENTION_DAYS ?? '0');
-const AUDIT_LOG_RETENTION_DAYS = parseInt(process.env.AUDIT_LOG_RETENTION_DAYS ?? '180');
 
 export const runStaleCleanup = async (
   pool: Pool,
@@ -32,8 +32,7 @@ export const runStaleCleanup = async (
     [pendingMinutes]
   );
 
-  const retentionDays = Number.isFinite(LIVE_METRICS_RETENTION_DAYS) && LIVE_METRICS_RETENTION_DAYS > 0
-    ? LIVE_METRICS_RETENTION_DAYS : 30;
+  const retentionDays = await getLiveMetricsRetentionDays(pool);
   const { rowCount: liveDeleted } = await pool.query(
     `DELETE FROM live_metrics WHERE timestamp < NOW() - ($1 || ' days')::INTERVAL`,
     [retentionDays]
@@ -41,10 +40,11 @@ export const runStaleCleanup = async (
   const liveMetricsDeleted = liveDeleted ?? 0;
 
   let testResultsDeleted = 0;
-  if (Number.isFinite(TEST_RESULTS_RETENTION_DAYS) && TEST_RESULTS_RETENTION_DAYS > 0) {
+  const testResultsRetentionDays = await getTestResultsRetentionDays(pool);
+  if (testResultsRetentionDays > 0) {
     const { rows: expired } = await pool.query<{ test_id: string }>(
       `DELETE FROM test_results WHERE created_at < NOW() - ($1 || ' days')::INTERVAL RETURNING test_id`,
-      [TEST_RESULTS_RETENTION_DAYS]
+      [testResultsRetentionDays]
     );
     if (expired.length > 0) {
       await pool.query(
@@ -54,7 +54,7 @@ export const runStaleCleanup = async (
     }
     testResultsDeleted = expired.length;
     if (testResultsDeleted > 0) {
-      log.info({ testResultsDeleted, retentionDays: TEST_RESULTS_RETENTION_DAYS }, 'Deleted expired test_results rows');
+      log.info({ testResultsDeleted, retentionDays: testResultsRetentionDays }, 'Deleted expired test_results rows');
     }
   }
 
@@ -78,13 +78,14 @@ export const runStaleCleanup = async (
   if (sessionsDeleted > 0) log.info({ sessionsDeleted }, 'Deleted expired/revoked sessions rows');
 
   let auditLogDeleted = 0;
-  if (Number.isFinite(AUDIT_LOG_RETENTION_DAYS) && AUDIT_LOG_RETENTION_DAYS > 0) {
+  const auditLogRetentionDays = await getAuditLogRetentionDays(pool);
+  if (auditLogRetentionDays > 0) {
     const { rowCount } = await pool.query(
       `DELETE FROM audit_log WHERE created_at < NOW() - ($1 || ' days')::INTERVAL`,
-      [AUDIT_LOG_RETENTION_DAYS]
+      [auditLogRetentionDays]
     );
     auditLogDeleted = rowCount ?? 0;
-    if (auditLogDeleted > 0) log.info({ auditLogDeleted, retentionDays: AUDIT_LOG_RETENTION_DAYS }, 'Deleted expired audit_log rows');
+    if (auditLogDeleted > 0) log.info({ auditLogDeleted, retentionDays: auditLogRetentionDays }, 'Deleted expired audit_log rows');
   }
 
   return {
@@ -93,10 +94,20 @@ export const runStaleCleanup = async (
   };
 };
 
-export const startStaleCleanup = (pool: Pool, runningMinutes: number, pendingMinutes: number): void => {
+/**
+ * Starts the periodic stale-test sweep. Thresholds are re-read (DB override,
+ * falling back to env var, falling back to a hardcoded default — see
+ * settings.ts) on every tick rather than fixed at startup, so an admin
+ * editing them via the Settings page takes effect on the next tick instead
+ * of requiring a redeploy.
+ */
+export const startStaleCleanup = (pool: Pool): void => {
   setInterval(() => {
     void (async (): Promise<void> => {
       try {
+        const [runningMinutes, pendingMinutes] = await Promise.all([
+          getStaleRunningMinutes(pool), getStalePendingMinutes(pool),
+        ]);
         await runStaleCleanup(pool, runningMinutes, pendingMinutes);
       } catch (err) {
         log.error({ err: (err as Error).message }, 'Stale test cleanup failed');
@@ -104,5 +115,5 @@ export const startStaleCleanup = (pool: Pool, runningMinutes: number, pendingMin
     })();
   }, CLEANUP_INTERVAL_MS);
 
-  log.info({ staleRunningMinutes: runningMinutes, stalePendingMinutes: pendingMinutes }, 'Stale test cleanup started');
+  log.info('Stale test cleanup started (admin-configurable via Settings)');
 };

@@ -1,20 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
-import Home from '../app/page';
+import { createRoutesStub } from 'react-router';
+import Home, { loader } from '../app/page';
 
-// vi.hoisted ensures these are available even after vi.mock is hoisted
-const mockPush = vi.hoisted(() => vi.fn());
-const stableSearchParams = vi.hoisted(() => new URLSearchParams());
+const mockPush = vi.fn();
 
-vi.mock('react-router-dom', () => ({
-  useNavigate: () => mockPush,
-  // Return the SAME URLSearchParams instance every call so useEffect deps stay stable
-  useSearchParams: () => [stableSearchParams, vi.fn()],
-  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode; [key: string]: unknown }) => (
-    <a href={String(to)} {...(props as React.HTMLAttributes<HTMLAnchorElement>)}>{children}</a>
-  ),
-}));
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => mockPush };
+});
 
 vi.mock('@/lib/api', () => ({
   createTest: vi.fn().mockResolvedValue({ test: { id: 'new-test-id' } }),
@@ -39,6 +34,19 @@ const mockGetPresets = vi.mocked(getPresets);
 const mockGetResult = vi.mocked(getResult);
 const mockPreviewThresholds = vi.mocked(previewThresholds);
 
+// Home now fetches its initial presets/recent-results via a route loader
+// instead of a mount-time useEffect — render it through a routes stub so
+// useLoaderData() has the router context it needs, and query-param-driven
+// pre-fill (rerun/useScriptTemplate/fromChat) goes through real URL search
+// params instead of a mocked useSearchParams. Always await something
+// (findBy*, waitFor) before the first synchronous assertion in each test —
+// the stub's loader run is async even when the underlying mocks resolve
+// immediately, so the component isn't mounted the instant render() returns.
+function renderHome(initialEntries: string[] = ['/']) {
+  const Stub = createRoutesStub([{ path: '/', Component: Home, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={initialEntries} />);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // These previously had default resolved values baked into the vi.mock(...)
@@ -55,24 +63,22 @@ beforeEach(() => {
   vi.mocked(translatePlaywright).mockResolvedValue({} as never);
   vi.mocked(suggestPresetName).mockResolvedValue({ name: 'Suggested preset' } as never);
   mockPreviewThresholds.mockResolvedValue({ available: false });
-  // Ensure no rerun param bleeds between tests
-  stableSearchParams.delete('rerun');
 });
 
 afterEach(() => cleanup());
 
 describe('Home page — form validation', () => {
   it('shows URL required error when submitted without a URL', async () => {
-    render(<Home />);
-    const runButton = screen.getByRole('button', { name: /run test/i });
+    renderHome();
+    const runButton = await screen.findByRole('button', { name: /run test/i });
     fireEvent.click(runButton);
     await waitFor(() => expect(screen.getByText('URL is required')).toBeInTheDocument());
     expect(mockCreateTest).not.toHaveBeenCalled();
   });
 
   it('calls createTest and navigates when form is valid', async () => {
-    render(<Home />);
-    const urlInput = screen.getByPlaceholderText('api.acme.io/checkout');
+    renderHome();
+    const urlInput = await screen.findByPlaceholderText('api.acme.io/checkout');
     fireEvent.change(urlInput, { target: { value: 'https://api.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /run test/i }));
     await waitFor(() => expect(mockCreateTest).toHaveBeenCalledWith(
@@ -83,8 +89,8 @@ describe('Home page — form validation', () => {
 
   it('shows the server error message when createTest fails', async () => {
     mockCreateTest.mockRejectedValueOnce(new Error('Invalid targetUrl — must use http or https'));
-    render(<Home />);
-    const urlInput = screen.getByPlaceholderText('api.acme.io/checkout');
+    renderHome();
+    const urlInput = await screen.findByPlaceholderText('api.acme.io/checkout');
     fireEvent.change(urlInput, { target: { value: 'localhost:8081' } });
     fireEvent.click(screen.getByRole('button', { name: /run test/i }));
     await waitFor(() => expect(screen.getByText('Invalid targetUrl — must use http or https')).toBeInTheDocument());
@@ -92,22 +98,23 @@ describe('Home page — form validation', () => {
 
   it('falls back to a generic message when createTest rejects without an Error', async () => {
     mockCreateTest.mockRejectedValueOnce('not an Error instance');
-    render(<Home />);
-    const urlInput = screen.getByPlaceholderText('api.acme.io/checkout');
+    renderHome();
+    const urlInput = await screen.findByPlaceholderText('api.acme.io/checkout');
     fireEvent.change(urlInput, { target: { value: 'https://test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /run test/i }));
     await waitFor(() => expect(screen.getByText('Failed to create test')).toBeInTheDocument());
   });
 
-  it('shows backend, browser, and flow type buttons', () => {
-    render(<Home />);
-    expect(screen.getByRole('button', { name: /backend/i })).toBeInTheDocument();
+  it('shows backend, browser, and flow type buttons', async () => {
+    renderHome();
+    expect(await screen.findByRole('button', { name: /backend/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /browser/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^flow$/i })).toBeInTheDocument();
   });
 
-  it('shows load profile selector for backend type inside Advanced settings', () => {
-    render(<Home />);
+  it('shows load profile selector for backend type inside Advanced settings', async () => {
+    renderHome();
+    await screen.findByRole('button', { name: /backend/i });
     const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
     expect(advancedBtn).toBeDefined();
     fireEvent.click(advancedBtn!);
@@ -116,9 +123,9 @@ describe('Home page — form validation', () => {
     expect(screen.getByRole('button', { name: /realistic/i })).toBeInTheDocument();
   });
 
-  it('shows the "Run Step 1 once" toggle for a flow test only once there is more than one step', () => {
-    render(<Home />);
-    fireEvent.click(screen.getByRole('button', { name: /^flow$/i }));
+  it('shows the "Run Step 1 once" toggle for a flow test only once there is more than one step', async () => {
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /^flow$/i }));
     expect(screen.queryByText(/run step 1 once/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /\+ add step/i }));
@@ -129,8 +136,8 @@ describe('Home page — form validation', () => {
   });
 
   it('toggles setupFirstStep on and includes it in the flow test submission', async () => {
-    render(<Home />);
-    fireEvent.click(screen.getByRole('button', { name: /^flow$/i }));
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /^flow$/i }));
     fireEvent.click(screen.getByRole('button', { name: /\+ add step/i }));
     fireEvent.click(screen.getByRole('button', { name: /\+ add step/i }));
 
@@ -150,11 +157,8 @@ describe('Home page — form validation', () => {
 });
 
 describe('Home page — script library template', () => {
-  afterEach(() => stableSearchParams.delete('useScriptTemplate'));
-
   it('loads a built-in template into Custom Script mode when ?useScriptTemplate is set', async () => {
-    stableSearchParams.set('useScriptTemplate', 'rest-api-load');
-    render(<Home />);
+    renderHome(['/?useScriptTemplate=rest-api-load']);
 
     await waitFor(() => expect(screen.getByRole('button', { name: /custom script/i })).toHaveClass('bg-sel'));
     const textarea = await waitFor(() => screen.getByPlaceholderText(/import http from 'k6\/http'/i) as HTMLTextAreaElement);
@@ -163,16 +167,14 @@ describe('Home page — script library template', () => {
   });
 
   it('ignores an unknown template id', async () => {
-    stableSearchParams.set('useScriptTemplate', 'does-not-exist');
-    render(<Home />);
-    await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
-    expect(screen.getByRole('button', { name: /ai generate/i })).toHaveClass('bg-sel');
+    renderHome(['/?useScriptTemplate=does-not-exist']);
+    expect(await screen.findByRole('button', { name: /ai generate/i })).toHaveClass('bg-sel');
   });
 });
 
 describe('Home page — preset dropdown', () => {
   it('does not show preset dropdown when no presets exist', async () => {
-    render(<Home />);
+    renderHome();
     await waitFor(() => expect(mockGetPresets).toHaveBeenCalled());
     // Preset dropdown uses "Load from preset…" as placeholder option
     expect(screen.queryByText('Load from preset…')).not.toBeInTheDocument();
@@ -188,7 +190,7 @@ describe('Home page — preset dropdown', () => {
         },
       ],
     });
-    render(<Home />);
+    renderHome();
     await waitFor(() => expect(screen.getByText('Load from preset…')).toBeInTheDocument());
     expect(screen.getByText('API Smoke (backend)')).toBeInTheDocument();
   });
@@ -203,7 +205,7 @@ describe('Home page — preset dropdown', () => {
         },
       ],
     });
-    render(<Home />);
+    renderHome();
     // Wait for the preset dropdown to appear, then select by its default display value
     await waitFor(() => screen.getByDisplayValue('Load from preset…'));
     fireEvent.change(screen.getByDisplayValue('Load from preset…'), { target: { value: 'tmpl-1' } });
@@ -219,60 +221,69 @@ const blurDescription = (text: string) => {
 };
 
 describe('Home page — applyDescriptionParams (description blur)', () => {
-  it('extracts VU count and populates the Virtual users input', () => {
-    render(<Home />);
+  it('extracts VU count and populates the Virtual users input', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('load test with 50 VUs for 2 minutes');
     // Advanced settings auto-opens (hiding the collapsed summary strip) to
     // reveal the parsed value in the "Virtual users" number input
     expect(screen.getByDisplayValue('50')).toBeInTheDocument();
   });
 
-  it('extracts duration in minutes and selects it in the duration dropdown', () => {
-    render(<Home />);
+  it('extracts duration in minutes and selects it in the duration dropdown', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('run for 5 minutes');
     expect(screen.getByDisplayValue('5m')).toBeInTheDocument();
   });
 
-  it('extracts duration in seconds and selects it in the duration dropdown', () => {
-    render(<Home />);
+  it('extracts duration in seconds and selects it in the duration dropdown', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('run for 30 seconds');
     expect(screen.getByDisplayValue('30s')).toBeInTheDocument();
   });
 
-  it('extracts a trailing duration phrase with no "for"/"duration" anchor', () => {
-    render(<Home />);
+  it('extracts a trailing duration phrase with no "for"/"duration" anchor', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('load test 2 users 3 min');
     expect(screen.getByDisplayValue('3m')).toBeInTheDocument();
   });
 
-  it('detects spike profile keyword', () => {
-    render(<Home />);
+  it('detects spike profile keyword', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('spike test with 10 users');
     // Advanced settings opens; spike profile button should appear active (aria-pressed or similar)
     expect(screen.getAllByRole('button', { name: /spike/i }).length).toBeGreaterThan(0);
   });
 
-  it('detects soak profile keyword', () => {
-    render(<Home />);
+  it('detects soak profile keyword', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('soak test for 1 hour');
     expect(screen.getAllByRole('button', { name: /soak/i }).length).toBeGreaterThan(0);
   });
 
-  it('detects capacity profile keyword', () => {
-    render(<Home />);
+  it('detects capacity profile keyword', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('capacity test to find breaking point');
     expect(screen.getAllByRole('button', { name: /capacity/i }).length).toBeGreaterThan(0);
   });
 
-  it('does not change anything for an empty description', () => {
-    render(<Home />);
+  it('does not change anything for an empty description', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('');
     // Default type "Backend" button should still be present
     expect(screen.getByRole('button', { name: /backend/i })).toBeInTheDocument();
   });
 
-  it('does not extract VUs when no match', () => {
-    render(<Home />);
+  it('does not extract VUs when no match', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('test my API please');
     // No numeric param detected → Advanced settings stays collapsed, and the
     // summary strip still shows the untouched default "5 VUs" (one of the two
@@ -281,15 +292,17 @@ describe('Home page — applyDescriptionParams (description blur)', () => {
     expect(matches.some(el => /\b5\s*VUs\b/.test(el.textContent ?? ''))).toBe(true);
   });
 
-  it('caps VU count at 100', () => {
-    render(<Home />);
+  it('caps VU count at 100', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('load test with 500 VUs');
     // Advanced settings auto-opens; the capped value shows in the number input
     expect(screen.getByDisplayValue('100')).toBeInTheDocument();
   });
 
-  it('extracts ramp-up duration', () => {
-    render(<Home />);
+  it('extracts ramp-up duration', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('load test 10 VUs ramp up: 30s for 2 minutes');
     // Advanced settings auto-opens; "30s" lands in the Ramp-up text input
     // (duration "2m" is selected in the dropdown, so this match is unambiguous)
@@ -299,17 +312,18 @@ describe('Home page — applyDescriptionParams (description blur)', () => {
   // Keeps this regex's signal words in sync with the chat-parse prompt
   // (services/results-service/src/app.ts buildChatParsePrompt) — they were
   // found to disagree on "performance test" (backend) and "endpoint"/"page".
-  it('detects "endpoint" as a backend signal', () => {
-    render(<Home />);
-    fireEvent.click(screen.getByRole('button', { name: /browser/i }));
+  it('detects "endpoint" as a backend signal', async () => {
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /browser/i }));
     blurDescription('test this endpoint with 10 users');
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
     // Browser-only thresholds disappear once the description flips type back to backend
     expect(screen.queryByText('INP ms max')).not.toBeInTheDocument();
   });
 
-  it('detects "page" as a browser signal', () => {
-    render(<Home />);
+  it('detects "page" as a browser signal', async () => {
+    renderHome();
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
     blurDescription('test this page with 10 users');
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
     expect(screen.getByText('INP ms max')).toBeInTheDocument();
@@ -318,25 +332,25 @@ describe('Home page — applyDescriptionParams (description blur)', () => {
 
 describe('Home page — browser SLO threshold inputs', () => {
   it('shows INP and TBT threshold inputs when browser type is selected and SLO section is open', async () => {
-    render(<Home />);
-    fireEvent.click(screen.getByRole('button', { name: /browser/i }));
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /browser/i }));
     const sloBtn = screen.getByRole('button', { name: /SLO thresholds/i });
     fireEvent.click(sloBtn);
     expect(screen.getByText('INP ms max')).toBeInTheDocument();
     expect(screen.getByText('TBT ms max')).toBeInTheDocument();
   });
 
-  it('does not show INP or TBT threshold inputs for backend type', () => {
-    render(<Home />);
-    const sloBtn = screen.getByRole('button', { name: /SLO thresholds/i });
+  it('does not show INP or TBT threshold inputs for backend type', async () => {
+    renderHome();
+    const sloBtn = await screen.findByRole('button', { name: /SLO thresholds/i });
     fireEvent.click(sloBtn);
     expect(screen.queryByText('INP ms max')).not.toBeInTheDocument();
     expect(screen.queryByText('TBT ms max')).not.toBeInTheDocument();
   });
 
   it('includes inp and tbt in createTest payload when browser thresholds are enabled with defaults', async () => {
-    render(<Home />);
-    fireEvent.click(screen.getByRole('button', { name: /browser/i }));
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /browser/i }));
     fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://browser.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
 
@@ -350,17 +364,52 @@ describe('Home page — browser SLO threshold inputs', () => {
   });
 });
 
-describe('Home page — custom headers editor', () => {
-  it('shows "No custom headers" message by default in Advanced settings', () => {
-    render(<Home />);
+describe('Home page — device emulation', () => {
+  it('shows the Device emulation dropdown for browser (client-side) tests', async () => {
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /browser/i }));
     const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
+    fireEvent.click(advancedBtn!);
+    expect(screen.getByText('Device emulation')).toBeInTheDocument();
+  });
+
+  it('does not show Device emulation for backend tests', async () => {
+    renderHome();
+    await screen.findByRole('button', { name: /backend/i });
+    const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
+    fireEvent.click(advancedBtn!);
+    expect(screen.queryByText('Device emulation')).not.toBeInTheDocument();
+  });
+
+  it('includes device in createTest payload options when a device is selected', async () => {
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /browser/i }));
+    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://browser.test.com' } });
+    const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
+    fireEvent.click(advancedBtn!);
+    fireEvent.change(screen.getByDisplayValue('Desktop (no emulation)'), { target: { value: 'iPhone 13' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /run test/i }));
+    await waitFor(() => expect(mockCreateTest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'client-side',
+        options: expect.objectContaining({ device: 'iPhone 13' }),
+      })
+    ));
+  });
+});
+
+describe('Home page — custom headers editor', () => {
+  it('shows "No custom headers" message by default in Advanced settings', async () => {
+    renderHome();
+    const advancedBtn = (await screen.findAllByRole('button')).find(b => b.textContent?.includes('Advanced settings'));
     fireEvent.click(advancedBtn!);
     expect(screen.getByText(/no custom headers/i)).toBeInTheDocument();
   });
 
   it('adds a header row and includes it in the createTest payload', async () => {
-    render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://api.test.com' } });
+    renderHome();
+    fireEvent.change(await screen.findByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://api.test.com' } });
     const advancedBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Advanced settings'));
     fireEvent.click(advancedBtn!);
 
@@ -398,9 +447,8 @@ describe('Home page — re-run from results list', () => {
   });
 
   it('pre-fills URL and description when rerun param is set', async () => {
-    stableSearchParams.set('rerun', 'rerun-test-id');
     mockGetResult.mockResolvedValueOnce({ result: makeRerunResult() } as never);
-    render(<Home />);
+    renderHome(['/?rerun=rerun-test-id']);
     await waitFor(() => {
       expect(screen.getByPlaceholderText('api.acme.io/checkout')).toHaveValue('rerun.example.com');
     });
@@ -409,9 +457,8 @@ describe('Home page — re-run from results list', () => {
   });
 
   it('shows the re-run banner with the target URL', async () => {
-    stableSearchParams.set('rerun', 'rerun-test-id');
     mockGetResult.mockResolvedValueOnce({ result: makeRerunResult() } as never);
-    render(<Home />);
+    renderHome(['/?rerun=rerun-test-id']);
     await waitFor(() => {
       expect(screen.getByText(/pre-filled from previous run/i)).toBeInTheDocument();
       expect(screen.getByText('https://rerun.example.com')).toBeInTheDocument();
@@ -419,9 +466,8 @@ describe('Home page — re-run from results list', () => {
   });
 
   it('dismisses the re-run banner when the ✕ button is clicked', async () => {
-    stableSearchParams.set('rerun', 'rerun-test-id');
     mockGetResult.mockResolvedValueOnce({ result: makeRerunResult() } as never);
-    render(<Home />);
+    renderHome(['/?rerun=rerun-test-id']);
     await waitFor(() => screen.getByText(/pre-filled from previous run/i));
     fireEvent.click(screen.getByRole('button', { name: /dismiss re-run notice/i }));
     expect(screen.queryByText(/pre-filled from previous run/i)).not.toBeInTheDocument();
@@ -430,8 +476,8 @@ describe('Home page — re-run from results list', () => {
 
 describe('Home page — threshold preview', () => {
   it('does not show the preview button until SLO thresholds are open', async () => {
-    render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
+    renderHome();
+    fireEvent.change(await screen.findByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
     expect(screen.queryByRole('button', { name: /preview against last run/i })).not.toBeInTheDocument();
   });
 
@@ -442,8 +488,8 @@ describe('Home page — threshold preview', () => {
       thresholdViolations: [],
       basedOn: { testId: 't1', completedAt: '2026-01-01T00:00:00.000Z' },
     });
-    render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
+    renderHome();
+    fireEvent.change(await screen.findByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
 
     const previewBtn = screen.getByRole('button', { name: /preview against last run/i });
@@ -460,8 +506,8 @@ describe('Home page — threshold preview', () => {
       thresholdViolations: ['p95 response time 1200ms exceeds threshold 1000ms'],
       basedOn: { testId: 't1', completedAt: '2026-01-01T00:00:00.000Z' },
     });
-    render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
+    renderHome();
+    fireEvent.change(await screen.findByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://preview.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
     fireEvent.click(screen.getByRole('button', { name: /preview against last run/i }));
 
@@ -471,8 +517,8 @@ describe('Home page — threshold preview', () => {
 
   it('shows a message when no completed run is available', async () => {
     mockPreviewThresholds.mockResolvedValueOnce({ available: false });
-    render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://no-history.test.com' } });
+    renderHome();
+    fireEvent.change(await screen.findByPlaceholderText('api.acme.io/checkout'), { target: { value: 'https://no-history.test.com' } });
     fireEvent.click(screen.getByRole('button', { name: /SLO thresholds/i }));
     fireEvent.click(screen.getByRole('button', { name: /preview against last run/i }));
 
@@ -492,17 +538,15 @@ describe('Home page — fromChat pre-fill (?fromChat=1 + chatFlowConfig)', () =>
   };
 
   beforeEach(() => {
-    stableSearchParams.set('fromChat', '1');
     sessionStorage.setItem('chatFlowConfig', JSON.stringify(FLOW_CONFIG));
   });
 
   afterEach(() => {
-    stableSearchParams.delete('fromChat');
     sessionStorage.clear();
   });
 
   it('pre-fills the description field from chatFlowConfig', async () => {
-    render(<Home />);
+    renderHome(['/?fromChat=1']);
     await waitFor(() => {
       const descInput = screen.getByPlaceholderText(/e\.g\. load test/i) as HTMLInputElement;
       expect(descInput.value).toBe('Register then login flow');
@@ -510,23 +554,24 @@ describe('Home page — fromChat pre-fill (?fromChat=1 + chatFlowConfig)', () =>
   });
 
   it('auto-opens Advanced settings when options include vus or duration', async () => {
-    render(<Home />);
+    renderHome(['/?fromChat=1']);
     // VU input should be visible without manually opening Advanced settings
     await waitFor(() => {
       expect(screen.getByDisplayValue('5')).toBeInTheDocument();
     });
   });
 
-  it('removes chatFlowConfig from sessionStorage after reading', () => {
-    render(<Home />);
-    expect(sessionStorage.getItem('chatFlowConfig')).toBeNull();
+  it('removes chatFlowConfig from sessionStorage after reading', async () => {
+    renderHome(['/?fromChat=1']);
+    await screen.findByPlaceholderText(/e\.g\. load test/i);
+    await waitFor(() => expect(sessionStorage.getItem('chatFlowConfig')).toBeNull());
   });
 
   it('falls back to normal form behavior when chatFlowConfig is absent', async () => {
     sessionStorage.clear(); // remove key the beforeEach set
-    render(<Home />);
+    renderHome(['/?fromChat=1']);
     // form should still be empty / default state — no pre-filled description
-    const descInput = screen.getByPlaceholderText(/e\.g\. load test/i) as HTMLInputElement;
+    const descInput = await screen.findByPlaceholderText(/e\.g\. load test/i) as HTMLInputElement;
     expect(descInput.value).toBe('');
   });
 });

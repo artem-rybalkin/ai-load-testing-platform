@@ -63,10 +63,10 @@ const addMemberWithRole = async (teamId: string, adminCookie: string, role: 'mem
     headers: { cookie: adminCookie },
   });
   const login = await app.inject({ method: 'POST', url: '/auth/login', payload: { email, password: 'password123' } });
-  // switch to the shared team
-  const cookie = sessionCookie(login);
-  await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie } });
-  return cookie;
+  // switch to the shared team; switch-team rotates the token, so the caller must use
+  // the cookie from this response, not the pre-switch login cookie.
+  const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(login) } });
+  return sessionCookie(switched);
 };
 
 // ─── GET /workspaces ──────────────────────────────────────────────────────────

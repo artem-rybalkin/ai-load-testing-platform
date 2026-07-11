@@ -103,14 +103,19 @@ describe('revokeSession', () => {
 });
 
 describe('switchSessionTeam', () => {
-  it('updates the current team for a session', async () => {
+  it('rotates to a new token scoped to the new team and revokes the old one', async () => {
     const token = await createSession(pool, userId, teamAId);
-    await switchSessionTeam(pool, token, teamBId);
-    const session = await getSession(pool, token);
-    expect(session?.teamId).toBe(teamBId);
+    const newToken = await switchSessionTeam(pool, token, userId, teamBId);
+    expect(newToken).toBeTruthy();
+    expect(newToken).not.toBe(token);
+
+    const newSession = await getSession(pool, newToken);
+    expect(newSession?.teamId).toBe(teamBId);
+
+    expect(await getSession(pool, token)).toBeNull();
   });
 
   it('is a no-op for an undefined token', async () => {
-    await expect(switchSessionTeam(pool, undefined, teamBId)).resolves.toBeUndefined();
+    await expect(switchSessionTeam(pool, undefined, userId, teamBId)).resolves.toBeUndefined();
   });
 });

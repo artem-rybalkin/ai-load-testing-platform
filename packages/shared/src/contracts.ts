@@ -82,6 +82,7 @@ export const ClientTestOptionsSchema: z.ZodType<ClientTestOptions> = z.object({
   duration: z.string(),
   collectWebVitals: z.boolean(),
   headers: z.record(z.string(), z.string()).optional(),
+  device: z.string().optional(),
 });
 
 export const TestRequestSchema: z.ZodType<TestRequest> = z.object({

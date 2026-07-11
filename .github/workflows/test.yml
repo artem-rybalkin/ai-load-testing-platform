@@ -122,13 +122,20 @@ jobs:
         env:
           PLAYWRIGHT_TEST_BASE_URL: http://localhost:3006
 
-      - name: Upload Playwright report
+      - name: Upload Playwright failure artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-report
-          path: playwright-report/
+          # playwright.config.ts uses the 'list' reporter (console-only) — there is
+          # no playwright-report/ HTML report to upload. The actually-useful
+          # failure evidence (screenshot + trace.zip per failing test, per
+          # `screenshot: 'only-on-failure'` / `trace: 'retain-on-failure'`) lands in
+          # test-results/ instead, and was previously never uploaded — a failure's
+          # trace was unrecoverable once the runner was torn down.
+          name: playwright-test-results
+          path: test-results/
           retention-days: 7
+          if-no-files-found: ignore
 
       - name: Stop services
         if: always()

@@ -15,6 +15,9 @@ import {
   getTeamAiProviderSetting,
   getLiveMetricWindowSetting,
   setLiveMetricWindowSetting,
+  getOperationalSettings,
+  setOperationalSetting,
+  OperationalSettingKey,
 } from '../settings';
 import { isConsumerConnected } from '../consumer';
 import { redisClient } from '../redis';
@@ -117,6 +120,40 @@ export function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool
       }
       await setLiveMetricWindowSetting(pool, windowSec as LiveMetricWindowSec);
       return { windowSec };
+    },
+  );
+
+  // ── GET /system/operational-settings ──────────────────────────────────────
+  app.get('/system/operational-settings', async (request, reply) => {
+    if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+    return getOperationalSettings(pool);
+  });
+
+  // ── PUT /system/operational-settings ──────────────────────────────────────
+  const OPERATIONAL_SETTING_VALIDATORS: Record<OperationalSettingKey, (n: number) => boolean> = {
+    staleRunningMinutes: n => Number.isInteger(n) && n > 0,
+    stalePendingMinutes: n => Number.isInteger(n) && n > 0,
+    liveMetricsRetentionDays: n => Number.isInteger(n) && n > 0,
+    testResultsRetentionDays: n => Number.isInteger(n) && n >= 0,
+    auditLogRetentionDays: n => Number.isInteger(n) && n >= 0,
+    rateLimitMax: n => Number.isInteger(n) && n > 0,
+    aiRateLimitMax: n => Number.isInteger(n) && n > 0,
+  };
+  app.put<{ Body: Partial<Record<OperationalSettingKey, number>> }>(
+    '/system/operational-settings',
+    async (request, reply) => {
+      if (request.role !== 'admin') return reply.code(403).send({ error: 'Admin role required' });
+      const body = request.body ?? {};
+      const keys = Object.keys(body) as OperationalSettingKey[];
+      for (const key of keys) {
+        if (!(key in OPERATIONAL_SETTING_VALIDATORS)) return reply.code(400).send({ error: `Unknown setting: ${key}` });
+        const value = body[key];
+        if (typeof value !== 'number' || !OPERATIONAL_SETTING_VALIDATORS[key](value)) {
+          return reply.code(400).send({ error: `Invalid value for ${key}` });
+        }
+      }
+      await Promise.all(keys.map(key => setOperationalSetting(pool, key, body[key] as number)));
+      return getOperationalSettings(pool);
     },
   );
 

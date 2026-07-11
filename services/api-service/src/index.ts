@@ -11,6 +11,7 @@ import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount, pool
 import { getApiSession, hashApiKey } from './session';
 import { checkTestQuota } from './quotas';
 import { redisClient } from './redis';
+import { getRateLimitMax } from './settings';
 
 // Augment Fastify request type — must be at module level
 declare module 'fastify' {
@@ -77,9 +78,19 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   });
   await app.register(cookie);
 
+  // Cached (not re-queried per request) and scoped to this app instance —
+  // admin-configurable via results-service's Settings page (falls back to
+  // RATE_LIMIT_MAX env var, then a hardcoded default; see ./settings.ts).
+  let cachedRateLimitMax: { value: number; at: number } | null = null;
+  const RATE_LIMIT_CACHE_MS = 30_000;
   await app.register(rateLimit, {
     global: true,
-    max: Number(process.env.RATE_LIMIT_MAX) || 600,
+    max: async () => {
+      if (cachedRateLimitMax && Date.now() - cachedRateLimitMax.at < RATE_LIMIT_CACHE_MS) return cachedRateLimitMax.value;
+      const value = await getRateLimitMax(pool);
+      cachedRateLimitMax = { value, at: Date.now() };
+      return value;
+    },
     timeWindow: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000,
     redis: redisClient,
     skipOnError: true,

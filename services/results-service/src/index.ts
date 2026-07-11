@@ -7,19 +7,12 @@ import { startScheduler } from './scheduler';
 import { startStaleCleanup } from './cleanup';
 import { log } from './logger';
 
-const parseMinutes = (env: string | undefined, fallback: number): number => {
-  const n = parseInt(env ?? '');
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-};
-const STALE_RUNNING_MINUTES = parseMinutes(process.env.STALE_RUNNING_MINUTES, 15);
-const STALE_PENDING_MINUTES = parseMinutes(process.env.STALE_PENDING_MINUTES, 30);
-
 const start = async (): Promise<void> => {
   try {
     await initDb();
     await startConsumer();
     await startScheduler(pool);
-    startStaleCleanup(pool, STALE_RUNNING_MINUTES, STALE_PENDING_MINUTES);
+    startStaleCleanup(pool);
     const app = await buildApp(pool, { logger: true, readPool });
     const port = Number(process.env.PORT) || 3004;
     await app.listen({ port, host: '0.0.0.0' });

@@ -146,12 +146,12 @@ describe('PUT /system/ai-provider', () => {
     const memberReg = await registerUser('member4@example.com', 'member4-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
     const res = await app.inject({
       method: 'PUT', url: '/system/ai-provider',
       payload: { provider: 'openai' },
-      headers: { cookie: sessionCookie(memberReg) },
+      headers: { cookie: sessionCookie(switched) },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -240,12 +240,12 @@ describe('PUT /teams/:id/ai-provider', () => {
     const memberReg = await registerUser('memberai3@example.com', 'memberai3-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
     const res = await app.inject({
       method: 'PUT', url: `/teams/${teamId}/ai-provider`,
       payload: { provider: 'openai' },
-      headers: { cookie: sessionCookie(memberReg) },
+      headers: { cookie: sessionCookie(switched) },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -296,11 +296,11 @@ describe('DELETE /teams/:id/ai-provider', () => {
     const memberReg = await registerUser('memberai6@example.com', 'memberai6-own-team');
     const memberId = memberReg.json().id as string;
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamId, memberId]);
-    await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
+    const switched = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId }, headers: { cookie: sessionCookie(memberReg) } });
 
     const res = await app.inject({
       method: 'DELETE', url: `/teams/${teamId}/ai-provider`,
-      headers: { cookie: sessionCookie(memberReg) },
+      headers: { cookie: sessionCookie(switched) },
     });
     expect(res.statusCode).toBe(403);
   });

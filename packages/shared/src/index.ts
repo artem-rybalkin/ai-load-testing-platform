@@ -174,6 +174,7 @@ export interface ClientTestOptions {
   duration: string;
   collectWebVitals: boolean;
   headers?: Record<string, string>; // custom headers set via page.setExtraHTTPHeaders
+  device?: string;                  // Puppeteer KnownDevices key (e.g. 'iPhone 13'); unset = no emulation (desktop viewport)
 }
 
 // ── Chat-based "one prompt" test creation ───────────────────────────────────

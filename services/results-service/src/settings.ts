@@ -82,3 +82,95 @@ export async function setLiveMetricWindowSetting(pool: Pool, windowSec: LiveMetr
     [String(windowSec)]
   );
 }
+
+// ── Operational knobs (retention/GDPR + rate limits) ────────────────────────
+// Previously env-var-only, requiring a redeploy to change. Same
+// app_settings-backed pattern as the live-metric-window setting above: a DB
+// override takes priority, falling back to the env var (so existing
+// deployments need no config change), falling back to a hardcoded default.
+
+const OPERATIONAL_SETTING_KEYS = {
+  staleRunningMinutes: 'stale_running_minutes',
+  stalePendingMinutes: 'stale_pending_minutes',
+  liveMetricsRetentionDays: 'live_metrics_retention_days',
+  testResultsRetentionDays: 'test_results_retention_days',
+  auditLogRetentionDays: 'audit_log_retention_days',
+  rateLimitMax: 'rate_limit_max',
+  aiRateLimitMax: 'ai_rate_limit_max',
+} as const;
+
+export type OperationalSettingKey = keyof typeof OPERATIONAL_SETTING_KEYS;
+
+const POSITIVE = (n: number): boolean => Number.isFinite(n) && n > 0;
+const NON_NEGATIVE = (n: number): boolean => Number.isFinite(n) && n >= 0;
+
+async function getNumberSetting(
+  pool: Pool,
+  key: string,
+  envVar: string | undefined,
+  fallback: number,
+  isValid: (n: number) => boolean,
+): Promise<number> {
+  // A transient DB hiccup here (e.g. this happens on the hot path of
+  // @fastify/rate-limit's async `max`) must not 500 an otherwise-normal
+  // request — fail open to the env var / hardcoded default instead. A plain
+  // try/catch (not a .catch() chained onto the query call) is required to
+  // also cover a synchronous throw from pool.query itself.
+  try {
+    const { rows } = await pool.query<{ value: string }>(`SELECT value FROM app_settings WHERE key = $1`, [key]);
+    if (rows.length > 0) {
+      const n = Number(rows[0].value);
+      if (isValid(n)) return n;
+    }
+  } catch { /* fall through to env var / default below */ }
+  const envN = Number(envVar);
+  return isValid(envN) ? envN : fallback;
+}
+
+export const getStaleRunningMinutes = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.staleRunningMinutes, process.env.STALE_RUNNING_MINUTES, 15, POSITIVE);
+export const getStalePendingMinutes = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.stalePendingMinutes, process.env.STALE_PENDING_MINUTES, 30, POSITIVE);
+/** Live-metrics row retention, in days. */
+export const getLiveMetricsRetentionDays = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.liveMetricsRetentionDays, process.env.LIVE_METRICS_RETENTION_DAYS, 30, POSITIVE);
+/** GDPR auto-purge of test_results, in days. 0 disables auto-purge (the default). */
+export const getTestResultsRetentionDays = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.testResultsRetentionDays, process.env.TEST_RESULTS_RETENTION_DAYS, 0, NON_NEGATIVE);
+/** audit_log row retention, in days. 0 disables auto-purge. */
+export const getAuditLogRetentionDays = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.auditLogRetentionDays, process.env.AUDIT_LOG_RETENTION_DAYS, 180, NON_NEGATIVE);
+/** Global @fastify/rate-limit request cap, requests/min/IP. */
+export const getRateLimitMax = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.rateLimitMax, process.env.RATE_LIMIT_MAX, 600, POSITIVE);
+/** Per-route rate-limit cap for the /ai/ and suggest- (and diagnose) endpoints, requests/min. */
+export const getAiRateLimitMax = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.aiRateLimitMax, process.env.AI_RATE_LIMIT_MAX, 20, POSITIVE);
+
+export interface OperationalSettings {
+  staleRunningMinutes: number;
+  stalePendingMinutes: number;
+  liveMetricsRetentionDays: number;
+  testResultsRetentionDays: number;
+  auditLogRetentionDays: number;
+  rateLimitMax: number;
+  aiRateLimitMax: number;
+}
+
+export async function getOperationalSettings(pool: Pool): Promise<OperationalSettings> {
+  const [
+    staleRunningMinutes, stalePendingMinutes, liveMetricsRetentionDays,
+    testResultsRetentionDays, auditLogRetentionDays, rateLimitMax, aiRateLimitMax,
+  ] = await Promise.all([
+    getStaleRunningMinutes(pool), getStalePendingMinutes(pool), getLiveMetricsRetentionDays(pool),
+    getTestResultsRetentionDays(pool), getAuditLogRetentionDays(pool), getRateLimitMax(pool), getAiRateLimitMax(pool),
+  ]);
+  return { staleRunningMinutes, stalePendingMinutes, liveMetricsRetentionDays, testResultsRetentionDays, auditLogRetentionDays, rateLimitMax, aiRateLimitMax };
+}
+
+export async function setOperationalSetting(pool: Pool, key: OperationalSettingKey, value: number): Promise<void> {
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+    [OPERATIONAL_SETTING_KEYS[key], String(value)]
+  );
+}
