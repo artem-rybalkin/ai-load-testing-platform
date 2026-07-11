@@ -416,6 +416,45 @@ describe('BACKEND_PROMPT — profileInstructions', () => {
     expect(prompt).toMatch(/Always include multi-percentile thresholds/);
   });
 
+  it('uses an admin-configured abort threshold from results-service instead of the hardcoded default', async () => {
+    // Isolated module instance (vi.resetModules) so this test's fetch mock and
+    // cache mutation can't leak into the other tests in this file, which all
+    // assume the DEFAULT_CAPACITY_ABORT_CONFIG fallback (fetch rejects).
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes('/system/capacity-abort')) {
+        return Promise.resolve({ ok: true, json: async () => ({ p95Ms: 3000, errorRatePct: 8, delaySec: 20 }) });
+      }
+      return Promise.reject(new Error('fetch disabled in tests'));
+    }));
+    vi.resetModules();
+    const { generateScript: generateScriptFresh } = await import('../generator');
+
+    await generateScriptFresh(makeBackendWithProfile('capacity'));
+    const prompt = await getLastPrompt();
+    // p90/p99 re-derived from the configured p95 (3000 * 0.8 = 2400, 3000 * 2 = 6000)
+    expect(prompt).toContain("http_req_duration: ['p(90)<2400', { threshold: 'p(95)<3000', abortOnFail: true, delayAbortEval: '20s' }, 'p(99)<6000']");
+    expect(prompt).toContain("http_req_failed: [{ threshold: 'rate<0.08', abortOnFail: true, delayAbortEval: '20s' }]");
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+    vi.resetModules();
+  });
+
+  it('falls back to the hardcoded default abort config when results-service is unreachable', async () => {
+    await generateScript(makeBackendWithProfile('capacity'));
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain("http_req_duration: ['p(90)<1600', { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }, 'p(99)<4000']");
+  });
+
+  it('does not fetch the abort config at all for a non-capacity profile', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('fetch disabled in tests'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateScript(makeBackendWithProfile('spike'));
+
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/system/capacity-abort'))).toBe(false);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
   it('includes SOAK TEST instructions for soak profile', async () => {
     await generateScript(makeBackendWithProfile('soak'));
     expect(await getLastPrompt()).toContain('SOAK TEST');

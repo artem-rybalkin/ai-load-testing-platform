@@ -97,6 +97,9 @@ const OPERATIONAL_SETTING_KEYS = {
   auditLogRetentionDays: 'audit_log_retention_days',
   rateLimitMax: 'rate_limit_max',
   aiRateLimitMax: 'ai_rate_limit_max',
+  capacityAbortP95Ms: 'capacity_abort_p95_ms',
+  capacityAbortErrorRatePct: 'capacity_abort_error_rate_pct',
+  capacityAbortDelaySec: 'capacity_abort_delay_sec',
 } as const;
 
 export type OperationalSettingKey = keyof typeof OPERATIONAL_SETTING_KEYS;
@@ -146,6 +149,15 @@ export const getRateLimitMax = (pool: Pool): Promise<number> =>
 /** Per-route rate-limit cap for the /ai/ and suggest- (and diagnose) endpoints, requests/min. */
 export const getAiRateLimitMax = (pool: Pool): Promise<number> =>
   getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.aiRateLimitMax, process.env.AI_RATE_LIMIT_MAX, 20, POSITIVE);
+/** Capacity/stress profile: p95 latency (ms) that triggers k6's abortOnFail. p90/p99 are derived from this via deriveMultiPercentileThresholds, same as every other profile's thresholds. */
+export const getCapacityAbortP95Ms = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.capacityAbortP95Ms, process.env.CAPACITY_ABORT_P95_MS, 2000, POSITIVE);
+/** Capacity/stress profile: http_req_failed rate (%) that triggers abortOnFail. 0 is valid (abort on any failure). */
+export const getCapacityAbortErrorRatePct = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.capacityAbortErrorRatePct, process.env.CAPACITY_ABORT_ERROR_RATE_PCT, 5, NON_NEGATIVE);
+/** Capacity/stress profile: delayAbortEval grace period (seconds) — gives each new ramp level time to produce samples before a breach can trigger an abort. 0 means abort immediately on first breach. */
+export const getCapacityAbortDelaySec = (pool: Pool): Promise<number> =>
+  getNumberSetting(pool, OPERATIONAL_SETTING_KEYS.capacityAbortDelaySec, process.env.CAPACITY_ABORT_DELAY_SEC, 10, NON_NEGATIVE);
 
 export interface OperationalSettings {
   staleRunningMinutes: number;
@@ -155,17 +167,25 @@ export interface OperationalSettings {
   auditLogRetentionDays: number;
   rateLimitMax: number;
   aiRateLimitMax: number;
+  capacityAbortP95Ms: number;
+  capacityAbortErrorRatePct: number;
+  capacityAbortDelaySec: number;
 }
 
 export async function getOperationalSettings(pool: Pool): Promise<OperationalSettings> {
   const [
     staleRunningMinutes, stalePendingMinutes, liveMetricsRetentionDays,
     testResultsRetentionDays, auditLogRetentionDays, rateLimitMax, aiRateLimitMax,
+    capacityAbortP95Ms, capacityAbortErrorRatePct, capacityAbortDelaySec,
   ] = await Promise.all([
     getStaleRunningMinutes(pool), getStalePendingMinutes(pool), getLiveMetricsRetentionDays(pool),
     getTestResultsRetentionDays(pool), getAuditLogRetentionDays(pool), getRateLimitMax(pool), getAiRateLimitMax(pool),
+    getCapacityAbortP95Ms(pool), getCapacityAbortErrorRatePct(pool), getCapacityAbortDelaySec(pool),
   ]);
-  return { staleRunningMinutes, stalePendingMinutes, liveMetricsRetentionDays, testResultsRetentionDays, auditLogRetentionDays, rateLimitMax, aiRateLimitMax };
+  return {
+    staleRunningMinutes, stalePendingMinutes, liveMetricsRetentionDays, testResultsRetentionDays, auditLogRetentionDays,
+    rateLimitMax, aiRateLimitMax, capacityAbortP95Ms, capacityAbortErrorRatePct, capacityAbortDelaySec,
+  };
 }
 
 export async function setOperationalSetting(pool: Pool, key: OperationalSettingKey, value: number): Promise<void> {

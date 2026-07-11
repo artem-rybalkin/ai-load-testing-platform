@@ -59,6 +59,9 @@ const defaultOperationalSettings = {
   auditLogRetentionDays: 180,
   rateLimitMax: 600,
   aiRateLimitMax: 20,
+  capacityAbortP95Ms: 2000,
+  capacityAbortErrorRatePct: 5,
+  capacityAbortDelaySec: 10,
 };
 
 beforeEach(() => {
@@ -295,7 +298,7 @@ describe('SettingsPage — platform-default AI provider', () => {
 });
 
 describe('SettingsPage — retention & rate limits', () => {
-  it('fetches the current operational settings on mount and renders all 7 fields', async () => {
+  it('fetches the current operational settings on mount and renders all 10 fields', async () => {
     setUser(adminUser);
     renderSettingsPage();
 
@@ -304,6 +307,9 @@ describe('SettingsPage — retention & rate limits', () => {
     expect(screen.getByText('Stale "running" timeout')).toBeInTheDocument();
     expect(screen.getByText('Global rate limit')).toBeInTheDocument();
     expect(screen.getByText('AI rate limit')).toBeInTheDocument();
+    expect(screen.getByText('Capacity-test abort p95 (ms)')).toBeInTheDocument();
+    expect(screen.getByText('Capacity-test abort error rate (%)')).toBeInTheDocument();
+    expect(screen.getByText('Capacity-test abort grace period (s)')).toBeInTheDocument();
   });
 
   it('shows an error message when the fetch fails, instead of the fields', async () => {
@@ -334,6 +340,19 @@ describe('SettingsPage — retention & rate limits', () => {
     fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
 
     await waitFor(() => expect(mockSetOperationalSettings).toHaveBeenCalledWith({ ...defaultOperationalSettings, rateLimitMax: 1000 }));
+  });
+
+  it('edits the capacity-abort p95 threshold and saves it alongside the rest of the draft', async () => {
+    setUser(adminUser);
+    mockSetOperationalSettings.mockResolvedValue({ ...defaultOperationalSettings, capacityAbortP95Ms: 3000 });
+    renderSettingsPage();
+    await screen.findByText('Retention & rate limits');
+
+    const p95Input = screen.getByDisplayValue('2000');
+    fireEvent.change(p95Input, { target: { value: '3000' } });
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+    await waitFor(() => expect(mockSetOperationalSettings).toHaveBeenCalledWith({ ...defaultOperationalSettings, capacityAbortP95Ms: 3000 }));
   });
 
   it('shows "Saved" after a successful save', async () => {

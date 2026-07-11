@@ -24,7 +24,18 @@ const durationThresholds = (p95: number): string[] => {
 // allow, and k6 would silently allocate up to 10x that many real VUs.
 export const realisticProfileMaxVus = (rate: number): number => Math.max(rate, 10) * 10;
 
-export const buildK6Options = (opts: BackendTestOptions): string => {
+export interface CapacityAbortConfig {
+  p95Ms: number;
+  errorRatePct: number;
+  delaySec: number;
+}
+
+// Matches the hardcoded values this replaced — callers that don't pass
+// abortConfig (existing tests, any call site not yet updated) see identical
+// output to before this became configurable.
+export const DEFAULT_CAPACITY_ABORT_CONFIG: CapacityAbortConfig = { p95Ms: 2000, errorRatePct: 5, delaySec: 10 };
+
+export const buildK6Options = (opts: BackendTestOptions, abortConfig: CapacityAbortConfig = DEFAULT_CAPACITY_ABORT_CONFIG): string => {
   const { vus, duration, profile = 'load', peakVus, httpOptions } = opts;
   const peak = peakVus ?? vus * 10;
 
@@ -79,13 +90,15 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
         thresholds: { http_req_duration: durationThresholds(2000), http_req_failed: ['rate<0.1'], checks: ['rate>0.9'] }
       };
       case 'capacity': {
-        const { p90, p99 } = deriveMultiPercentileThresholds(2000);
+        const { p95Ms, errorRatePct, delaySec } = abortConfig;
+        const { p90, p99 } = deriveMultiPercentileThresholds(p95Ms);
+        const delayAbortEval = `${delaySec}s`;
         return {
           stages: [
             { duration: duration, target: peak },
             { duration: '30s',   target: 0    },
           ],
-          // 10s delayAbortEval gives each new stage/VU-target a moment to
+          // delayAbortEval gives each new stage/VU-target a moment to
           // produce enough samples before the threshold is evaluated for
           // abort, so the very first slow request at a new ramp level doesn't
           // trigger a premature abort. Only p95 (the primary signal) aborts —
@@ -94,10 +107,10 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
           thresholds: {
             http_req_duration: [
               `p(90)<${p90}`,
-              { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' },
+              { threshold: `p(95)<${p95Ms}`, abortOnFail: true, delayAbortEval },
               `p(99)<${p99}`,
             ],
-            http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }],
+            http_req_failed: [{ threshold: `rate<${errorRatePct / 100}`, abortOnFail: true, delayAbortEval }],
             checks: ['rate>0.9'],
           }
         };

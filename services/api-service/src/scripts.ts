@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 
 import { TestType, TestScript, BackendTestOptions, FlowStep } from '@alt/shared';
 import { buildK6Options, replaceK6Options } from './options';
+import { getCapacityAbortConfig } from './settings';
 import { log } from './logger';
 
 interface TestScriptRow {
@@ -82,7 +83,10 @@ export const findExistingScript = async (
   let script: string = rows[0].script;
 
   if (testType === 'backend' && options) {
-    const newOptions = buildK6Options(options);
+    // Only fetch the abort-threshold config for the one profile that uses it —
+    // skips an extra query on the common (non-capacity) case.
+    const abortConfig = options.profile === 'capacity' ? await getCapacityAbortConfig(dbPool) : undefined;
+    const newOptions = buildK6Options(options, abortConfig);
     script = replaceK6Options(script, newOptions);
     log.info({ profile: options.profile ?? 'load', vus: options.vus, duration: options.duration }, 'Injected new options into cached script');
   }

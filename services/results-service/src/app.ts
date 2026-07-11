@@ -98,6 +98,10 @@ export const buildApp = async (
     // GET is read by worker-backend (no session) at test-dequeue time to pick the
     // live-metrics window; PUT still requires normal session/admin auth.
     if (url === '/system/live-metric-window' && request.method === 'GET') return;
+    // GET is read by ai-service (script generation) and api-service (cache-hit
+    // re-injection) — both server-to-server, no session. Editing stays admin-gated
+    // via PUT /system/operational-settings.
+    if (url === '/system/capacity-abort' && request.method === 'GET') return;
 
     if (isInternalCallback(url, request.method)) {
       if (internalApiKey && request.headers['x-internal-key'] !== internalApiKey) {

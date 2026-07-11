@@ -3,7 +3,7 @@ import { useLoaderData } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import { getMe, getLiveMetricWindow, setLiveMetricWindow, LiveMetricWindowSec, getAiProvider, setAiProvider, AiProviderConfig, AiProviderName, getOperationalSettings, setOperationalSettings, OperationalSettings } from '@/lib/api';
 
-const OPERATIONAL_SETTING_FIELDS: { key: keyof OperationalSettings; label: string; hint: string; min: number }[] = [
+const OPERATIONAL_SETTING_FIELDS: { key: keyof OperationalSettings; label: string; hint: string; min: number; max?: number }[] = [
   { key: 'staleRunningMinutes', label: 'Stale "running" timeout', hint: 'Minutes before a stuck running test is marked failed', min: 1 },
   { key: 'stalePendingMinutes', label: 'Stale "pending" timeout', hint: 'Minutes before a stuck pending test is marked failed', min: 1 },
   { key: 'liveMetricsRetentionDays', label: 'Live-metrics retention', hint: 'Days of streaming metric points kept per test', min: 1 },
@@ -11,6 +11,9 @@ const OPERATIONAL_SETTING_FIELDS: { key: keyof OperationalSettings; label: strin
   { key: 'auditLogRetentionDays', label: 'Audit-log retention', hint: 'Days before old audit-log entries are auto-purged — 0 disables auto-purge', min: 0 },
   { key: 'rateLimitMax', label: 'Global rate limit', hint: 'Requests/min/IP across the whole API', min: 1 },
   { key: 'aiRateLimitMax', label: 'AI rate limit', hint: 'Requests/min for /ai/* and suggest-*/diagnose endpoints', min: 1 },
+  { key: 'capacityAbortP95Ms', label: 'Capacity-test abort p95 (ms)', hint: 'p95 latency that aborts a capacity/stress test early — see the "stopped early" banner on results', min: 1 },
+  { key: 'capacityAbortErrorRatePct', label: 'Capacity-test abort error rate (%)', hint: 'http_req_failed rate that aborts a capacity/stress test early', min: 0, max: 100 },
+  { key: 'capacityAbortDelaySec', label: 'Capacity-test abort grace period (s)', hint: 'Time each new ramp level gets before a breach can trigger the abort — 0 aborts immediately', min: 0 },
 ];
 
 const WINDOW_OPTIONS: { id: LiveMetricWindowSec; label: string }[] = [
@@ -286,6 +289,7 @@ export default function SettingsPage() {
                       <input
                         type="number"
                         min={field.min}
+                        {...(field.max != null ? { max: field.max } : {})}
                         value={operationalDraft[field.key]}
                         onChange={e => setOperationalDraft(d => d && { ...d, [field.key]: Number(e.target.value) })}
                         className="w-full border border-border rounded-control px-2.5 py-1.5 text-[12.5px] font-mono bg-surface focus:outline-none focus:border-ink-bd"

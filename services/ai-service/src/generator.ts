@@ -67,6 +67,40 @@ export const checkAndIncrementGeminiUsage = async (teamId?: string | null): Prom
   return null;
 };
 
+export interface CapacityAbortConfig {
+  p95Ms: number;
+  errorRatePct: number;
+  delaySec: number;
+}
+
+// Matches api-service's DEFAULT_CAPACITY_ABORT_CONFIG (options.ts) — the two
+// independent script-generation paths (this file's prompt-embedded literal
+// values, and api-service's cache-hit re-injection) can't drift apart as
+// long as both fall back to the same numbers when results-service is
+// unreachable or the setting has never been configured.
+const DEFAULT_CAPACITY_ABORT_CONFIG: CapacityAbortConfig = { p95Ms: 2000, errorRatePct: 5, delaySec: 10 };
+const CAPACITY_ABORT_CACHE_MS = 30000;
+let capacityAbortCache: { config: CapacityAbortConfig; cachedAt: number } | null = null;
+
+/** Fetches the capacity/stress profile's abortOnFail thresholds from results-service, cached for 30s. */
+const getCapacityAbortConfig = async (): Promise<CapacityAbortConfig> => {
+  if (capacityAbortCache && Date.now() - capacityAbortCache.cachedAt < CAPACITY_ABORT_CACHE_MS) return capacityAbortCache.config;
+  try {
+    const res = await fetch(`${RESULTS_URL}/system/capacity-abort`, {
+      headers: INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {},
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const config = await res.json() as CapacityAbortConfig;
+      capacityAbortCache = { config, cachedAt: Date.now() };
+      return config;
+    }
+  } catch {
+    // results-service unreachable — keep using cached/default config
+  }
+  return capacityAbortCache?.config ?? DEFAULT_CAPACITY_ABORT_CONFIG;
+};
+
 // k6's own options.thresholds is a separate mechanism from the app's post-test
 // SLO analysis (analyzeResult() in @alt/shared, which already honors test.thresholds).
 // Without this, the generated script always hardcoded p(95)<1000 / rate<0.01
@@ -80,7 +114,10 @@ const k6Thresholds = (thresholds?: SLOThresholds): { p95: number; p90: number; p
   return { p95, p90, p99, errorRateFrac: ((thresholds?.errorRate ?? 1) / 100).toString() };
 };
 
-const profileInstructions = (opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string }): string => {
+const profileInstructions = (
+  opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string },
+  abortConfig: CapacityAbortConfig = DEFAULT_CAPACITY_ABORT_CONFIG,
+): string => {
   const { vus, duration, profile = 'load', peakVus } = opts;
   const peak = peakVus ?? vus * 10;
 
@@ -96,18 +133,23 @@ Generate k6 stages that simulate a sudden traffic spike:
 - Cool-down: ramp to 0 over 30s
 Set a threshold that allows higher error rate during the spike (up to 10%).`;
 
-    case 'capacity':
+    case 'capacity': {
+      const { p95Ms, errorRatePct, delaySec } = abortConfig;
+      const { p90, p99 } = deriveMultiPercentileThresholds(p95Ms);
+      const delayAbortEval = `${delaySec}s`;
+      const errorRateFrac = errorRatePct / 100;
       return `Load profile: CAPACITY / STRESS TEST
 Generate k6 stages that gradually increase load to find the breaking point:
 - Ramp up from 0 to ${peak} VUs over ${duration}
 - Do NOT hold — just keep ramping linearly
 - The goal is to find where the system breaks, not to run the full ramp regardless — once p(95)/error-rate thresholds are breached there's nothing more to learn, so use k6's abortOnFail to stop the test early instead of the plain string threshold form used elsewhere. p90/p99 stay plain (observational) — only p95 aborts, so a single tail outlier can't trigger a premature abort on its own. Set options.thresholds to exactly:
   thresholds: {
-    http_req_duration: ['p(90)<1600', { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }, 'p(99)<4000'],
-    http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }],
+    http_req_duration: ['p(90)<${p90}', { threshold: 'p(95)<${p95Ms}', abortOnFail: true, delayAbortEval: '${delayAbortEval}' }, 'p(99)<${p99}'],
+    http_req_failed: [{ threshold: 'rate<${errorRateFrac}', abortOnFail: true, delayAbortEval: '${delayAbortEval}' }],
     checks: ['rate>0.9'],
   }
-  (delayAbortEval: '10s' gives each new ramp level a moment to produce enough samples before a breach can trigger an abort, so one slow request right after a ramp-up doesn't abort prematurely.)`;
+  (delayAbortEval: '${delayAbortEval}' gives each new ramp level a moment to produce enough samples before a breach can trigger an abort, so one slow request right after a ramp-up doesn't abort prematurely.)`;
+    }
 
     case 'soak':
       return `Load profile: SOAK TEST
@@ -151,9 +193,9 @@ Do NOT include a top-level options.stages or options.vus — scenarios replaces 
   }
 };
 
-const BACKEND_PROMPT = (test: TestRequest): string => {
+const BACKEND_PROMPT = (test: TestRequest, abortConfig: CapacityAbortConfig): string => {
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; discardResponseBodies?: boolean }; headers?: Record<string, string> };
-  const fallback = profileInstructions(opts);
+  const fallback = profileInstructions(opts, abortConfig);
   const isCapacity = opts.profile === 'capacity';
   const { p95, p90, p99, errorRateFrac } = k6Thresholds(test.thresholds);
   const http = opts.httpOptions;
@@ -295,10 +337,10 @@ const renderExtractLine = (varName: string, rule: ExtractRule): string => {
   }
 };
 
-const FLOW_PROMPT = (test: TestRequest): string => {
+const FLOW_PROMPT = (test: TestRequest, abortConfig: CapacityAbortConfig): string => {
   const steps = test.steps!;
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number };
-  const fallback = profileInstructions(opts);
+  const fallback = profileInstructions(opts, abortConfig);
   const isCapacity = opts.profile === 'capacity';
   const { p95, p90, p99, errorRateFrac } = k6Thresholds(test.thresholds);
 
@@ -560,10 +602,15 @@ Reply with exactly one word: REUSE or REGENERATE`;
 
 export const generateScript = async (test: TestRequest): Promise<string> => {
   const setting = await getProviderSetting(test.projectId);
+  // Only fetch the abort-threshold config for the one profile that uses it —
+  // skips an extra results-service round-trip on every other generation.
+  const isCapacityProfile = (test.type === 'backend' || test.type === 'flow')
+    && (test.options as { profile?: string } | undefined)?.profile === 'capacity';
+  const abortConfig = isCapacityProfile ? await getCapacityAbortConfig() : DEFAULT_CAPACITY_ABORT_CONFIG;
   const prompt = test.type === 'flow'
-    ? FLOW_PROMPT(test)
+    ? FLOW_PROMPT(test, abortConfig)
     : test.type === 'backend'
-      ? BACKEND_PROMPT(test)
+      ? BACKEND_PROMPT(test, abortConfig)
       : CLIENT_PROMPT(test);
 
   const maxRetries = 3;

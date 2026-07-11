@@ -59,6 +59,9 @@ export interface OperationalSettings {
   auditLogRetentionDays: number;
   rateLimitMax: number;
   aiRateLimitMax: number;
+  capacityAbortP95Ms: number;
+  capacityAbortErrorRatePct: number;
+  capacityAbortDelaySec: number;
 }
 
 export const getOperationalSettings = (): Promise<OperationalSettings> =>

@@ -133,6 +133,35 @@ describe('findExistingScript', () => {
     expect(plateau).toBeDefined();
   });
 
+  it('injects capacity-profile abortOnFail thresholds, falling open to the default when app_settings has no override (or doesn\'t exist)', async () => {
+    const scriptWithOptions = [
+      "import http from 'k6/http';",
+      'export const options = { vus: 5, duration: \'30s\' };',
+      "export default function() { http.get('http://example.com'); }",
+    ].join('\n');
+    await insertScript(pool, 'http://capacity-test.com', 'backend', scriptWithOptions);
+
+    const result = await findExistingScript(
+      'http://capacity-test.com',
+      'backend',
+      { vus: 10, duration: '5m', profile: 'capacity' },
+      pool,
+    );
+
+    expect(result).not.toBeNull();
+    const parsed = JSON.parse(
+      result!.script.match(/export const options = (\{[\s\S]*?\});/)![1]
+    );
+    // This test's local schema (createSchema above) has no app_settings table at
+    // all — getCapacityAbortConfig must fail open to the hardcoded default
+    // rather than throwing and breaking cache-hit re-injection entirely.
+    expect(parsed.thresholds.http_req_duration).toEqual([
+      'p(90)<1600',
+      { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' },
+      'p(99)<4000',
+    ]);
+  });
+
   it('returns script unchanged for client-side type even when options provided', async () => {
     const clientScript = 'const page = await browser.newPage();';
     await insertScript(pool, 'http://client-test.com', 'client-side', clientScript);

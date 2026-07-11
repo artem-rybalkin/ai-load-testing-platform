@@ -17,6 +17,9 @@ import {
   setLiveMetricWindowSetting,
   getOperationalSettings,
   setOperationalSetting,
+  getCapacityAbortP95Ms,
+  getCapacityAbortErrorRatePct,
+  getCapacityAbortDelaySec,
   OperationalSettingKey,
 } from '../settings';
 import { isConsumerConnected } from '../consumer';
@@ -138,6 +141,9 @@ export function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool
     auditLogRetentionDays: n => Number.isInteger(n) && n >= 0,
     rateLimitMax: n => Number.isInteger(n) && n > 0,
     aiRateLimitMax: n => Number.isInteger(n) && n > 0,
+    capacityAbortP95Ms: n => Number.isInteger(n) && n > 0,
+    capacityAbortErrorRatePct: n => Number.isInteger(n) && n >= 0 && n <= 100,
+    capacityAbortDelaySec: n => Number.isInteger(n) && n >= 0,
   };
   app.put<{ Body: Partial<Record<OperationalSettingKey, number>> }>(
     '/system/operational-settings',
@@ -156,6 +162,18 @@ export function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool
       return getOperationalSettings(pool);
     },
   );
+
+  // ── GET /system/capacity-abort ────────────────────────────────────────────
+  // No session — read by ai-service (script generation) and api-service
+  // (cache-hit re-injection) at test-creation time, same as GET
+  // /system/ai-provider and GET /system/live-metric-window above. Editing
+  // these values is still admin-gated, via PUT /system/operational-settings.
+  app.get('/system/capacity-abort', async () => {
+    const [p95Ms, errorRatePct, delaySec] = await Promise.all([
+      getCapacityAbortP95Ms(pool), getCapacityAbortErrorRatePct(pool), getCapacityAbortDelaySec(pool),
+    ]);
+    return { p95Ms, errorRatePct, delaySec };
+  });
 
   // ── GET /system/health ────────────────────────────────────────────────────
   app.get('/system/health', async (_request, reply) => {

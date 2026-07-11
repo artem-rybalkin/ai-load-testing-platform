@@ -8,6 +8,7 @@ import {
   getStaleRunningMinutes, getStalePendingMinutes,
   getLiveMetricsRetentionDays, getTestResultsRetentionDays, getAuditLogRetentionDays,
   getRateLimitMax, getAiRateLimitMax,
+  getCapacityAbortP95Ms, getCapacityAbortErrorRatePct, getCapacityAbortDelaySec,
   setOperationalSetting,
 } from '../settings';
 
@@ -69,6 +70,9 @@ describe('operational setting getters', () => {
     expect(await getAuditLogRetentionDays(pool)).toBe(180);
     expect(await getRateLimitMax(pool)).toBe(600);
     expect(await getAiRateLimitMax(pool)).toBe(20);
+    expect(await getCapacityAbortP95Ms(pool)).toBe(2000);
+    expect(await getCapacityAbortErrorRatePct(pool)).toBe(5);
+    expect(await getCapacityAbortDelaySec(pool)).toBe(10);
   });
 
   it('a DB override takes priority over the default', async () => {
@@ -130,6 +134,7 @@ describe('GET /system/operational-settings', () => {
     expect(res.json()).toEqual({
       staleRunningMinutes: 15, stalePendingMinutes: 30, liveMetricsRetentionDays: 30,
       testResultsRetentionDays: 0, auditLogRetentionDays: 180, rateLimitMax: 600, aiRateLimitMax: 20,
+      capacityAbortP95Ms: 2000, capacityAbortErrorRatePct: 5, capacityAbortDelaySec: 10,
     });
   });
 });
@@ -216,5 +221,73 @@ describe('PUT /system/operational-settings', () => {
   it('returns 401 with no session', async () => {
     const res = await app.inject({ method: 'PUT', url: '/system/operational-settings', payload: { rateLimitMax: 100 } });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('admin can update the capacity-abort thresholds', async () => {
+    const admin = await registerUser('opset-admin9@example.com', 'opset-team9');
+    const adminCookie = sessionCookie(admin);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/system/operational-settings',
+      payload: { capacityAbortP95Ms: 3000, capacityAbortErrorRatePct: 8, capacityAbortDelaySec: 20 },
+      headers: { cookie: adminCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ capacityAbortP95Ms: 3000, capacityAbortErrorRatePct: 8, capacityAbortDelaySec: 20 });
+  });
+
+  it('accepts 0 for capacityAbortErrorRatePct and capacityAbortDelaySec', async () => {
+    const admin = await registerUser('opset-admin10@example.com', 'opset-team10');
+    const res = await app.inject({
+      method: 'PUT', url: '/system/operational-settings',
+      payload: { capacityAbortErrorRatePct: 0, capacityAbortDelaySec: 0 },
+      headers: { cookie: sessionCookie(admin) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ capacityAbortErrorRatePct: 0, capacityAbortDelaySec: 0 });
+  });
+
+  it('returns 400 for a capacityAbortErrorRatePct above 100', async () => {
+    const admin = await registerUser('opset-admin11@example.com', 'opset-team11');
+    const res = await app.inject({
+      method: 'PUT', url: '/system/operational-settings',
+      payload: { capacityAbortErrorRatePct: 150 },
+      headers: { cookie: sessionCookie(admin) },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 for a non-positive capacityAbortP95Ms', async () => {
+    const admin = await registerUser('opset-admin12@example.com', 'opset-team12');
+    const res = await app.inject({
+      method: 'PUT', url: '/system/operational-settings',
+      payload: { capacityAbortP95Ms: 0 },
+      headers: { cookie: sessionCookie(admin) },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+// ─── GET /system/capacity-abort ─────────────────────────────────────────────────
+// No session required — ai-service (script generation) and api-service
+// (cache-hit re-injection) both read this server-to-server.
+
+describe('GET /system/capacity-abort', () => {
+  it('returns the hardcoded defaults with no session and no prior setting', async () => {
+    const res = await app.inject({ method: 'GET', url: '/system/capacity-abort' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ p95Ms: 2000, errorRatePct: 5, delaySec: 10 });
+  });
+
+  it('reflects a previously saved value, still without a session', async () => {
+    const admin = await registerUser('opset-admin13@example.com', 'opset-team13');
+    await app.inject({
+      method: 'PUT', url: '/system/operational-settings',
+      payload: { capacityAbortP95Ms: 2500 },
+      headers: { cookie: sessionCookie(admin) },
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/system/capacity-abort' });
+    expect(res.json()).toEqual({ p95Ms: 2500, errorRatePct: 5, delaySec: 10 });
   });
 });

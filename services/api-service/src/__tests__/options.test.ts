@@ -151,6 +151,21 @@ describe('buildK6Options', () => {
     ]);
   });
 
+  it('capacity profile uses an admin-configured abort threshold when passed, instead of the hardcoded default', () => {
+    const result = buildK6Options({ vus: 10, duration: '5m', profile: 'capacity' }, { p95Ms: 3000, errorRatePct: 8, delaySec: 20 });
+    const parsed = JSON.parse(result);
+
+    // p90/p99 re-derived from the configured p95 (3000 * 0.8 = 2400, 3000 * 2 = 6000)
+    expect(parsed.thresholds.http_req_duration).toEqual([
+      'p(90)<2400',
+      { threshold: 'p(95)<3000', abortOnFail: true, delayAbortEval: '20s' },
+      'p(99)<6000',
+    ]);
+    expect(parsed.thresholds.http_req_failed).toEqual([
+      { threshold: 'rate<0.08', abortOnFail: true, delayAbortEval: '20s' },
+    ]);
+  });
+
   it('non-capacity profiles keep plain-string thresholds — no abortOnFail', () => {
     const profiles = ['load', 'spike', 'soak'] as const;
 
