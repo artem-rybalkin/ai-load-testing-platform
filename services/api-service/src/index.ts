@@ -318,6 +318,17 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         return { success: true, test: safeTestResponse(test), scriptReused: false };
       }
 
+      // client-side (Puppeteer) tests never execute generatedScript — worker-client
+      // always runs its own native Puppeteer flow regardless of what's generated/cached,
+      // and never sets scriptId on its result either. Skip the AI generation/description-
+      // comparison path entirely rather than burning Gemini quota and request latency on
+      // output nothing ever consumes.
+      if (type === 'client-side') {
+        await tryPublish(true);
+        void warnIfNoWorker();
+        return { success: true, test: safeTestResponse(test), scriptReused: false };
+      }
+
       const existingScript = await findExistingScript(effectiveTargetUrl, type, backendOpts, undefined, flowCacheKey, effectiveProjectId);
 
       if (!existingScript) {

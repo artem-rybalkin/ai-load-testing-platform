@@ -282,6 +282,49 @@ describe('POST /tests — customScript bypass', () => {
   });
 });
 
+// ─── POST /tests — client-side tests skip AI/script-cache entirely ────────────
+// worker-client never reads generatedScript/scriptId — it always runs its own
+// native Puppeteer flow — so routing client-side tests through Gemini generation
+// or description comparison burns quota/latency on output nothing consumes.
+
+describe('POST /tests — client-side AI bypass', () => {
+  const clientBody = {
+    type: 'client-side',
+    targetUrl: 'http://example.com',
+    description: 'browser test',
+    options: { sessions: 1, duration: '30s', collectWebVitals: true },
+  };
+
+  it('routes directly to the worker queue without ever consulting the script cache', async () => {
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: clientBody });
+    expect(res.statusCode).toBe(200);
+    const json = res.json();
+    expect(json.success).toBe(true);
+    expect(json.scriptReused).toBe(false);
+    expect(mockFindExistingScript).not.toHaveBeenCalled();
+    expect(mockIncrementUsedCount).not.toHaveBeenCalled();
+    // skipAI = true → direct to worker queue (client-tests), not ai-requests
+    expect(mockPublishTest).toHaveBeenCalledWith(expect.objectContaining({ type: 'client-side' }), true);
+  });
+
+  it('still skips AI even when a description is provided and a cached script exists', async () => {
+    mockFindExistingScript.mockResolvedValueOnce({
+      id: 'script-id-3',
+      script: 'export default function() {}',
+      description: 'some stored description',
+      usedCount: 2,
+      targetUrl: 'http://example.com',
+      testType: 'client-side',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: clientBody });
+    expect(res.statusCode).toBe(200);
+    expect(mockFindExistingScript).not.toHaveBeenCalled();
+    expect(mockPublishTest).toHaveBeenCalledWith(expect.objectContaining({ type: 'client-side' }), true);
+  });
+});
+
 // ─── POST /tests/:testId/cancel ───────────────────────────────────────────────
 
 describe('POST /tests/:testId/cancel', () => {

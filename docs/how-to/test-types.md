@@ -149,6 +149,9 @@ Browser tests use headless Chromium (Puppeteer) to measure **user-perceived perf
 | `duration` | Session duration |
 | `collectWebVitals` | Collect Core Web Vitals (default: `true`) |
 | `headers` | Custom headers (e.g. API keys, auth tokens) set via "Custom Headers" in Advanced settings; applied via `page.setExtraHTTPHeaders(...)` before navigation |
+| `device` | Optional mobile device emulation preset (e.g. `"iPhone 15"`, `"Pixel 7"`) selectable in Advanced settings — sets viewport, user agent, and touch emulation via Puppeteer's built-in `KnownDevices` before navigation. Omit for the default desktop viewport. An unrecognized preset name is logged and ignored rather than failing the test. |
+
+Browser tests never route through Gemini script generation or the script cache — `worker-client` always runs its own native Puppeteer flow regardless of `description`, so `POST /tests` skips AI entirely for `type: "client-side"` (no quota consumed, no request-latency cost from the generation round-trip).
 
 ### Metrics collected
 

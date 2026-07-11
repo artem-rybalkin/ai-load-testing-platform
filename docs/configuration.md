@@ -83,6 +83,8 @@ Global per-IP request limits, enforced via `@fastify/rate-limit`. See [API refer
 | `AUTH_RATE_LIMIT_MAX` | results-service | `10`/min | Per-IP limit on `POST /auth/login` and `POST /auth/register` |
 | `AI_RATE_LIMIT_MAX` | results-service | `20`/min | Per-IP limit on `/ai/*`, `suggest-*`, and `/results/:testId/diagnose` |
 
+`RATE_LIMIT_MAX` and `AI_RATE_LIMIT_MAX` are the startup fallback defaults only — an admin can override both at runtime from the platform Settings page ("Retention & rate limits" panel) without a redeploy; the override is read from the DB with a 30s in-process cache. `AUTH_RATE_LIMIT_MAX` is env-only by design (security constant, not meant to be admin-tunable).
+
 ---
 
 ## Worker tuning
@@ -110,6 +112,22 @@ Running in results-service — cleans up tests that got stuck.
 | `AUDIT_LOG_RETENTION_DAYS` | `180` | `audit_log` rows older than this are purged; set to `0` to disable |
 
 Expired/revoked `sessions` rows are also purged on every cleanup cycle, unconditionally (no env var — an expired or revoked session has no future purpose).
+
+All 5 of these are also startup fallback defaults only — an admin can override each from the platform Settings page ("Retention & rate limits" panel) without a redeploy or restart; results-service's cleanup sweep re-reads the current DB value every tick, so a change takes effect on the next sweep (within a minute).
+
+---
+
+## Capacity/stress test abort thresholds
+
+A `capacity` or `stress` profile test aborts early (via k6's `abortOnFail`) once its own thresholds prove the target already broke, instead of burning its full configured duration for no reason — see the results page's "Test stopped early" banner when this fires.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `capacityAbortP95Ms` | `2000` | p95 latency (ms) that triggers the abort |
+| `capacityAbortErrorRatePct` | `5` | `http_req_failed` rate (%) that triggers the abort |
+| `capacityAbortDelaySec` | `10` | Grace period each new ramp level gets before a breach can trigger the abort |
+
+These have no env var — they're `app_settings`-backed only, editable from the same Settings page panel as the rate limits above. Both the api-service (script-cache re-injection path) and ai-service (Gemini prompt generation path) read the current value, so the two independent script-generation paths can't drift apart.
 
 ---
 

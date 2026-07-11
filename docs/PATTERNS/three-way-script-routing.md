@@ -13,6 +13,11 @@ POST /tests
   │
   ├─ customScript provided? → bypass cache, send direct to worker queue
   │
+  ├─ type === 'client-side'? → bypass cache, send direct to worker queue
+  │    (worker-client always runs its own native Puppeteer flow — it never
+  │     reads generatedScript/scriptId, so cache/generation would be wasted
+  │     Gemini quota on output nothing consumes)
+  │
   ├─ findExistingScript(targetUrl, type)?
   │    │
   │    ├─ NO (cache miss)
@@ -37,4 +42,5 @@ POST /tests
 - incrementUsedCount called in worker-backend/saveScript on confirmed REUSE (path 3 REUSE)
 - Flow tests always use SHA-256 hash of steps JSON as target_url ('flow:<hex16>')
 - customScript bypasses cache entirely and is not stored in DB
+- client-side (Puppeteer) tests bypass cache entirely too (added 2026-07-12), regardless of description or cache state
 - compareDescriptions() defaults to REGENERATE on any AI error (safe fallback)
