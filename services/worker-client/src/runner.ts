@@ -167,8 +167,12 @@ export const runClientTest = async (
         // Opt-in mobile emulation (viewport + UA + touch) via Puppeteer's built-in
         // device presets. Unrecognized names are logged and ignored rather than
         // failing the session — matches this codebase's non-fatal-fallback convention.
+        // KnownDevices is typed as Readonly<Record<'<a fixed literal union of ~130
+        // device names>', Device>> — options.device is a plain string (validated
+        // only at runtime, not by TS), so the lookup needs an explicit cast to a
+        // generic string-keyed record; the `if (device)` below is the real check.
         if (options.device) {
-          const device = KnownDevices[options.device];
+          const device = (KnownDevices as Record<string, typeof KnownDevices[keyof typeof KnownDevices] | undefined>)[options.device];
           if (device) {
             await page.emulate(device);
           } else {
