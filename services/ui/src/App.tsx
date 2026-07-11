@@ -99,7 +99,12 @@ const router = createBrowserRouter([
             loader: (args) => import('@/app/results/compare/page').then(m => m.loader(args)),
             errorElement: <RouteErrorBoundary />,
           },
-          { path: '/results/:testId', element: <ResultDetailPage />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: '/results/:testId',
+            element: <ResultDetailPage />,
+            loader: (args) => import('@/app/results/testId/page').then(m => m.loader(args)),
+            errorElement: <RouteErrorBoundary />,
+          },
           {
             path: '/presets',
             element: <PresetsPage />,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useLoaderData, Link, type LoaderFunctionArgs } from 'react-router-dom';
 import { getResult, getLiveMetrics, getTrend, setBaseline, clearBaseline, cancelTest, getLogSources, diagnoseErrors, getTrendNarrative, getExecutionLog, interpolateLogSourceUrl, LiveMetricPoint, TestResult, TrendPoint, LogSource, ErrorDiagnosis, BackendMetrics, ClientMetrics } from '@/lib/api';
 import { useResultsSocket } from '@/lib/useResultsSocket';
 import Skeleton from '@/app/components/Skeleton';
@@ -231,18 +231,45 @@ function ExecutionLogPanel({
   );
 }
 
+interface ResultLoaderData {
+  result: TestResult | null;
+  logSources: LogSource[];
+  livePoints: LiveMetricPoint[];
+  trend: TrendPoint[];
+}
+
+// getResult()/getLogSources()/getLiveMetrics() run in parallel via Promise.allSettled
+// (partial-failure-tolerant, mirrors the mount-time useEffect this replaced); getTrend()
+// depends on the fetched result (needs its target_url) so it can't join that first batch —
+// only fetched when the test is already completed, same condition the old effect used.
+export async function loader({ params }: LoaderFunctionArgs): Promise<ResultLoaderData> {
+  const testId = params.testId as string;
+  const [resultSettled, logSourcesSettled, liveMetricsSettled] = await Promise.allSettled([
+    getResult(testId),
+    getLogSources(),
+    getLiveMetrics(testId),
+  ]);
+  const result = resultSettled.status === 'fulfilled' ? (resultSettled.value.result ?? null) : null;
+  const logSources = logSourcesSettled.status === 'fulfilled' ? (logSourcesSettled.value.logSources ?? []) : [];
+  const livePoints = liveMetricsSettled.status === 'fulfilled' ? (liveMetricsSettled.value.points ?? []) : [];
+  const trend = result?.status === 'completed'
+    ? await getTrend(result.target_url).then(d => d.trend ?? []).catch(() => [])
+    : [];
+  return { result, logSources, livePoints, trend };
+}
+
 export default function ResultPage() {
   const { testId } = useParams() as { testId: string };
-  const [result, setResult] = useState<TestResult | null>(null);
-  const resultRef = useRef<TestResult | null>(null);
-  const [livePoints, setLivePoints] = useState<LiveMetricPoint[]>([]);
-  const [loading, setLoading] = useState(true);
+  const loaderData = useLoaderData() as ResultLoaderData;
+  const [result, setResult] = useState<TestResult | null>(loaderData.result);
+  const resultRef = useRef<TestResult | null>(loaderData.result);
+  const [livePoints, setLivePoints] = useState<LiveMetricPoint[]>(loaderData.livePoints);
   const [baselineBusy, setBaselineBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [remainingSecs, setRemainingSecs] = useState<number | null>(null);
   const [elapsedSecs, setElapsedSecs] = useState<number | null>(null);
-  const [trend, setTrend] = useState<TrendPoint[]>([]);
-  const [logSources, setLogSources] = useState<LogSource[]>([]);
+  const [trend, setTrend] = useState<TrendPoint[]>(loaderData.trend);
+  const [logSources, setLogSources] = useState<LogSource[]>(loaderData.logSources);
   const [diagnoses, setDiagnoses] = useState<ErrorDiagnosis[] | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagnoseError, setDiagnoseError] = useState<string | null>(null);
@@ -317,26 +344,17 @@ export default function ResultPage() {
     return () => clearInterval(id);
   }, [result?.status, testId]);
 
-  // Initial data load
+  // Re-syncs local state whenever the loader re-runs — a navigation to a
+  // different :testId (same route, same component instance — no remount) or
+  // a revalidator.revalidate() call. Mirrors the pattern used by the other
+  // loader-backed pages (e.g. app/page.tsx home).
   useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await getResult(testId);
-        if (data.result) {
-          setResult(data.result);
-          resultRef.current = data.result;
-          if (data.result.status === 'completed') {
-            getTrend(data.result.target_url).then(d => setTrend(d.trend ?? [])).catch(() => {});
-          }
-        }
-      } catch { /* ignore */ } finally { setLoading(false); }
-    };
-    load();
-    getLogSources().then(d => setLogSources(d.logSources ?? [])).catch(() => {});
-
-    // Load any existing live points (for in-progress or completed tests)
-    getLiveMetrics(testId).then(d => setLivePoints(d.points ?? [])).catch(() => {});
-  }, [testId]);
+    setResult(loaderData.result);
+    resultRef.current = loaderData.result;
+    setLivePoints(loaderData.livePoints);
+    setLogSources(loaderData.logSources);
+    setTrend(loaderData.trend);
+  }, [loaderData]);
 
   // WebSocket push — replaces the 2s polling loops for status and live metrics
   useResultsSocket((event) => {
@@ -392,10 +410,6 @@ export default function ResultPage() {
       });
     }
   });
-
-  if (loading) return (
-    <div className="flex items-center justify-center h-40 text-tx-4 text-[13px]">Loading…</div>
-  );
 
   if (!result) return (
     <div className="flex items-center justify-center h-48">

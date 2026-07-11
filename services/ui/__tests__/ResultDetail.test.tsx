@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
-import ResultPage from '../app/results/testId/page';
+import { createRoutesStub } from 'react-router';
+import ResultPage, { loader } from '../app/results/testId/page';
 import type { TestResult } from '@/lib/api';
 
-const stableParams = vi.hoisted(() => ({ testId: 'test-123' }));
-
-vi.mock('react-router-dom', () => ({
-  useParams: () => stableParams,
-  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode; [key: string]: unknown }) => (
-    <a href={String(to)} {...(props as React.HTMLAttributes<HTMLAnchorElement>)}>{children}</a>
-  ),
-}));
+// ResultPage now fetches its initial data via a route loader instead of a
+// mount-time useEffect — render it through a routes stub (real react-router,
+// not a mocked one) so useLoaderData()/useParams() have the router context
+// they need, and the :testId param resolves the same way it does in the app.
+function renderResultPage(testId = 'test-123') {
+  const Stub = createRoutesStub([{ path: '/results/:testId', Component: ResultPage, loader, HydrateFallback: () => null }]);
+  return render(<Stub initialEntries={[`/results/${testId}`]} />);
+}
 
 vi.mock('@/lib/useResultsSocket', () => ({ useResultsSocket: vi.fn() }));
 
@@ -74,7 +75,7 @@ afterEach(() => cleanup());
 describe('Result detail — stale status_message visibility', () => {
   it('shows the in-flight status_message while the test is still pending', async () => {
     mockGetResult.mockResolvedValue({ result: makeResult({ status: 'pending' }) });
-    render(<ResultPage />);
+    renderResultPage();
     await waitFor(() => expect(screen.getByText('Script ready — starting test…')).toBeInTheDocument());
   });
 
@@ -82,7 +83,7 @@ describe('Result detail — stale status_message visibility', () => {
     mockGetResult.mockResolvedValue({
       result: makeResult({ status: 'failed', status_message: 'Script ready — starting test…' }),
     });
-    render(<ResultPage />);
+    renderResultPage();
     await waitFor(() => expect(screen.getByText(/test failed — no metrics collected/i)).toBeInTheDocument());
     expect(screen.queryByText('Script ready — starting test…')).not.toBeInTheDocument();
   });
@@ -91,7 +92,7 @@ describe('Result detail — stale status_message visibility', () => {
     mockGetResult.mockResolvedValue({
       result: makeResult({ status: 'cancelled', status_message: 'Script ready — starting test…' }),
     });
-    render(<ResultPage />);
+    renderResultPage();
     await waitFor(() => expect(screen.getByText(/test cancelled — no metrics collected/i)).toBeInTheDocument());
     expect(screen.queryByText('Script ready — starting test…')).not.toBeInTheDocument();
   });
@@ -125,7 +126,7 @@ describe('Result detail — stopped-early banner (capacity/stress abortOnFail)',
         } as never,
       }),
     });
-    render(<ResultPage />);
+    renderResultPage();
 
     expect(await screen.findByText(/test stopped early/i)).toBeInTheDocument();
     expect(screen.getByText(/http_req_duration, http_req_failed/)).toBeInTheDocument();
@@ -134,7 +135,7 @@ describe('Result detail — stopped-early banner (capacity/stress abortOnFail)',
 
   it('does not show the banner for a normal completed run', async () => {
     mockGetResult.mockResolvedValue({ result: makeCompletedResult() });
-    render(<ResultPage />);
+    renderResultPage();
 
     await waitFor(() => expect(screen.getByText('93')).toBeInTheDocument()); // requestsTotal metric cell, confirms render completed
     expect(screen.queryByText(/test stopped early/i)).not.toBeInTheDocument();
@@ -150,7 +151,7 @@ describe('Result detail — stopped-early banner (capacity/stress abortOnFail)',
         } as never,
       }),
     });
-    render(<ResultPage />);
+    renderResultPage();
 
     expect(await screen.findByText(/test stopped early/i)).toBeInTheDocument();
     expect(screen.queryByText(/target VUs/)).not.toBeInTheDocument();
@@ -162,7 +163,7 @@ describe('Result detail — self-healing poll for in-flight tests', () => {
     const setIntervalSpy = vi.spyOn(global, 'setInterval');
     mockGetResult.mockResolvedValue({ result: makeResult({ status: 'pending' }) });
 
-    render(<ResultPage />);
+    renderResultPage();
     await waitFor(() => expect(screen.getByText(/waiting in queue/i)).toBeInTheDocument());
 
     const pollRegistration = setIntervalSpy.mock.calls.find(([, ms]) => ms === 20_000);
@@ -189,7 +190,7 @@ describe('Result detail — self-healing poll for in-flight tests', () => {
       result: makeResult({ status: 'failed', status_message: null }),
     });
 
-    render(<ResultPage />);
+    renderResultPage();
     await waitFor(() => expect(screen.getByText(/test failed — no metrics collected/i)).toBeInTheDocument());
 
     expect(setIntervalSpy.mock.calls.find(([, ms]) => ms === 20_000)).toBeUndefined();
