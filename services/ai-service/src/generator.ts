@@ -316,6 +316,10 @@ Error handling — MANDATORY for ALL extractions:
 - Use a defensive fallback so the VU NEVER aborts mid-flow: const value = (res.status === 200 && res.json().field) || '';
 - Assign the (possibly empty) value to vars and continue — ALL remaining group()s MUST still execute and record metrics even when an earlier extraction returned empty.
 - DO NOT use exec.vu.abort() — aborting the VU hides steps 2..N from the metrics report entirely.
+
+Dynamic URL paths — MANDATORY whenever a request URL interpolates an extracted variable (e.g. \`/products/\${vars.productId}\`):
+- Set { tags: { name: '<templated path>' } } in that request's params object, using a fixed placeholder for the dynamic segment (e.g. { tags: { name: '/products/:id' } }) — never the interpolated value itself.
+- Without this, k6 fragments metrics into a near-duplicate series per unique ID instead of aggregating them under one logical endpoint.
 ` : '';
 
   const placeholderInstructions = hasPlaceholders ? `
@@ -372,10 +376,13 @@ export default function() {
       'has token': (r) => { try { return !!r.json('access_token'); } catch { return false; } },
     });
     vars.token = (res.status === 200 && res.json('access_token')) || '';   // defensive — falls back to '' so step 2 still runs
+    vars.userId = (res.status === 200 && res.json('user_id')) || '';      // defensive
   });
 
   group('Step 2: Fetch data', function() {
-    const res = http.get('https://example.com/data', { headers: { 'Authorization': \`Bearer \${vars.token}\` } });
+    // Dynamic path segment (vars.userId) — tag with a fixed name so k6 aggregates
+    // metrics per logical endpoint instead of fragmenting into one series per ID.
+    const res = http.get(\`https://example.com/users/\${vars.userId}/data\`, { tags: { name: '/users/:id/data' }, headers: { 'Authorization': \`Bearer \${vars.token}\` } });
     check(res, {
       'data 200': (r) => r.status === 200,
       'non-empty list': (r) => { try { return r.json().length > 0; } catch { return false; } },

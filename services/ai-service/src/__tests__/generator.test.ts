@@ -81,6 +81,21 @@ describe('FLOW_PROMPT — extraction rules', () => {
     await generateScript(baseFlow());
     expect(await getLastPrompt()).not.toContain("import exec from 'k6/execution'");
   });
+
+  it('instructs tagging dynamic URL paths with a fixed name when any step has extractions', async () => {
+    const test = baseFlow();
+    test.steps![0].extract = { productId: { source: 'jsonpath', expression: '$.id' } };
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('Dynamic URL paths');
+    expect(prompt).toContain("tags: { name: '<templated path>' }");
+    expect(prompt).toContain('never the interpolated value itself');
+  });
+
+  it('does NOT include the dynamic-URL tagging instruction when no extractions are defined', async () => {
+    await generateScript(baseFlow());
+    expect(await getLastPrompt()).not.toContain('Dynamic URL paths');
+  });
 });
 
 describe('FLOW_PROMPT — thresholds', () => {
