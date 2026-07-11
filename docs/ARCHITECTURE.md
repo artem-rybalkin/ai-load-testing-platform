@@ -177,6 +177,8 @@ LLM calls go through `@alt/shared`'s `generateAIText()` — provider-agnostic, t
 
 The `capacity` load profile (`BACKEND_PROMPT`/`FLOW_PROMPT`) is the one place `options.thresholds` uses k6's object-form threshold instead of a plain string — `{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }` (fixed 2026-07-10) — so a capacity/stress test stops as soon as it proves the system broke instead of burning worker/compute time on the rest of the configured ramp. `buildK6Options()` (api-service `options.ts`) mirrors the same shape for cache-hit re-injection.
 
+Generated `http_req_duration` thresholds are multi-percentile (`p(90)<A`, `p(95)<B`, `p(99)<C`), not a single p(95) cliff-edge (fixed 2026-07-10) — mirrors the p50/p90/p95/p99 the results UI already computes and displays. `p90`/`p99` are derived from the single p95 budget via `@alt/shared`'s `deriveMultiPercentileThresholds()` (p90 = 0.8×, p99 = 2×), not separately user-configurable; shared by both `k6Thresholds()` (ai-service) and `buildK6Options()` (api-service) so the ratio can't drift between the two independent threshold-generation paths. For the capacity profile only p95 aborts the run — p90/p99 stay observational so a single tail outlier can't trigger a premature abort.
+
 Retry has two independent layers: an *inner* 429-backoff (up to 3 attempts, 60s/120s waits) inside `generateScript`/`compareDescriptions`, and an *outer* queue-level retry (`x-retry-count` header, immediate requeue, `MAX_RETRIES=3` then DLQ) in `processAiRequest`'s catch block.
 
 ### api-service — ingress / routing

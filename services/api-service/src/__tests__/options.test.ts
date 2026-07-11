@@ -137,12 +137,14 @@ describe('buildK6Options', () => {
     }
   });
 
-  it('capacity profile aborts early on a threshold breach instead of running the full duration', () => {
+  it('capacity profile aborts early on a p(95) breach, with p90/p99 staying observational', () => {
     const result = buildK6Options({ vus: 10, duration: '5m', profile: 'capacity' });
     const parsed = JSON.parse(result);
 
     expect(parsed.thresholds.http_req_duration).toEqual([
+      'p(90)<1600',
       { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' },
+      'p(99)<4000',
     ]);
     expect(parsed.thresholds.http_req_failed).toEqual([
       { threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' },
@@ -155,8 +157,22 @@ describe('buildK6Options', () => {
     for (const profile of profiles) {
       const result = buildK6Options({ vus: 10, duration: '1m', profile });
       const parsed = JSON.parse(result);
-      expect(typeof parsed.thresholds.http_req_duration[0]).toBe('string');
+      expect(parsed.thresholds.http_req_duration.every((t: unknown) => typeof t === 'string')).toBe(true);
       expect(typeof parsed.thresholds.http_req_failed[0]).toBe('string');
+    }
+  });
+
+  it('includes multi-percentile (p90/p95/p99) http_req_duration thresholds for every profile', () => {
+    const expected: Record<string, string[]> = {
+      load:     ['p(90)<800', 'p(95)<1000', 'p(99)<2000'],
+      spike:    ['p(90)<1600', 'p(95)<2000', 'p(99)<4000'],
+      soak:     ['p(90)<400', 'p(95)<500', 'p(99)<1000'],
+    };
+
+    for (const [profile, want] of Object.entries(expected)) {
+      const result = buildK6Options({ vus: 10, duration: '1m', profile: profile as 'load' | 'spike' | 'soak' });
+      const parsed = JSON.parse(result);
+      expect(parsed.thresholds.http_req_duration).toEqual(want);
     }
   });
 });

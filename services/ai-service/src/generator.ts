@@ -1,4 +1,4 @@
-import { TestRequest, ExtractRule, AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, fenceUserContent, USER_DATA_INSTRUCTION, SLOThresholds } from '@alt/shared';
+import { TestRequest, ExtractRule, AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, fenceUserContent, USER_DATA_INSTRUCTION, SLOThresholds, deriveMultiPercentileThresholds } from '@alt/shared';
 import { log } from './logger';
 
 const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
@@ -36,10 +36,14 @@ const getProviderSetting = async (teamId?: string | null): Promise<AiProviderSet
 // SLO analysis (analyzeResult() in @alt/shared, which already honors test.thresholds).
 // Without this, the generated script always hardcoded p(95)<1000 / rate<0.01
 // regardless of what SLO the user actually configured (chat, home page, presets).
-const k6Thresholds = (thresholds?: SLOThresholds): { p95: number; errorRateFrac: string } => ({
-  p95: thresholds?.p95 ?? 1000,
-  errorRateFrac: ((thresholds?.errorRate ?? 1) / 100).toString(),
-});
+// p90/p99 are derived from p95 (not separately user-configurable) so the
+// generated script gets multi-percentile thresholds instead of a single
+// p(95) cliff-edge, mirroring the p50/p90/p95/p99 the results UI already shows.
+const k6Thresholds = (thresholds?: SLOThresholds): { p95: number; p90: number; p99: number; errorRateFrac: string } => {
+  const p95 = thresholds?.p95 ?? 1000;
+  const { p90, p99 } = deriveMultiPercentileThresholds(p95);
+  return { p95, p90, p99, errorRateFrac: ((thresholds?.errorRate ?? 1) / 100).toString() };
+};
 
 const profileInstructions = (opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string }): string => {
   const { vus, duration, profile = 'load', peakVus } = opts;
@@ -62,9 +66,9 @@ Set a threshold that allows higher error rate during the spike (up to 10%).`;
 Generate k6 stages that gradually increase load to find the breaking point:
 - Ramp up from 0 to ${peak} VUs over ${duration}
 - Do NOT hold — just keep ramping linearly
-- The goal is to find where the system breaks, not to run the full ramp regardless — once p(95)/error-rate thresholds are breached there's nothing more to learn, so use k6's abortOnFail to stop the test early instead of the plain string threshold form used elsewhere. Set options.thresholds to exactly:
+- The goal is to find where the system breaks, not to run the full ramp regardless — once p(95)/error-rate thresholds are breached there's nothing more to learn, so use k6's abortOnFail to stop the test early instead of the plain string threshold form used elsewhere. p90/p99 stay plain (observational) — only p95 aborts, so a single tail outlier can't trigger a premature abort on its own. Set options.thresholds to exactly:
   thresholds: {
-    http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }],
+    http_req_duration: ['p(90)<1600', { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }, 'p(99)<4000'],
     http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }],
     checks: ['rate>0.9'],
   }
@@ -91,7 +95,7 @@ const BACKEND_PROMPT = (test: TestRequest): string => {
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number; httpOptions?: { keepAlive?: boolean; timeout?: string; discardResponseBodies?: boolean }; headers?: Record<string, string> };
   const fallback = profileInstructions(opts);
   const isCapacity = opts.profile === 'capacity';
-  const { p95, errorRateFrac } = k6Thresholds(test.thresholds);
+  const { p95, p90, p99, errorRateFrac } = k6Thresholds(test.thresholds);
   const http = opts.httpOptions;
   const httpSection = http ? `
 HTTP options to apply:
@@ -125,7 +129,7 @@ Requirements:
 - Add checks for HTTP status AND at least one body/header assertion per request
 ${isCapacity
   ? '- This is a capacity/stress profile — use EXACTLY the options.thresholds object given in the capacity load-profile instructions above (with abortOnFail), not the plain-string form'
-  : `- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a request that returns 200 but with the wrong body)`}
+  : `- Always include multi-percentile thresholds — not just p(95) — plus error rate and checks: http_req_duration: ['p(90)<${p90}', 'p(95)<${p95}', 'p(99)<${p99}'] (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a request that returns 200 but with the wrong body)`}
 - Log failures: if res.status is 0 or >= 400, console.error a line with the status and URL (e.g. \`console.error(\`FAILED \${res.status} \${res.request.url}\`)\`) right after the check — this is the only way a failed request shows up in the execution log, since k6 does not print anything for a failing check or a non-2xx response on its own
 - For JSON APIs: set Content-Type: application/json header, use JSON.stringify for request body, call res.json() to parse
 - For authenticated endpoints: read credentials from __ENV.USERNAME / __ENV.PASSWORD / __ENV.API_TOKEN — never hardcode secrets
@@ -148,7 +152,7 @@ Structure:
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<${p95}'], http_req_failed: ['rate<${errorRateFrac}'], checks: ['rate>0.9'] } };
+export const options = { stages: [...], thresholds: { http_req_duration: ['p(90)<${p90}', 'p(95)<${p95}', 'p(99)<${p99}'], http_req_failed: ['rate<${errorRateFrac}'], checks: ['rate>0.9'] } };
 export default function() { ... }
 `;
 };
@@ -236,7 +240,7 @@ const FLOW_PROMPT = (test: TestRequest): string => {
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number };
   const fallback = profileInstructions(opts);
   const isCapacity = opts.profile === 'capacity';
-  const { p95, errorRateFrac } = k6Thresholds(test.thresholds);
+  const { p95, p90, p99, errorRateFrac } = k6Thresholds(test.thresholds);
 
   const hasExtractions = steps.some(s => s.extract && Object.keys(s.extract).length > 0);
 
@@ -347,14 +351,14 @@ Requirements:
 - After all groups, add sleep(1)
 ${isCapacity
   ? '- This is a capacity/stress profile — use EXACTLY the options.thresholds object given in the capacity load-profile instructions above (with abortOnFail), not the plain-string form'
-  : `- Always include thresholds: p(95) < ${p95} (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a step that returns 2xx but with the wrong body)`}
+  : `- Always include multi-percentile thresholds — not just p(95) — plus error rate and checks: http_req_duration: ['p(90)<${p90}', 'p(95)<${p95}', 'p(99)<${p99}'] (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a step that returns 2xx but with the wrong body)`}
 - Return ONLY the JavaScript code, no markdown fences, no explanation
 
 Structure:
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 
-export const options = { stages: [...], thresholds: { http_req_duration: ['p(95)<${p95}'], http_req_failed: ['rate<${errorRateFrac}'], checks: ['rate>0.9'] } };
+export const options = { stages: [...], thresholds: { http_req_duration: ['p(90)<${p90}', 'p(95)<${p95}', 'p(99)<${p99}'], http_req_failed: ['rate<${errorRateFrac}'], checks: ['rate>0.9'] } };
 
 export default function() {
   const vars = {};

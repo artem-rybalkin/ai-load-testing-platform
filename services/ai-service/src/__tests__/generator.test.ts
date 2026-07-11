@@ -84,12 +84,12 @@ describe('FLOW_PROMPT — extraction rules', () => {
 });
 
 describe('FLOW_PROMPT — thresholds', () => {
-  it('defaults to p(95)<1000 and rate<0.01 when no thresholds are set on the request', async () => {
+  it('defaults to p(90)<800/p(95)<1000/p(99)<2000 and rate<0.01 when no thresholds are set on the request', async () => {
     await generateScript(baseFlow());
     const prompt = await getLastPrompt();
-    expect(prompt).toContain('p(95) < 1000');
+    expect(prompt).toContain("http_req_duration: ['p(90)<800', 'p(95)<1000', 'p(99)<2000']");
     expect(prompt).toContain('rate < 0.01');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(90)<800', 'p(95)<1000', 'p(99)<2000'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }");
   });
 
   it('reflects a custom SLOThresholds.errorRate/p95 in the generated prompt instead of the hardcoded default', async () => {
@@ -97,9 +97,9 @@ describe('FLOW_PROMPT — thresholds', () => {
     test.thresholds = { p95: 500, errorRate: 3 };
     await generateScript(test);
     const prompt = await getLastPrompt();
-    expect(prompt).toContain('p(95) < 500');
+    expect(prompt).toContain("http_req_duration: ['p(90)<400', 'p(95)<500', 'p(99)<1000']");
     expect(prompt).toContain('rate < 0.03');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<500'], http_req_failed: ['rate<0.03'], checks: ['rate>0.9'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(90)<400', 'p(95)<500', 'p(99)<1000'], http_req_failed: ['rate<0.03'], checks: ['rate>0.9'] }");
   });
 
   it('instructs the AI to require a 90% check pass rate', async () => {
@@ -113,9 +113,9 @@ describe('FLOW_PROMPT — thresholds', () => {
     test.options = { vus: 10, duration: '2m', profile: 'capacity', peakVus: 100 } as never;
     await generateScript(test);
     const prompt = await getLastPrompt();
-    expect(prompt).toContain("http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }]");
+    expect(prompt).toContain("http_req_duration: ['p(90)<1600', { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }, 'p(99)<4000']");
     expect(prompt).toContain("http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }]");
-    expect(prompt).not.toMatch(/Always include thresholds: p\(95\)/);
+    expect(prompt).not.toMatch(/Always include multi-percentile thresholds/);
   });
 });
 
@@ -322,12 +322,12 @@ describe('BACKEND_PROMPT — basic content', () => {
     expect(occurrences).toHaveLength(2);
   });
 
-  it('defaults to p(95)<1000 and rate<0.01 when no thresholds are set on the request', async () => {
+  it('defaults to p(90)<800/p(95)<1000/p(99)<2000 and rate<0.01 when no thresholds are set on the request', async () => {
     await generateScript(baseBackend());
     const prompt = await getLastPrompt();
-    expect(prompt).toContain('p(95) < 1000');
+    expect(prompt).toContain("http_req_duration: ['p(90)<800', 'p(95)<1000', 'p(99)<2000']");
     expect(prompt).toContain('rate < 0.01');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<1000'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(90)<800', 'p(95)<1000', 'p(99)<2000'], http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }");
   });
 
   it('reflects a custom SLOThresholds.errorRate/p95 in the generated prompt instead of the hardcoded default', async () => {
@@ -335,9 +335,9 @@ describe('BACKEND_PROMPT — basic content', () => {
     test.thresholds = { p95: 2000, errorRate: 5 };
     await generateScript(test);
     const prompt = await getLastPrompt();
-    expect(prompt).toContain('p(95) < 2000');
+    expect(prompt).toContain("http_req_duration: ['p(90)<1600', 'p(95)<2000', 'p(99)<4000']");
     expect(prompt).toContain('rate < 0.05');
-    expect(prompt).toContain("thresholds: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.05'], checks: ['rate>0.9'] }");
+    expect(prompt).toContain("thresholds: { http_req_duration: ['p(90)<1600', 'p(95)<2000', 'p(99)<4000'], http_req_failed: ['rate<0.05'], checks: ['rate>0.9'] }");
   });
 
   it('instructs the AI to require a 90% check pass rate', async () => {
@@ -367,18 +367,18 @@ describe('BACKEND_PROMPT — profileInstructions', () => {
   it('instructs the capacity profile to abort early on a threshold breach instead of running the full duration', async () => {
     await generateScript(makeBackendWithProfile('capacity'));
     const prompt = await getLastPrompt();
-    expect(prompt).toContain("http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }]");
+    expect(prompt).toContain("http_req_duration: ['p(90)<1600', { threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '10s' }, 'p(99)<4000']");
     expect(prompt).toContain("http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '10s' }]");
     // The generic plain-string Requirements line must be suppressed for capacity — it would
     // otherwise conflict with the abortOnFail form given in the load-profile instructions.
-    expect(prompt).not.toMatch(/Always include thresholds: p\(95\)/);
+    expect(prompt).not.toMatch(/Always include multi-percentile thresholds/);
   });
 
   it('does not add abortOnFail thresholds to non-capacity profiles', async () => {
     await generateScript(makeBackendWithProfile('spike'));
     const prompt = await getLastPrompt();
     expect(prompt).not.toContain('abortOnFail');
-    expect(prompt).toMatch(/Always include thresholds: p\(95\)/);
+    expect(prompt).toMatch(/Always include multi-percentile thresholds/);
   });
 
   it('includes SOAK TEST instructions for soak profile', async () => {

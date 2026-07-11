@@ -370,6 +370,25 @@ export interface RecordingSession {
   error?: string;
 }
 
+// ── k6 script-generation thresholds ──────────────────────────────────────────
+// Shared between ai-service (generateScript's prompt-embedded literal values)
+// and api-service (buildK6Options's cache-hit re-injection) so the two
+// independent k6 options.thresholds generation paths don't drift apart.
+
+/**
+ * Derives p90/p99 response-time budgets from a single p95 budget, so
+ * generated scripts get k6 thresholds on all 3 percentiles instead of a
+ * single p(95) cliff-edge — mirroring the p50/p90/p95/p99 already computed
+ * and displayed in the platform's own results UI (`parser.ts`). p90 is
+ * tighter (0.8x) since it's a less extreme percentile than p95; p99 is
+ * looser (2x) to allow for tail latency without making every test fail on
+ * a handful of slow outliers.
+ */
+export const deriveMultiPercentileThresholds = (p95: number): { p90: number; p99: number } => ({
+  p90: Math.round(p95 * 0.8),
+  p99: Math.round(p95 * 2),
+});
+
 // ── Deterministic performance analyser ───────────────────────────────────────
 // Shared between results-service (fallback) and analyser-service (primary).
 
