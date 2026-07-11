@@ -25,8 +25,15 @@ const canonicalStep = (s: FlowStep): unknown => ({
   ...(s.extract !== undefined ? { extract: s.extract } : {}),
 });
 
-export const stepsToKey = (steps: FlowStep[]): string => {
-  const hash = createHash('sha256').update(JSON.stringify(steps.map(canonicalStep))).digest('hex').slice(0, 16);
+// setupFirstStep changes the generated script's structure (step 1 moves into
+// k6's setup()), so it must be folded into the cache key — otherwise a script
+// cached under the old structure could be served for a request that now wants
+// the new one. Only mixed into the hash payload when true, so the key is
+// byte-for-byte identical to before for the (default) false/unset case —
+// existing cached flow scripts stay valid.
+export const stepsToKey = (steps: FlowStep[], setupFirstStep?: boolean): string => {
+  const payload = setupFirstStep ? { steps: steps.map(canonicalStep), setupFirstStep: true } : steps.map(canonicalStep);
+  const hash = createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 16);
   return `flow:${hash}`;
 };
 

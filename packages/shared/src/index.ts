@@ -125,6 +125,7 @@ export interface TestRequest {
   csvData?: string;                          // base64-encoded CSV content
   csvFilename?: string;                      // original filename hint
   customScript?: string;                     // user-supplied k6 script; bypasses AI generation entirely
+  setupFirstStep?: boolean;                  // flow tests only: run step 1 once via k6 setup() instead of every VU/iteration — for preconditions (e.g. login) that aren't the thing being measured
   projectId?: string;                        // set by api-service from session; filters DB scope
   workspaceId?: string;                      // optional sub-project grouping within a team
   createdAt: string;
@@ -138,7 +139,13 @@ export interface Workspace {
   createdAt: string;
 }
 
-export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak';
+// 'realistic' is the open-model (arrival-rate) counterpart to 'load' — same
+// steady-state intent, but k6 sends requests at a fixed rate instead of
+// waiting for each response before the next one. Opt-in only: every AI
+// suggestion/extraction path (chat, /suggest-settings) still only offers the
+// original four, so existing behavior is untouched unless a user explicitly
+// picks it in Advanced Settings.
+export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak' | 'realistic';
 
 /** Live-metrics chart aggregation window, in seconds. Admin-configurable via
  *  the Settings page (GET/PUT /system/live-metric-window) — applies to new

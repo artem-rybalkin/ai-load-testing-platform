@@ -257,6 +257,17 @@ describe('stepsToKey', () => {
     expect(hash).toHaveLength(16);
     expect(hash).toMatch(/^[0-9a-f]+$/);
   });
+
+  it('produces the exact same key with setupFirstStep unset vs explicitly false — existing cached flow scripts stay valid', () => {
+    const steps = [makeStep('https://example.com/login', 'POST')];
+    expect(stepsToKey(steps)).toBe(stepsToKey(steps, undefined));
+    expect(stepsToKey(steps)).toBe(stepsToKey(steps, false));
+  });
+
+  it('produces a different key when setupFirstStep is true, so a structural script change forces regeneration', () => {
+    const steps = [makeStep('https://example.com/login', 'POST')];
+    expect(stepsToKey(steps, true)).not.toBe(stepsToKey(steps));
+  });
 });
 
 // ─── incrementUsedCount ───────────────────────────────────────────────────────

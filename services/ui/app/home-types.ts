@@ -1,5 +1,5 @@
 export type HomeTestType = 'backend' | 'client-side' | 'flow';
-export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak';
+export type LoadProfile = 'load' | 'spike' | 'capacity' | 'soak' | 'realistic';
 
 export interface EnvVar { key: string; value: string }
 
@@ -17,6 +17,7 @@ export interface HomeFormState {
   httpKeepAlive: boolean;
   httpTimeout: string;
   httpDiscardBodies: boolean;
+  setupFirstStep: boolean;
 }
 
 export interface Thresholds {

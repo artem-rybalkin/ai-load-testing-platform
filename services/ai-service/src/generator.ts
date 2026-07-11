@@ -82,6 +82,31 @@ Generate k6 stages for a prolonged steady-state test:
 - Ramp down to 0 over 30s
 Focus on memory leaks and degradation over time. Set a strict p(95) < 500ms threshold.`;
 
+    case 'realistic': {
+      // vus is reinterpreted as a target arrival RATE (requests/sec), not a
+      // concurrent-user count — see the executor explanation below.
+      const rate = vus;
+      const preAllocatedVUs = Math.max(rate, 10);
+      const maxVUs = preAllocatedVUs * 10;
+      return `Load profile: REALISTIC (open-model / arrival-rate) TEST
+Every other profile uses k6's VU-based stages executor, which is closed-model: a VU waits for its response before sending the next request, which under-represents real load once the system starts degrading. This profile instead uses k6's ramping-arrival-rate executor, which keeps sending requests at a fixed rate regardless of response time — closer to real inbound traffic. Set options.scenarios to exactly:
+  scenarios: {
+    realistic: {
+      executor: 'ramping-arrival-rate',
+      timeUnit: '1s',
+      startRate: ${rate},
+      preAllocatedVUs: ${preAllocatedVUs},
+      maxVUs: ${maxVUs},
+      stages: [
+        { target: ${rate}, duration: '30s' },
+        { target: ${rate}, duration: '${duration}' },
+        { target: 0, duration: '15s' },
+      ],
+    },
+  }
+Do NOT include a top-level options.stages or options.vus — scenarios replaces both. ${rate} here is requests PER SECOND at the target rate, not a concurrent-VU count.`;
+    }
+
     default: { // 'load'
       const rampLine = opts.rampUp
         ? `Ramp up from 0 to ${vus} VUs over ${opts.rampUp}, hold for ${duration}, then ramp down over 10s.`
@@ -330,6 +355,16 @@ Variable placeholders:
 - Never leave the literal "{{varName}}" text in the generated script — always replace it with the corresponding \${vars.varName} reference.
 ` : '';
 
+  const useSetup = test.setupFirstStep === true;
+  const setupInstructions = useSetup ? `
+Step 1 as a one-time precondition — MANDATORY structure change:
+- Step 1 ("${steps[0].name}") is a one-time precondition (e.g. login), NOT the thing being load-tested. Move it OUT of the per-VU default function and INTO a k6 setup() function, so it runs exactly ONCE for the whole test run instead of once per VU per iteration.
+- Structure: export function setup() { const vars = {}; group('Step 1: ...', function() { /* Step 1's request + checks + extraction, unchanged */ }); return vars; } — then export default function(data) { const vars = { ...data }; /* Steps 2..N as normal */ }
+- Any values Step 1 extracts MUST be assigned onto the local \`vars\` object inside setup() and returned — that is the ONLY way steps 2..N (which receive it via the \`data\` parameter) can read them.
+- Step 1's group() call goes ONLY inside setup() — do NOT also run it inside the default function.
+- setup() runs once for the whole test, not once per VU — but treat a check()/extraction failure there the same defensively as any other step: never throw, fall back to a default value so steps 2..N can still run.
+` : '';
+
   return `
 You are a performance testing expert. Generate a k6 multi-step flow test script. ${USER_DATA_INSTRUCTION}
 
@@ -339,10 +374,10 @@ ${fallback}
 ${paramSection}
 Flow steps to test (IN ORDER):
 ${stepDefs}
-${extractionInstructions}${placeholderInstructions}
+${extractionInstructions}${placeholderInstructions}${setupInstructions}
 Requirements:
 - Use k6 JavaScript API with group() for EACH step
-- Each step MUST be wrapped in: group('Step N: name', function() { ... })
+- Each step MUST be wrapped in: group('Step N: name', function() { ... })${useSetup ? ' — EXCEPT Step 1, which goes inside setup() per the instructions above, not inside the default function' : ''}
 - Chain variables between steps: extract values from responses and use them in subsequent requests
 - Chained extraction MUST be defensive: never call res.json() or access response fields unconditionally — guard with a status check or try/catch and fall back to a default value (e.g. const origin = (res.status === 200 && res.json().origin) || 'default'; or wrap in try { ... } catch { vars.x = 'default'; }). A parse failure on one step must NEVER throw and abort the rest of the iteration — every later group() must still run and be measured even if an earlier extraction failed
 - Use __ENV.VAR_NAME for credentials (never hardcode passwords/tokens)
@@ -364,7 +399,39 @@ import { check, sleep, group } from 'k6';
 
 export const options = { stages: [...], thresholds: { http_req_duration: ['p(90)<${p90}', 'p(95)<${p95}', 'p(99)<${p99}'], http_req_failed: ['rate<${errorRateFrac}'], checks: ['rate>0.9'] } };
 
-export default function() {
+${useSetup ? `export function setup() {
+  const vars = {};
+
+  // Step 1 runs ONCE here, not per-VU — same defensive extraction rules as any other step.
+  group('Step 1: Login', function() {
+    const res = http.post('https://example.com/auth', JSON.stringify({ u: 'user' }), { headers: { 'Content-Type': 'application/json' } });
+    check(res, {
+      'login 200': (r) => r.status === 200,
+      'has token': (r) => { try { return !!r.json('access_token'); } catch { return false; } },
+    });
+    vars.token = (res.status === 200 && res.json('access_token')) || '';   // defensive — falls back to '' so steps 2..N still run
+    vars.userId = (res.status === 200 && res.json('user_id')) || '';      // defensive
+  });
+
+  return vars;
+}
+
+export default function(data) {
+  const vars = { ...data };
+
+  group('Step 2: Fetch data', function() {
+    // Dynamic path segment (vars.userId) — tag with a fixed name so k6 aggregates
+    // metrics per logical endpoint instead of fragmenting into one series per ID.
+    const res = http.get(\`https://example.com/users/\${vars.userId}/data\`, { tags: { name: '/users/:id/data' }, headers: { 'Authorization': \`Bearer \${vars.token}\` } });
+    check(res, {
+      'data 200': (r) => r.status === 200,
+      'non-empty list': (r) => { try { return r.json().length > 0; } catch { return false; } },
+    });
+  });
+
+  sleep(1);
+}
+` : `export default function() {
   const vars = {};
 
   // Example: step that extracts a token and passes it to the next step.
@@ -391,7 +458,7 @@ export default function() {
 
   sleep(1);
 }
-`;
+`}`;
 };
 
 /**

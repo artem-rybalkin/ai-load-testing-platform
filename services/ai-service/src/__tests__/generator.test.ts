@@ -401,6 +401,25 @@ describe('BACKEND_PROMPT — profileInstructions', () => {
     expect(await getLastPrompt()).toContain('SOAK TEST');
   });
 
+  it('instructs ramping-arrival-rate scenarios (not stages/vus) for the realistic profile', async () => {
+    await generateScript(makeBackendWithProfile('realistic'));
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('REALISTIC (open-model / arrival-rate) TEST');
+    expect(prompt).toContain("executor: 'ramping-arrival-rate'");
+    expect(prompt).toContain('startRate: 10');
+    expect(prompt).toContain('Do NOT include a top-level options.stages or options.vus');
+    expect(prompt).toMatch(/Always include multi-percentile thresholds/);
+  });
+
+  it('floors preAllocatedVUs at 10 for a low target rate in the realistic profile', async () => {
+    const test: TestRequest = { ...baseBackend(), options: { vus: 3, duration: '1m', profile: 'realistic' } as never };
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('startRate: 3');
+    expect(prompt).toContain('preAllocatedVUs: 10');
+    expect(prompt).toContain('maxVUs: 100');
+  });
+
   it('uses flat VU load profile (default load) with no profile specified', async () => {
     const test = baseBackend(); // no profile key
     await generateScript(test);

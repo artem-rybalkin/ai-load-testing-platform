@@ -185,6 +185,7 @@ function HomeContent() {
     httpKeepAlive: true,
     httpTimeout: '',
     httpDiscardBodies: false,
+    setupFirstStep: false,
   });
   const [flowSteps, setFlowSteps] = useState<FlowStep[]>([]);
   const [flowTestData, setFlowTestData] = useState<Array<Record<string, string>>>([]);
@@ -580,6 +581,7 @@ function HomeContent() {
           csvFilename: flowCsvFile?.name,
           thresholds: buildThresholds(),
           workspaceId: activeWorkspaceId ?? undefined,
+          ...(form.setupFirstStep ? { setupFirstStep: true } : {}),
         });
         if (res.test?.id) navigate(`/results/${res.test.id}`);
         return;
@@ -741,6 +743,17 @@ function HomeContent() {
                     </p>
                   )}
                 </div>
+                {flowRunner === 'k6' && flowSteps.length > 1 && (
+                  <label className="flex items-center gap-2 text-[12.5px] text-tx cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.setupFirstStep}
+                      onChange={e => setForm(f => ({ ...f, setupFirstStep: e.target.checked }))}
+                      className="rounded-sm border-border"
+                    />
+                    Run Step 1 once <span className="text-tx-4">(precondition like login — not repeated every VU/iteration)</span>
+                  </label>
+                )}
               </>
             )}
 

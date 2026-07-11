@@ -33,10 +33,11 @@ export default function AdvancedSettings({ form, setForm, showAdvanced, setShowA
               <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Profile</div>
               <div className="grid grid-cols-2 gap-1.5">
                 {([
-                  { id: 'load',     label: 'Load',     hint: 'Constant VUs' },
-                  { id: 'spike',    label: 'Spike',    hint: 'Traffic burst' },
-                  { id: 'capacity', label: 'Capacity', hint: 'Find breakpoint' },
-                  { id: 'soak',     label: 'Soak',     hint: 'Long steady-state' },
+                  { id: 'load',      label: 'Load',      hint: 'Constant VUs' },
+                  { id: 'spike',     label: 'Spike',     hint: 'Traffic burst' },
+                  { id: 'capacity',  label: 'Capacity',  hint: 'Find breakpoint' },
+                  { id: 'soak',      label: 'Soak',      hint: 'Long steady-state' },
+                  { id: 'realistic', label: 'Realistic', hint: 'Fixed req/s, not VUs' },
                 ] as const).map(p => (
                   <button
                     key={p.id}
@@ -63,7 +64,7 @@ export default function AdvancedSettings({ form, setForm, showAdvanced, setShowA
             ) : (
               <div>
                 <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">
-                  {form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Users'}
+                  {form.profile === 'realistic' ? 'Target rate (req/s)' : form.profile === 'spike' || form.profile === 'capacity' ? 'Baseline VUs' : 'Users'}
                 </div>
                 <input type="number" min={1} max={100} value={form.vus}
                   onChange={e => setForm(f => ({ ...f, vus: Number(e.target.value) }))} className={inputCls} />

@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 
 import { TeamQuota, DEFAULT_TEAM_QUOTA, BackendTestOptions, ClientTestOptions, TestType } from '@alt/shared';
+import { realisticProfileMaxVus } from './options';
 
 export const getTeamQuota = async (pool: Pool, teamId: string): Promise<TeamQuota> => {
   const { rows } = await pool.query<{
@@ -41,7 +42,13 @@ export const checkTestQuota = async (
 
   const vus = type === 'client-side'
     ? (options as ClientTestOptions).sessions
-    : ((options as BackendTestOptions).peakVus ?? (options as BackendTestOptions).vus);
+    : (() => {
+        const beOpts = options as BackendTestOptions;
+        // 'realistic' submits a req/s rate, not a VU count — check against the
+        // arrival-rate executor's actual VU-pool ceiling instead (see options.ts).
+        if (beOpts.profile === 'realistic') return realisticProfileMaxVus(beOpts.vus);
+        return beOpts.peakVus ?? beOpts.vus;
+      })();
 
   if (vus > quota.maxVusPerTest) {
     return `Requested VUs/sessions (${vus}) exceeds team quota (max ${quota.maxVusPerTest})`;

@@ -16,6 +16,14 @@ const durationThresholds = (p95: number): string[] => {
   return [`p(90)<${p90}`, `p(95)<${p95}`, `p(99)<${p99}`];
 };
 
+// k6's ramping-arrival-rate executor pre-allocates (and can grow to) far more
+// real VUs than the nominal req/s rate, to sustain the target rate if
+// responses slow down. Exported so quota enforcement (quotas.ts) checks
+// against this true ceiling instead of the submitted rate — otherwise a
+// team could request a 'realistic' test at a rate quota would normally
+// allow, and k6 would silently allocate up to 10x that many real VUs.
+export const realisticProfileMaxVus = (rate: number): number => Math.max(rate, 10) * 10;
+
 export const buildK6Options = (opts: BackendTestOptions): string => {
   const { vus, duration, profile = 'load', peakVus, httpOptions } = opts;
   const peak = peakVus ?? vus * 10;
@@ -25,8 +33,40 @@ export const buildK6Options = (opts: BackendTestOptions): string => {
     ...(httpOptions?.discardResponseBodies ? { discardResponseBodies: true } : {}),
   };
 
-  const obj = ((): { stages: { duration: string; target: number }[]; thresholds: Record<string, ThresholdEntry[]> } => {
+  type ClosedModelOptions = { stages: { duration: string; target: number }[]; thresholds: Record<string, ThresholdEntry[]> };
+  // 'realistic' uses k6's open-model ramping-arrival-rate executor instead of
+  // VU-based stages — scenarios replaces both options.stages and options.vus.
+  type ArrivalRateOptions = {
+    scenarios: { realistic: { executor: 'ramping-arrival-rate'; timeUnit: '1s'; startRate: number; preAllocatedVUs: number; maxVUs: number; stages: { target: number; duration: string }[] } };
+    thresholds: Record<string, ThresholdEntry[]>;
+  };
+
+  const obj = ((): ClosedModelOptions | ArrivalRateOptions => {
     switch (profile) {
+      case 'realistic': {
+        // vus is reinterpreted as a target arrival RATE (requests/sec), not a
+        // concurrent-user count — mirrors ai-service's profileInstructions().
+        const rate = vus;
+        const preAllocatedVUs = Math.max(rate, 10);
+        const maxVUs = realisticProfileMaxVus(rate);
+        return {
+          scenarios: {
+            realistic: {
+              executor: 'ramping-arrival-rate',
+              timeUnit: '1s',
+              startRate: rate,
+              preAllocatedVUs,
+              maxVUs,
+              stages: [
+                { target: rate, duration: '30s' },
+                { target: rate, duration: duration },
+                { target: 0, duration: '15s' },
+              ],
+            },
+          },
+          thresholds: { http_req_duration: durationThresholds(1000), http_req_failed: ['rate<0.01'], checks: ['rate>0.9'] }
+        };
+      }
       case 'spike': return {
         stages: [
           { duration: '30s', target: vus  },

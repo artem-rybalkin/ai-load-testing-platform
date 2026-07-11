@@ -175,6 +175,36 @@ describe('buildK6Options', () => {
       expect(parsed.thresholds.http_req_duration).toEqual(want);
     }
   });
+
+  it('realistic profile uses a ramping-arrival-rate scenario instead of stages', () => {
+    const result = buildK6Options({ vus: 20, duration: '2m', profile: 'realistic' });
+    const parsed = JSON.parse(result);
+
+    expect(parsed.stages).toBeUndefined();
+    expect(parsed.scenarios.realistic).toEqual({
+      executor: 'ramping-arrival-rate',
+      timeUnit: '1s',
+      startRate: 20,
+      preAllocatedVUs: 20,
+      maxVUs: 200,
+      stages: [
+        { target: 20, duration: '30s' },
+        { target: 20, duration: '2m' },
+        { target: 0, duration: '15s' },
+      ],
+    });
+    expect(parsed.thresholds.http_req_duration).toEqual(['p(90)<800', 'p(95)<1000', 'p(99)<2000']);
+    expect(parsed.thresholds.checks).toEqual(['rate>0.9']);
+  });
+
+  it('realistic profile floors preAllocatedVUs at 10 for a low target rate', () => {
+    const result = buildK6Options({ vus: 3, duration: '1m', profile: 'realistic' });
+    const parsed = JSON.parse(result);
+
+    expect(parsed.scenarios.realistic.startRate).toBe(3);
+    expect(parsed.scenarios.realistic.preAllocatedVUs).toBe(10);
+    expect(parsed.scenarios.realistic.maxVUs).toBe(100);
+  });
 });
 
 // ─── buildK6Options — httpOptions ─────────────────────────────────────────────

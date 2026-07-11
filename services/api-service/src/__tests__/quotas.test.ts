@@ -135,6 +135,36 @@ describe('checkTestQuota', () => {
     expect(result).toMatch(/VUs\/sessions/);
   });
 
+  it('checks the realistic profile against its actual VU-pool ceiling, not the nominal req/s rate', async () => {
+    await pool.query(
+      `INSERT INTO team_quotas (team_id, max_concurrent_tests, max_vus_per_test, max_test_duration_seconds, max_scheduled_tests, max_gemini_calls_per_day)
+       VALUES ($1, 5, 50, 3600, 10, 100)`,
+      [teamId]
+    );
+    // 10 req/s is well within a 50-VU quota on its own, but the arrival-rate
+    // executor's actual VU-pool ceiling is 10 * 10 = 100 — over quota.
+    const result = await checkTestQuota(pool, teamId, {
+      type: 'backend',
+      options: { vus: 10, duration: '1m', profile: 'realistic' },
+      durationSeconds: 60,
+    });
+    expect(result).toMatch(/VUs/);
+  });
+
+  it('allows a realistic-profile test whose VU-pool ceiling fits within quota', async () => {
+    await pool.query(
+      `INSERT INTO team_quotas (team_id, max_concurrent_tests, max_vus_per_test, max_test_duration_seconds, max_scheduled_tests, max_gemini_calls_per_day)
+       VALUES ($1, 5, 200, 3600, 10, 100)`,
+      [teamId]
+    );
+    const result = await checkTestQuota(pool, teamId, {
+      type: 'backend',
+      options: { vus: 10, duration: '1m', profile: 'realistic' },
+      durationSeconds: 60,
+    });
+    expect(result).toBeNull();
+  });
+
   it('returns an error when duration exceeds maxTestDurationSeconds', async () => {
     await pool.query(
       `INSERT INTO team_quotas (team_id, max_concurrent_tests, max_vus_per_test, max_test_duration_seconds, max_scheduled_tests, max_gemini_calls_per_day)

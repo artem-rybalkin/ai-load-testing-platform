@@ -113,6 +113,39 @@ describe('Home page — form validation', () => {
     fireEvent.click(advancedBtn!);
     expect(screen.getByRole('button', { name: /spike/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /soak/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /realistic/i })).toBeInTheDocument();
+  });
+
+  it('shows the "Run Step 1 once" toggle for a flow test only once there is more than one step', () => {
+    render(<Home />);
+    fireEvent.click(screen.getByRole('button', { name: /^flow$/i }));
+    expect(screen.queryByText(/run step 1 once/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /\+ add step/i }));
+    expect(screen.queryByText(/run step 1 once/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /\+ add step/i }));
+    expect(screen.getByText(/run step 1 once/i)).toBeInTheDocument();
+  });
+
+  it('toggles setupFirstStep on and includes it in the flow test submission', async () => {
+    render(<Home />);
+    fireEvent.click(screen.getByRole('button', { name: /^flow$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /\+ add step/i }));
+    fireEvent.click(screen.getByRole('button', { name: /\+ add step/i }));
+
+    const toggle = screen.getByRole('checkbox', { name: /run step 1 once/i });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+
+    const urlInputs = screen.getAllByPlaceholderText(/https:\/\//i);
+    fireEvent.change(urlInputs[0], { target: { value: 'https://example.com/login' } });
+    fireEvent.change(urlInputs[1], { target: { value: 'https://example.com/data' } });
+    fireEvent.click(screen.getByRole('button', { name: /run test/i }));
+
+    await waitFor(() => expect(mockCreateTest).toHaveBeenCalled());
+    expect(mockCreateTest.mock.calls[0][0]).toMatchObject({ type: 'flow', setupFirstStep: true });
   });
 });
 

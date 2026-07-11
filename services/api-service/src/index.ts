@@ -184,7 +184,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   app.post<{ Body: Omit<TestRequest, 'id' | 'createdAt'> }>(
     '/tests',
     async (request, reply) => {
-      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript, projectId: bodyProjectId, workspaceId } = request.body;
+      const { type, targetUrl, description, options, thresholds, steps, envVars, testData, csvData, csvFilename, customScript, setupFirstStep, projectId: bodyProjectId, workspaceId } = request.body;
 
       // Internal callers authenticated via the global API_KEYS list or the
       // trusted INTERNAL_API_KEY channel (e.g. the scheduler) may scope a
@@ -220,7 +220,8 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       }
 
       const backendOpts = type === 'backend' ? (options as BackendTestOptions) : undefined;
-      const flowCacheKey = (type === 'flow' && steps?.length) ? stepsToKey(steps) : undefined;
+      const effectiveSetupFirstStep = type === 'flow' ? setupFirstStep : undefined;
+      const flowCacheKey = (type === 'flow' && steps?.length) ? stepsToKey(steps, effectiveSetupFirstStep) : undefined;
 
       const test: EnrichedTestRequest = {
         id: crypto.randomUUID(),
@@ -235,6 +236,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         csvData,
         csvFilename,
         customScript,
+        setupFirstStep: effectiveSetupFirstStep,
         projectId: effectiveProjectId,
         workspaceId: workspaceId ?? undefined,
         scriptCacheKey: flowCacheKey,
