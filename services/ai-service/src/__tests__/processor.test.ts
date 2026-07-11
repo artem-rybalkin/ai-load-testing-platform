@@ -49,6 +49,7 @@ function makeDeps(
     msg?:                 ReturnType<typeof makeMsg>;
     generateScript?:      (t: EnrichedTestRequest) => Promise<string>;
     compareDescriptions?: (...args: unknown[]) => Promise<'REUSE' | 'REGENERATE'>;
+    checkAndIncrementGeminiUsage?: (teamId?: string | null) => Promise<string | null>;
   } = {},
 ) {
   const channel = overrides.channel ?? makeChannel();
@@ -65,6 +66,7 @@ function makeDeps(
       resultsUrl:          'http://results-service:3004',
       generateScript:      overrides.generateScript ?? vi.fn().mockResolvedValue('export default function(){}'),
       compareDescriptions: overrides.compareDescriptions as any,
+      checkAndIncrementGeminiUsage: overrides.checkAndIncrementGeminiUsage ?? vi.fn().mockResolvedValue(null),
     },
     mockFetch,
   };
@@ -420,4 +422,80 @@ describe('regression: REGENERATE→generate-failure requeues original message (f
       expect(requeuedMsg['cachedScript']).toBeUndefined();
     },
   );
+});
+
+// ─── Gemini quota gating ──────────────────────────────────────────────────────
+
+describe('processAiRequest — Gemini quota gating', () => {
+  beforeEach(() => { vi.unstubAllGlobals(); });
+
+  it('checks quota before generateScript and passes the projectId through', async () => {
+    const checkAndIncrementGeminiUsage = vi.fn().mockResolvedValue(null);
+    const { deps } = makeDeps({ checkAndIncrementGeminiUsage });
+    await processAiRequest({ ...BASE_TEST, projectId: 'team-1' }, deps);
+
+    expect(checkAndIncrementGeminiUsage).toHaveBeenCalledWith('team-1');
+  });
+
+  it('does not call generateScript or send to the queue when quota is exceeded', async () => {
+    const generateScript = vi.fn().mockResolvedValue('should not run');
+    const checkAndIncrementGeminiUsage = vi.fn().mockResolvedValue('Team has reached its daily AI quota (max 10 calls/day)');
+    const { channel, deps } = makeDeps({ generateScript, checkAndIncrementGeminiUsage });
+
+    await processAiRequest(BASE_TEST, deps);
+
+    expect(generateScript).not.toHaveBeenCalled();
+    expect(channel.sendToQueue).not.toHaveBeenCalledWith(BACKEND_QUEUE, expect.anything(), expect.anything());
+  });
+
+  it('routes straight to DLQ without retrying when quota is exceeded, even on the first attempt', async () => {
+    const checkAndIncrementGeminiUsage = vi.fn().mockResolvedValue('Team has reached its daily AI quota (max 10 calls/day)');
+    const { channel, deps, mockFetch } = makeDeps({ checkAndIncrementGeminiUsage });
+    deps.msg = makeMsg({ 'x-retry-count': 0 }); // first attempt — would normally retry
+
+    await processAiRequest(BASE_TEST, deps);
+
+    expect(channel.publish).not.toHaveBeenCalled(); // no retry requeue
+    expect(channel.sendToQueue).toHaveBeenCalledWith('ai-requests.dlq', deps.msg.content, { persistent: true });
+    expect(channel.ack).toHaveBeenCalledOnce();
+
+    const failCall = mockFetch.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('/fail'));
+    expect(failCall).toBeDefined();
+
+    const bodies = mockFetch.mock.calls.map((c: unknown[]) => {
+      try { return JSON.parse((c[1] as RequestInit).body as string).message as string; } catch { return ''; }
+    });
+    expect(bodies.some(b => b.includes('daily AI quota'))).toBe(true);
+  });
+
+  it('skips the quota check for the free exact-match REUSE shortcut', async () => {
+    const checkAndIncrementGeminiUsage = vi.fn().mockResolvedValue(null);
+    const { deps } = makeDeps({ checkAndIncrementGeminiUsage });
+    const test: EnrichedTestRequest = {
+      ...BASE_TEST,
+      cachedScript: 'export default function(){}',
+      cachedScriptDescription: 'load test with 100 VUs', // identical to BASE_TEST.description
+    };
+
+    await processAiRequest(test, deps);
+
+    expect(checkAndIncrementGeminiUsage).not.toHaveBeenCalled();
+  });
+
+  it('checks quota before compareDescriptions when descriptions differ, and fails fast if exceeded', async () => {
+    const compareDescriptions = vi.fn().mockResolvedValue('REUSE');
+    const checkAndIncrementGeminiUsage = vi.fn().mockResolvedValue('Team has reached its daily AI quota (max 10 calls/day)');
+    const { channel, deps } = makeDeps({ compareDescriptions, checkAndIncrementGeminiUsage });
+    const test: EnrichedTestRequest = {
+      ...BASE_TEST,
+      cachedScript: 'export default function(){}',
+      cachedScriptDescription: 'original description',
+      description: 'a different description',
+    };
+
+    await processAiRequest(test, deps);
+
+    expect(compareDescriptions).not.toHaveBeenCalled();
+    expect(channel.sendToQueue).toHaveBeenCalledWith('ai-requests.dlq', expect.anything(), { persistent: true });
+  });
 });

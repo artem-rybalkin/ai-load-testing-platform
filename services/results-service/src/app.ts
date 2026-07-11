@@ -58,7 +58,7 @@ export const buildApp = async (
   // Server-to-server callbacks from api-service/workers/ai-service (no cookie).
   // Gated by INTERNAL_API_KEY (X-Internal-Key header) when configured; empty =
   // disabled, same convention as API_KEYS, for local dev.
-  const internalPaths = new Set(['/results/pending']);
+  const internalPaths = new Set(['/results/pending', '/internal/gemini-usage']);
   const internalSuffixes = ['/running', '/fail', '/message', '/live', '/cancel', '/log-line'];
   const isInternalCallback = (url: string, method: string): boolean => {
     if (internalPaths.has(url)) return true;

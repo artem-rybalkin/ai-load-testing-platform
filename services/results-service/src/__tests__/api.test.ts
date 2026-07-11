@@ -1529,6 +1529,67 @@ describe('INTERNAL_API_KEY gating', () => {
     const res = await gatedApp.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
   });
+
+  it('rejects POST /internal/gemini-usage without X-Internal-Key', async () => {
+    const res = await gatedApp.inject({ method: 'POST', url: '/internal/gemini-usage', payload: { teamId: null } });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('accepts POST /internal/gemini-usage with the correct X-Internal-Key', async () => {
+    const res = await gatedApp.inject({
+      method: 'POST',
+      url: '/internal/gemini-usage',
+      headers: { 'x-internal-key': INTERNAL_KEY },
+      payload: { teamId: null },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+// ─── POST /internal/gemini-usage — ai-service's queue-driven quota gate ───────
+// (fixes the gap where test-creation Gemini usage — script generation /
+// description comparison — never touched the per-team gemini_usage counter,
+// making it invisible to both the Team-page dashboard and daily-quota
+// enforcement, which only ever gated the synchronous /ai/* assist endpoints.)
+
+describe('POST /internal/gemini-usage', () => {
+  it('is a no-op allow when teamId is null (dev mode, no auth)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/internal/gemini-usage', payload: { teamId: null } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ allowed: true, error: null });
+  });
+
+  it('allows and increments call_count on the first call of the day', async () => {
+    const team = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('gemini-usage-team-1') RETURNING id`);
+    const teamId = team.rows[0].id;
+
+    const res = await app.inject({ method: 'POST', url: '/internal/gemini-usage', payload: { teamId } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ allowed: true, error: null });
+
+    const { rows } = await pool.query<{ call_count: number }>(
+      `SELECT call_count FROM gemini_usage WHERE team_id = $1 AND usage_date = CURRENT_DATE`, [teamId],
+    );
+    expect(rows[0].call_count).toBe(1);
+  });
+
+  it('returns allowed=false with an error once the daily quota is exhausted', async () => {
+    const team = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('gemini-usage-team-2') RETURNING id`);
+    const teamId = team.rows[0].id;
+    await pool.query(
+      `INSERT INTO team_quotas (team_id, max_concurrent_tests, max_vus_per_test, max_test_duration_seconds, max_scheduled_tests, max_gemini_calls_per_day)
+       VALUES ($1, 10, 100, 3600, 10, 1)`,
+      [teamId],
+    );
+
+    const first = await app.inject({ method: 'POST', url: '/internal/gemini-usage', payload: { teamId } });
+    expect(first.json()).toEqual({ allowed: true, error: null });
+
+    const second = await app.inject({ method: 'POST', url: '/internal/gemini-usage', payload: { teamId } });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().allowed).toBe(false);
+    expect(second.json().error).toMatch(/daily AI quota/i);
+  });
 });
 
 // ─── Security regressions from 2026-07-05 audit ───────────────────────────────

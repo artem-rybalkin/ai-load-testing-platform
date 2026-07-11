@@ -4,12 +4,17 @@
  */
 import amqplib from 'amqplib';
 import { EnrichedTestRequest, internalHeaders } from '@alt/shared';
-import { generateScript, compareDescriptions } from './generator';
+import { generateScript, compareDescriptions, checkAndIncrementGeminiUsage } from './generator';
 import { log } from './logger';
 
 export const BACKEND_QUEUE = 'backend-tests';
 export const CLIENT_QUEUE  = 'client-tests';
 export const MAX_RETRIES   = 3;
+
+/** Distinguishes a quota-exceeded stop from a transient Gemini/network failure —
+ *  retrying an exhausted daily quota can't succeed, so the catch block below
+ *  skips the normal 3-attempt retry loop for this error specifically. */
+class GeminiQuotaExceededError extends Error {}
 
 // A minimal Message shape — only what this module actually reads (msg.content,
 // msg.properties.headers). A real amqplib.Message satisfies this trivially; test
@@ -35,6 +40,8 @@ export interface ProcessorDeps {
   generateScript?:     typeof generateScript;
   /** Override for testing — defaults to real compareDescriptions */
   compareDescriptions?: typeof compareDescriptions;
+  /** Override for testing — defaults to real checkAndIncrementGeminiUsage */
+  checkAndIncrementGeminiUsage?: typeof checkAndIncrementGeminiUsage;
 }
 
 const postMessage = async (resultsUrl: string, testId: string, message: string): Promise<void> => {
@@ -52,6 +59,7 @@ export const processAiRequest = async (
   const { channel, msg, resultsUrl } = deps;
   const genScript  = deps.generateScript     ?? generateScript;
   const compareFn  = deps.compareDescriptions ?? compareDescriptions;
+  const checkQuota = deps.checkAndIncrementGeminiUsage ?? checkAndIncrementGeminiUsage;
 
   const targetQueue = (test.type === 'backend' || test.type === 'flow')
     ? BACKEND_QUEUE
@@ -65,6 +73,12 @@ export const processAiRequest = async (
         test = { ...test, scriptId: undefined, cachedScript: undefined, cachedScriptDescription: undefined };
       } else {
         const same = test.description.trim().toLowerCase() === test.cachedScriptDescription.trim().toLowerCase();
+        // Exact-match REUSE never calls Gemini at all — only charge quota for
+        // the real LLM call compareFn is about to make.
+        if (!same) {
+          const quotaError = await checkQuota(test.projectId);
+          if (quotaError) throw new GeminiQuotaExceededError(quotaError);
+        }
         const verdict = same ? 'REUSE' : await compareFn(test.description, test.cachedScriptDescription, test.projectId);
         log.info({ testId: test.id, verdict }, 'Description comparison result');
         if (verdict === 'REUSE') {
@@ -79,6 +93,9 @@ export const processAiRequest = async (
       }
     }
 
+    const genQuotaError = await checkQuota(test.projectId);
+    if (genQuotaError) throw new GeminiQuotaExceededError(genQuotaError);
+
     // Fire-and-forget — postMessage already swallows its own errors; awaiting it here
     // would block script generation/dispatch on a non-essential status-notification round-trip.
     void postMessage(resultsUrl, test.id, 'Generating test script with AI…');
@@ -91,6 +108,20 @@ export const processAiRequest = async (
     channel.ack(msg);
   } catch (err) {
     log.error({ testId: test.id, err: (err as Error).message }, 'Script generation failed');
+    // Retrying an exhausted daily quota can't succeed — it'll hit the same
+    // wall every time until tomorrow, so fail immediately instead of burning
+    // 3 retry cycles (each up to a minute of Gemini backoff) on a foregone
+    // conclusion, and report the real reason instead of "Gemini unavailable".
+    if (err instanceof GeminiQuotaExceededError) {
+      await postMessage(resultsUrl, test.id, err.message);
+      channel.sendToQueue('ai-requests.dlq', msg.content, { persistent: true });
+      await fetch(`${resultsUrl}/results/${test.id}/fail`, {
+        method: 'POST',
+        headers: internalHeaders(),
+      }).catch(() => {});
+      channel.ack(msg);
+      return;
+    }
     const retryCount = Number(msg.properties.headers?.['x-retry-count'] ?? 0);
     if (retryCount < MAX_RETRIES) {
       const attemptsLeft = MAX_RETRIES - retryCount;

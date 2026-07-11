@@ -541,6 +541,21 @@ Return ONLY valid JSON array. Include only categories with count > 0:
     },
   );
 
+  // ── POST /internal/gemini-usage ───────────────────────────────────────────
+  // Server-to-server only (X-Internal-Key, no session) — ai-service calls this
+  // once per real Gemini call it's about to make while generating/comparing a
+  // test script, so that queue-driven test-creation usage is no longer
+  // invisible to the same per-team daily quota the /ai/* endpoints above
+  // already enforce. teamId absent/null (dev mode, no auth) is a no-op allow,
+  // matching checkAndIncrementGeminiUsage's own convention.
+  app.post<{ Body: { teamId?: string | null } }>(
+    '/internal/gemini-usage',
+    async (request, reply) => {
+      const error = await checkAndIncrementGeminiUsage(pool, request.body?.teamId ?? undefined);
+      return reply.send({ allowed: !error, error });
+    },
+  );
+
   // keep rPool in scope (used by suggest-settings / suggest-thresholds)
   void rPool;
 }

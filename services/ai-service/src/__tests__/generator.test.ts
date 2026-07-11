@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { generateScript, compareDescriptions } from '../generator';
+import { generateScript, compareDescriptions, checkAndIncrementGeminiUsage } from '../generator';
 import type { TestRequest } from '@alt/shared';
 
 // Mock the shared AI provider abstraction — factory must be self-contained (vi.mock is hoisted)
@@ -95,6 +95,23 @@ describe('FLOW_PROMPT — extraction rules', () => {
   it('does NOT include the dynamic-URL tagging instruction when no extractions are defined', async () => {
     await generateScript(baseFlow());
     expect(await getLastPrompt()).not.toContain('Dynamic URL paths');
+  });
+});
+
+describe('FLOW_PROMPT — failure logging with response content', () => {
+  it('instructs logging a failed check with a truncated response body, per group', async () => {
+    await generateScript(baseFlow());
+    const prompt = await getLastPrompt();
+    expect(prompt).toContain('Log failures WITH response content');
+    expect(prompt).toContain('res.body');
+    expect(prompt).toContain("slice(0, 500)");
+  });
+
+  it('includes literal FAILED console.error examples in the trailing template, gated on check()\'s own return value', async () => {
+    await generateScript(baseFlow());
+    const prompt = await getLastPrompt();
+    const occurrences = prompt.match(/if \(!ok\) console\.error\(`FAILED \[Step \d: [^\]]+\] \$\{res\.status\} \$\{res\.request\.url\} body=\$\{\(res\.body \|\| ''\)\.slice\(0, 500\)\}`\);/g);
+    expect(occurrences?.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -323,18 +340,21 @@ describe('BACKEND_PROMPT — basic content', () => {
     expect(await getLastPrompt()).not.toContain('Custom headers');
   });
 
-  it('instructs logging failed requests via console.error', async () => {
+  it('instructs logging failed requests (with response content) via console.error', async () => {
     await generateScript(baseBackend());
     const prompt = await getLastPrompt();
-    expect(prompt).toContain('Log failures');
+    expect(prompt).toContain('Log failures WITH response content');
     expect(prompt).toContain('console.error');
+    expect(prompt).toContain('res.body');
   });
 
-  it('includes literal FAILED console.error examples for both sample requests, unevaluated', async () => {
+  it('includes literal FAILED console.error examples for both sample requests, gated on check()\'s own return value', async () => {
     await generateScript(baseBackend());
     const prompt = await getLastPrompt();
-    const occurrences = prompt.match(/if \(res\.status === 0 \|\| res\.status >= 400\) console\.error\(`FAILED \$\{res\.status\} \$\{res\.request\.url\}`\);/g);
-    expect(occurrences).toHaveLength(2);
+    // 3, not 2: the Requirements bullet's own inline example matches the same
+    // pattern as the two "Common patterns" snippets below it.
+    const occurrences = prompt.match(/if \(!ok\d? *\) console\.error\(`FAILED \$\{res\d?\.status\} \$\{res\d?\.request\.url\} body=\$\{\(res\d?\.body \|\| ''\)\.slice\(0, 500\)\}`\);/g);
+    expect(occurrences).toHaveLength(3);
   });
 
   it('defaults to p(90)<800/p(95)<1000/p(99)<2000 and rate<0.01 when no thresholds are set on the request', async () => {
@@ -686,6 +706,68 @@ describe('getProviderSetting — per-team resolution', () => {
 
     const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/system/ai-provider'))?.[0]);
     expect(url).toContain(`teamId=${encodeURIComponent('team-compare')}`);
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+});
+
+// ─── checkAndIncrementGeminiUsage — Gemini quota gating for the queue-driven path ──
+
+describe('checkAndIncrementGeminiUsage', () => {
+  it('returns null without calling fetch when teamId is undefined', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await checkAndIncrementGeminiUsage(undefined)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('returns null without calling fetch when teamId is null', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await checkAndIncrementGeminiUsage(null)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('POSTs teamId to /internal/gemini-usage and returns null when allowed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ allowed: true, error: null }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await checkAndIncrementGeminiUsage('team-quota');
+    expect(result).toBeNull();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/internal/gemini-usage');
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ teamId: 'team-quota' });
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('returns the error string when the team is over quota', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ allowed: false, error: 'Team has reached its daily AI quota (max 10 calls/day)' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await checkAndIncrementGeminiUsage('team-quota')).toBe('Team has reached its daily AI quota (max 10 calls/day)');
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
+  });
+
+  it('fails open (returns null) when results-service is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    expect(await checkAndIncrementGeminiUsage('team-quota')).toBeNull();
+  });
+
+  it('fails open (returns null) on a non-OK response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+    expect(await checkAndIncrementGeminiUsage('team-quota')).toBeNull();
 
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch disabled in tests')));
   });

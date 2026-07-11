@@ -32,6 +32,41 @@ const getProviderSetting = async (teamId?: string | null): Promise<AiProviderSet
   return cached?.setting ?? DEFAULT_AI_PROVIDER_SETTING;
 };
 
+/**
+ * Atomically checks the team's daily Gemini quota AND records usage via
+ * results-service, so the queue-driven script-generation/comparison path
+ * (this file) is no longer invisible to the same per-team counter the
+ * /ai/* HTTP endpoints already enforce. Called once per real Gemini call
+ * this file is about to make — never for the free exact-description-match
+ * REUSE shortcut in processor.ts, which makes no LLM call at all.
+ * teamId undefined/null (dev mode, no auth) always resolves to allowed,
+ * matching checkAndIncrementGeminiUsage's own convention on the other side.
+ * Fails open (allowed) if results-service is unreachable — a transient
+ * quota-tracking hiccup should not block test creation outright, same
+ * non-fatal-fallback philosophy as every other AI feature in this codebase.
+ */
+export const checkAndIncrementGeminiUsage = async (teamId?: string | null): Promise<string | null> => {
+  if (!teamId) return null;
+  try {
+    const res = await fetch(`${RESULTS_URL}/internal/gemini-usage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(INTERNAL_API_KEY ? { 'X-Internal-Key': INTERNAL_API_KEY } : {}),
+      },
+      body: JSON.stringify({ teamId }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const data = await res.json() as { allowed: boolean; error: string | null };
+      return data.allowed ? null : data.error;
+    }
+  } catch {
+    // results-service unreachable — fail open rather than blocking test creation
+  }
+  return null;
+};
+
 // k6's own options.thresholds is a separate mechanism from the app's post-test
 // SLO analysis (analyzeResult() in @alt/shared, which already honors test.thresholds).
 // Without this, the generated script always hardcoded p(95)<1000 / rate<0.01
@@ -155,7 +190,7 @@ Requirements:
 ${isCapacity
   ? '- This is a capacity/stress profile — use EXACTLY the options.thresholds object given in the capacity load-profile instructions above (with abortOnFail), not the plain-string form'
   : `- Always include multi-percentile thresholds — not just p(95) — plus error rate and checks: http_req_duration: ['p(90)<${p90}', 'p(95)<${p95}', 'p(99)<${p99}'] (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a request that returns 200 but with the wrong body)`}
-- Log failures: if res.status is 0 or >= 400, console.error a line with the status and URL (e.g. \`console.error(\`FAILED \${res.status} \${res.request.url}\`)\`) right after the check — this is the only way a failed request shows up in the execution log, since k6 does not print anything for a failing check or a non-2xx response on its own
+- Log failures WITH response content: capture check()'s boolean return value in a variable, and when it's false, console.error a line with the status, URL, and a truncated response body (e.g. \`const ok = check(res, {...}); if (!ok) console.error(\`FAILED \${res.status} \${res.request.url} body=\${(res.body || '').slice(0, 500)}\`);\`) right after the check — using check()'s own return value (not a separate status-only condition) means this also fires for a 2xx response that fails a body-correctness assertion, not just a non-2xx status. This is the only way a failure's actual response content shows up in the execution log, since k6 prints nothing for a failing check on its own
 - For JSON APIs: set Content-Type: application/json header, use JSON.stringify for request body, call res.json() to parse
 - For authenticated endpoints: read credentials from __ENV.USERNAME / __ENV.PASSWORD / __ENV.API_TOKEN — never hardcode secrets
 - Return ONLY the JavaScript code, no markdown, no explanation
@@ -165,13 +200,13 @@ Common patterns to follow:
 const payload = JSON.stringify({ username: __ENV.USERNAME, password: __ENV.PASSWORD });
 const params = { headers: { 'Content-Type': 'application/json', 'Authorization': \`Bearer \${__ENV.API_TOKEN}\` } };
 const res = http.post('${test.targetUrl}', payload, params);
-check(res, { 'status 200': (r) => r.status === 200, 'has id': (r) => r.json('id') !== undefined });
-if (res.status === 0 || res.status >= 400) console.error(\`FAILED \${res.status} \${res.request.url}\`);
+const ok = check(res, { 'status 200': (r) => r.status === 200, 'has id': (r) => r.json('id') !== undefined });
+if (!ok) console.error(\`FAILED \${res.status} \${res.request.url} body=\${(res.body || '').slice(0, 500)}\`);
 
 // GET with query params
-const res = http.get(\`\${__ENV.BASE_URL}/items?page=1&limit=20\`, params);
-check(res, { 'status 200': (r) => r.status === 200, 'non-empty list': (r) => r.json('items').length > 0 });
-if (res.status === 0 || res.status >= 400) console.error(\`FAILED \${res.status} \${res.request.url}\`);
+const res2 = http.get(\`\${__ENV.BASE_URL}/items?page=1&limit=20\`, params);
+const ok2 = check(res2, { 'status 200': (r) => r.status === 200, 'non-empty list': (r) => r.json('items').length > 0 });
+if (!ok2) console.error(\`FAILED \${res2.status} \${res2.request.url} body=\${(res2.body || '').slice(0, 500)}\`);
 
 Structure:
 import http from 'k6/http';
@@ -387,6 +422,7 @@ Requirements:
   * Search/filter responses: assert at least one result matches the search term (e.g. 'result matches name': (r) => { try { const d = r.json(); return Array.isArray(d) && d.some(x => x.name === vars.productName); } catch { return false; } })
   * Create/POST: assert the returned object has the expected field(s) from the request body
   * Wrap body assertions in try/catch inside the check callback so a parse failure is a check failure (false), not an exception
+- Log failures WITH response content: capture check()'s boolean return value in a variable, and when it's false, console.error a line with the step name, status, URL, and a truncated response body (e.g. \`const ok = check(res, {...}); if (!ok) console.error(\`FAILED [Step N] \${res.status} \${res.request.url} body=\${(res.body || '').slice(0, 500)}\`);\`) right after every check() call in every group — using check()'s own return value (not a separate status-only condition) means this also fires for a 2xx response that fails a body-correctness assertion, not just a non-2xx status. This is the only way a failure's actual response content shows up in the execution log, since k6 prints nothing for a failing check on its own
 - After all groups, add sleep(1)
 ${isCapacity
   ? '- This is a capacity/stress profile — use EXACTLY the options.thresholds object given in the capacity load-profile instructions above (with abortOnFail), not the plain-string form'
@@ -405,10 +441,11 @@ ${useSetup ? `export function setup() {
   // Step 1 runs ONCE here, not per-VU — same defensive extraction rules as any other step.
   group('Step 1: Login', function() {
     const res = http.post('https://example.com/auth', JSON.stringify({ u: 'user' }), { headers: { 'Content-Type': 'application/json' } });
-    check(res, {
+    const ok = check(res, {
       'login 200': (r) => r.status === 200,
       'has token': (r) => { try { return !!r.json('access_token'); } catch { return false; } },
     });
+    if (!ok) console.error(\`FAILED [Step 1: Login] \${res.status} \${res.request.url} body=\${(res.body || '').slice(0, 500)}\`);
     vars.token = (res.status === 200 && res.json('access_token')) || '';   // defensive — falls back to '' so steps 2..N still run
     vars.userId = (res.status === 200 && res.json('user_id')) || '';      // defensive
   });
@@ -423,10 +460,11 @@ export default function(data) {
     // Dynamic path segment (vars.userId) — tag with a fixed name so k6 aggregates
     // metrics per logical endpoint instead of fragmenting into one series per ID.
     const res = http.get(\`https://example.com/users/\${vars.userId}/data\`, { tags: { name: '/users/:id/data' }, headers: { 'Authorization': \`Bearer \${vars.token}\` } });
-    check(res, {
+    const ok = check(res, {
       'data 200': (r) => r.status === 200,
       'non-empty list': (r) => { try { return r.json().length > 0; } catch { return false; } },
     });
+    if (!ok) console.error(\`FAILED [Step 2: Fetch data] \${res.status} \${res.request.url} body=\${(res.body || '').slice(0, 500)}\`);
   });
 
   sleep(1);
@@ -438,10 +476,11 @@ export default function(data) {
   // CRITICAL: never use exec.vu.abort() — all groups must always run so every step appears in metrics.
   group('Step 1: Login', function() {
     const res = http.post('https://example.com/auth', JSON.stringify({ u: 'user' }), { headers: { 'Content-Type': 'application/json' } });
-    check(res, {
+    const ok = check(res, {
       'login 200': (r) => r.status === 200,
       'has token': (r) => { try { return !!r.json('access_token'); } catch { return false; } },
     });
+    if (!ok) console.error(\`FAILED [Step 1: Login] \${res.status} \${res.request.url} body=\${(res.body || '').slice(0, 500)}\`);
     vars.token = (res.status === 200 && res.json('access_token')) || '';   // defensive — falls back to '' so step 2 still runs
     vars.userId = (res.status === 200 && res.json('user_id')) || '';      // defensive
   });
@@ -450,10 +489,11 @@ export default function(data) {
     // Dynamic path segment (vars.userId) — tag with a fixed name so k6 aggregates
     // metrics per logical endpoint instead of fragmenting into one series per ID.
     const res = http.get(\`https://example.com/users/\${vars.userId}/data\`, { tags: { name: '/users/:id/data' }, headers: { 'Authorization': \`Bearer \${vars.token}\` } });
-    check(res, {
+    const ok = check(res, {
       'data 200': (r) => r.status === 200,
       'non-empty list': (r) => { try { return r.json().length > 0; } catch { return false; } },
     });
+    if (!ok) console.error(\`FAILED [Step 2: Fetch data] \${res.status} \${res.request.url} body=\${(res.body || '').slice(0, 500)}\`);
   });
 
   sleep(1);
