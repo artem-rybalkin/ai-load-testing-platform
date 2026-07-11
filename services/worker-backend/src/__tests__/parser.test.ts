@@ -88,6 +88,11 @@ describe('parseK6Output', () => {
     expect(result.requestsFailed).toBe(15);
   });
 
+  it('does not set stoppedEarly for a normal completed run', () => {
+    const result = parseK6Output(makeK6Output());
+    expect(result.stoppedEarly).toBeUndefined();
+  });
+
   it('returns zeroes for empty output without crashing', () => {
     const result = parseK6Output('');
 
@@ -219,6 +224,56 @@ http_req_duration..........: avg=200ms min=100ms med=180ms max=500ms p(90)=350ms
     expect(Number.isNaN(result.rps)).toBe(false);
     expect(result.requestsTotal).toBe(0);
     expect(result.avgResponseTime).toBe(0);
+  });
+});
+
+// ─── stoppedEarly (capacity/stress abortOnFail) ────────────────────────────────
+
+describe('parseK6Output — stoppedEarly detection', () => {
+  // Real k6 output shape, captured from a live capacity-profile test whose
+  // abortOnFail threshold fired partway through the configured ramp.
+  const abortedOutput = (): string => `
+     http_req_duration..............: avg=3.85s    min=53.96ms       med=108.05ms max=57.78s   p(90)=294.55ms p(95)=57.62s   p(99)=57.78s
+     http_reqs......................: 93     1.030155/s
+     vus............................: 16     min=1          max=16
+     vus_max........................: 50     min=50         max=50
+running (1m30.3s), 00/50 VUs, 88 complete and 16 interrupted iterations
+default ✗ [  28% ] 05/50 VUs  1m33.6s/5m30.0s
+time="2026-07-11T20:31:17Z" level=error msg="thresholds on metrics 'http_req_duration, http_req_failed' were crossed; at least one has abortOnFail enabled, stopping test prematurely"
+`;
+
+  it('sets stoppedEarly with the crossed threshold metric names', () => {
+    const result = parseK6Output(abortedOutput());
+    expect(result.stoppedEarly?.thresholds).toEqual(['http_req_duration', 'http_req_failed']);
+  });
+
+  it('extracts vusReached and vusTarget from the vus/vus_max summary lines', () => {
+    const result = parseK6Output(abortedOutput());
+    expect(result.stoppedEarly?.vusReached).toBe(16);
+    expect(result.stoppedEarly?.vusTarget).toBe(50);
+  });
+
+  it('handles a single crossed threshold (no comma) correctly', () => {
+    const output = `time="2026-01-01T00:00:00Z" level=error msg="thresholds on metrics 'http_req_duration' were crossed; at least one has abortOnFail enabled, stopping test prematurely"`;
+    const result = parseK6Output(output);
+    expect(result.stoppedEarly?.thresholds).toEqual(['http_req_duration']);
+  });
+
+  it('omits vusReached/vusTarget when the summary has no vus lines (very early abort)', () => {
+    const output = `time="2026-01-01T00:00:00Z" level=error msg="thresholds on metrics 'http_req_duration' were crossed; at least one has abortOnFail enabled, stopping test prematurely"`;
+    const result = parseK6Output(output);
+    expect(result.stoppedEarly?.vusReached).toBeUndefined();
+    expect(result.stoppedEarly?.vusTarget).toBeUndefined();
+  });
+
+  it('does not confuse a threshold failure WITHOUT abortOnFail for a stopped-early run', () => {
+    // A normal (non-capacity) test that simply fails its thresholds at the end
+    // of a full run — no abortOnFail, so k6 never prints the "stopping test
+    // prematurely" message even though it still exits non-zero.
+    const output = makeK6Output({ total: 100, failPct: 15 }) +
+      '\nERRO[0031] thresholds on metrics \'http_req_failed\' were not met';
+    const result = parseK6Output(output);
+    expect(result.stoppedEarly).toBeUndefined();
   });
 });
 

@@ -277,6 +277,16 @@ export interface BackendMetrics {
   // Optional: absent for results recorded before this metric was tracked.
   checksTotal?: number;
   checksFailed?: number;
+  // Set when a capacity/stress-profile test's abortOnFail threshold fired,
+  // stopping k6 before it reached the configured duration/VUs — without this
+  // the result page shows a run that's mysteriously shorter than requested
+  // with no explanation. vusReached/vusTarget omitted if k6's summary output
+  // didn't include a parseable vus/vus_max line (e.g. a very early abort).
+  stoppedEarly?: {
+    thresholds: string[]; // metric names that breached, e.g. ['http_req_duration', 'http_req_failed']
+    vusReached?: number;
+    vusTarget?: number;
+  };
 }
 
 export interface LighthouseScore {

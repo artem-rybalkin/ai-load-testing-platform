@@ -97,6 +97,66 @@ describe('Result detail — stale status_message visibility', () => {
   });
 });
 
+describe('Result detail — stopped-early banner (capacity/stress abortOnFail)', () => {
+  const makeCompletedResult = (overrides: Partial<TestResult> = {}) => makeResult({
+    status: 'completed',
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+    metrics: {
+      type: 'backend',
+      requestsTotal: 93,
+      requestsFailed: 6,
+      avgResponseTime: 3850,
+      p50ResponseTime: 112,
+      p95ResponseTime: 57630,
+      p99ResponseTime: 57780,
+      rps: 1.03,
+    } as never,
+    ...overrides,
+  });
+
+  it('shows the stopped-early banner with crossed thresholds and VU counts when present', async () => {
+    mockGetResult.mockResolvedValue({
+      result: makeCompletedResult({
+        metrics: {
+          type: 'backend', requestsTotal: 93, requestsFailed: 6, avgResponseTime: 3850,
+          p50ResponseTime: 112, p95ResponseTime: 57630, p99ResponseTime: 57780, rps: 1.03,
+          stoppedEarly: { thresholds: ['http_req_duration', 'http_req_failed'], vusReached: 16, vusTarget: 50 },
+        } as never,
+      }),
+    });
+    render(<ResultPage />);
+
+    expect(await screen.findByText(/test stopped early/i)).toBeInTheDocument();
+    expect(screen.getByText(/http_req_duration, http_req_failed/)).toBeInTheDocument();
+    expect(screen.getByText(/Reached 16 of the configured 50 target VUs/)).toBeInTheDocument();
+  });
+
+  it('does not show the banner for a normal completed run', async () => {
+    mockGetResult.mockResolvedValue({ result: makeCompletedResult() });
+    render(<ResultPage />);
+
+    await waitFor(() => expect(screen.getByText('93')).toBeInTheDocument()); // requestsTotal metric cell, confirms render completed
+    expect(screen.queryByText(/test stopped early/i)).not.toBeInTheDocument();
+  });
+
+  it('omits the VU-count sentence when vusReached/vusTarget are absent', async () => {
+    mockGetResult.mockResolvedValue({
+      result: makeCompletedResult({
+        metrics: {
+          type: 'backend', requestsTotal: 93, requestsFailed: 6, avgResponseTime: 3850,
+          p50ResponseTime: 112, p95ResponseTime: 57630, p99ResponseTime: 57780, rps: 1.03,
+          stoppedEarly: { thresholds: ['http_req_duration'] },
+        } as never,
+      }),
+    });
+    render(<ResultPage />);
+
+    expect(await screen.findByText(/test stopped early/i)).toBeInTheDocument();
+    expect(screen.queryByText(/target VUs/)).not.toBeInTheDocument();
+  });
+});
+
 describe('Result detail — self-healing poll for in-flight tests', () => {
   it('periodically re-fetches the result while status is pending, to recover from missed WebSocket events', async () => {
     const setIntervalSpy = vi.spyOn(global, 'setInterval');

@@ -49,6 +49,35 @@ export const parseK6Output = (output: string): BackendMetrics => {
     p95ResponseTime: getPercentile('http_req_duration', '95'),
     p99ResponseTime: getPercentile('http_req_duration', '99'),
     rps: getRate('http_reqs'),
+    ...parseStoppedEarly(output),
+  };
+};
+
+/**
+ * A capacity/stress-profile test's k6 options set abortOnFail on its
+ * thresholds (see api-service/options.ts buildK6Options + ai-service's
+ * profileInstructions) specifically so k6 stops as soon as it proves the
+ * target broke, instead of burning the rest of the configured ramp. Without
+ * this, the result page shows a run that's mysteriously shorter than the
+ * requested duration/VUs with no explanation — this surfaces k6's own
+ * end-of-run log line (which already states exactly why) as structured data
+ * instead of leaving it buried in the execution log.
+ */
+const parseStoppedEarly = (output: string): { stoppedEarly?: NonNullable<BackendMetrics['stoppedEarly']> } => {
+  const reasonMatch = output.match(
+    /thresholds on metrics '([^']+)' were crossed; at least one has abortOnFail enabled, stopping test prematurely/,
+  );
+  if (!reasonMatch) return {};
+
+  const vusReachedMatch = output.match(/^\s*vus\.+:\s*\d+\s+min=\d+\s+max=(\d+)/m);
+  const vusTargetMatch  = output.match(/^\s*vus_max\.+:\s*\d+\s+min=\d+\s+max=(\d+)/m);
+
+  return {
+    stoppedEarly: {
+      thresholds: reasonMatch[1].split(',').map(s => s.trim()),
+      ...(vusReachedMatch ? { vusReached: parseInt(vusReachedMatch[1], 10) } : {}),
+      ...(vusTargetMatch  ? { vusTarget:  parseInt(vusTargetMatch[1], 10) }  : {}),
+    },
   };
 };
 

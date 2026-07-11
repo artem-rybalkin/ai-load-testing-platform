@@ -552,6 +552,23 @@ export default function ResultPage() {
         ) : (
           <div className="flex flex-col gap-5">
 
+            {/* Capacity/stress profile abortOnFail — k6 stopped before reaching the
+                configured duration/VUs because it already proved the target broke.
+                Without this, the run just looks mysteriously short with no explanation. */}
+            {isBackend && bm.stoppedEarly && (
+              <div className="p-3.5 bg-amber-bg border border-amber-fg/25 rounded-control text-[12.5px]">
+                <p className="font-semibold text-amber-badge-fg">⚠ Test stopped early</p>
+                <p className="text-tx-3 mt-1">
+                  k6 aborted the run because {bm.stoppedEarly.thresholds.length > 1 ? 'these thresholds were' : 'this threshold was'} breached:{' '}
+                  <span className="font-mono">{bm.stoppedEarly.thresholds.join(', ')}</span>.
+                  {bm.stoppedEarly.vusReached != null && bm.stoppedEarly.vusTarget != null && (
+                    <> Reached {bm.stoppedEarly.vusReached} of the configured {bm.stoppedEarly.vusTarget} target VUs before stopping.</>
+                  )}
+                  {' '}This is expected for a capacity/stress test — it stops as soon as it proves the target broke instead of running the full configured duration.
+                </p>
+              </div>
+            )}
+
             {/* Metric cells */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
               {isBackend ? (
@@ -642,7 +659,7 @@ export default function ResultPage() {
                     <div className="space-y-1">
                       {Object.entries(bm.statusCodes!).sort().map(([code, count]) => (
                         <div key={code} className="flex items-center justify-between text-[12.5px] font-mono">
-                          <span className={code.startsWith('2') ? 'text-green-fg' : code.startsWith('4') || code.startsWith('5') ? 'text-red-fg' : 'text-tx-3'}>{code}</span>
+                          <span className={code.startsWith('2') ? 'text-green-fg' : code.startsWith('4') || code.startsWith('5') ? 'text-red-fg' : 'text-tx-3'}>{code === '0' ? '0 (no response)' : code}</span>
                           <span className="text-tx-3">×{count}</span>
                         </div>
                       ))}
@@ -654,7 +671,7 @@ export default function ResultPage() {
                       <div className="space-y-1 mt-1.5">
                         {Object.entries(bm.statusCodes!).sort().map(([code, count]) => (
                           <div key={code} className="flex items-center justify-between text-[12px] font-mono">
-                            <span className={code.startsWith('2') ? 'text-green-fg' : 'text-red-fg'}>{code}</span>
+                            <span className={code.startsWith('2') ? 'text-green-fg' : 'text-red-fg'}>{code === '0' ? '0 (no response)' : code}</span>
                             <span className="text-tx-4">×{count}</span>
                           </div>
                         ))}
