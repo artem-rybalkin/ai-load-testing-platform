@@ -66,6 +66,9 @@ jobs:
           npx tsc --noEmit -p services/results-service/tsconfig.typecheck.json
           npx tsc --noEmit -p services/worker-backend/tsconfig.json
           npx tsc --noEmit -p services/ai-service/tsconfig.json
+          npx tsc --noEmit -p services/worker-client/tsconfig.json
+          npx tsc --noEmit -p services/analyser-service/tsconfig.json
+          npx tsc --noEmit -p services/recorder-service/tsconfig.json
 
       - name: Unit + Integration tests
         run: npm test -- --coverage --reporter=verbose
