@@ -200,7 +200,7 @@ function extractValue(request: RecordedRequest, rule: ExtractRule): string | und
         .find(([k]) => k.toLowerCase() === 'set-cookie')?.[1];
       if (!setCookie) return undefined;
       for (const part of setCookie.split('\n')) {
-        const pair = part.split(';')[0];
+        const pair = part.split(';')[0]!; // .split() always returns at least one element
         const eq = pair.indexOf('=');
         if (eq === -1) continue;
         if (pair.slice(0, eq).trim() === rule.expression) return pair.slice(eq + 1).trim();
@@ -285,7 +285,7 @@ function buildIndexMap(
   const map = new Map<number, number>();
   let filteredIdx = 0;
   for (let reqIdx = 0; reqIdx < requests.length && filteredIdx < steps.length; reqIdx++) {
-    if (requests[reqIdx].responseStatus < 500) {
+    if (requests[reqIdx]!.responseStatus < 500) { // guarded by the loop's reqIdx < requests.length condition
       map.set(reqIdx, filteredIdx++);
     }
   }
@@ -308,6 +308,10 @@ function applyCorrelations(
     indexMap ? (indexMap.get(unfilteredIdx) ?? -1) : unfilteredIdx;
 
   for (const corr of correlations) {
+    // corr.sourceStepIndex is AI-supplied and not otherwise validated — an out-of-range
+    // index (e.g. a hallucinated value) must skip this entry, not crash the whole pass.
+    if (corr.sourceStepIndex < 0 || corr.sourceStepIndex >= requests.length) continue;
+
     const filteredSourceIdx = toFilteredIdx(corr.sourceStepIndex);
     if (filteredSourceIdx < 0 || filteredSourceIdx >= result.length) continue;
 
@@ -315,15 +319,15 @@ function applyCorrelations(
     const rule: ExtractRule = { source: corr.source, expression: corr.expression };
 
     // Add extract rule to the source step
-    result[filteredSourceIdx].extract = {
-      ...result[filteredSourceIdx].extract,
+    result[filteredSourceIdx]!.extract = {
+      ...result[filteredSourceIdx]!.extract,
       [varName]: rule,
     };
 
     // Replace the literal value with {{varName}} in the steps that consume it.
     // extractValue uses the UNFILTERED request index (corr.sourceStepIndex) — correct:
     // we need the original captured response body/headers, not the filtered step.
-    const value = extractValue(requests[corr.sourceStepIndex], rule);
+    const value = extractValue(requests[corr.sourceStepIndex]!, rule);
     let substitutedIn: number[] = [];
     if (value && value.length >= 3) {
       for (const unfilteredUsedIdx of corr.usedInStepIndices) {
@@ -332,7 +336,7 @@ function applyCorrelations(
         // Use the UNFILTERED request index to retrieve the original captured headers
         // (toFlowSteps strips auth/cookie headers from step.headers; substituteValue
         // needs the raw capture to detect when the value was sent via a stripped header).
-        result[filteredUsedIdx] = substituteValue(result[filteredUsedIdx], value, varName, requests[unfilteredUsedIdx]?.headers);
+        result[filteredUsedIdx] = substituteValue(result[filteredUsedIdx]!, value, varName, requests[unfilteredUsedIdx]?.headers); // guarded by the bounds check above
         substitutedIn.push(filteredUsedIdx);
       }
     }
@@ -419,7 +423,7 @@ export interface DeduplicationSuggestion {
   indices: number[];          // step indices that are near-duplicates
   commonPath: string;         // shared endpoint path
   suggestion: string;         // human-readable merge suggestion
-  paramKey?: string;          // suggested query-param key to parameterise
+  paramKey?: string | undefined; // suggested query-param key to parameterise, when one varies
 }
 
 /** Identify near-duplicate steps (same endpoint, varying query params) and suggest consolidation. */
@@ -428,22 +432,22 @@ export function detectDuplicateSteps(steps: FlowStep[]): DeduplicationSuggestion
 
   for (let i = 0; i < steps.length; i++) {
     try {
-      const parsed = new URL(steps[i].url);
-      const pathKey = `${steps[i].method}\x00${parsed.origin}${parsed.pathname}`;
+      const parsed = new URL(steps[i]!.url); // guarded by the loop's i < steps.length condition
+      const pathKey = `${steps[i]!.method}\x00${parsed.origin}${parsed.pathname}`;
       if (!pathGroups[pathKey]) pathGroups[pathKey] = [];
-      pathGroups[pathKey].push({ index: i, url: steps[i].url });
+      pathGroups[pathKey]!.push({ index: i, url: steps[i]!.url });
     } catch { /* ignore invalid URLs */ }
   }
 
   const suggestions: DeduplicationSuggestion[] = [];
   for (const [pathKey, group] of Object.entries(pathGroups)) {
     if (group.length < 2) continue;
-    const [, path] = pathKey.split('\x00');
+    const path = pathKey.split('\x00')[1]!; // pathKey is always built with exactly one \x00 separator above
     // Find the query param that varies between calls
     const paramSets = group.map(g => {
       try { return Object.fromEntries(new URL(g.url).searchParams); } catch { return {}; }
     });
-    const varyingKeys = Object.keys(paramSets[0] ?? {}).filter(k =>
+    const varyingKeys = Object.keys(paramSets[0] ?? {}).filter(k => // group.length >= 2 guaranteed by the check above
       new Set(paramSets.map(p => p[k])).size > 1
     );
 

@@ -9,7 +9,7 @@ interface PendingRequest {
   url: string;
   method: string;
   headers: Record<string, string>;
-  body?: string;
+  body?: string | undefined;
   timestamp: number;
 }
 
@@ -55,7 +55,7 @@ export function compileIgnorePatterns(patterns: string[]): RegExp[] {
     .map(p => {
       const regexMatch = p.match(/^\/(.+)\/([gimsuy]*)$/);
       if (regexMatch) {
-        try { return new RegExp(regexMatch[1], regexMatch[2]); } catch { return null; }
+        try { return new RegExp(regexMatch[1]!, regexMatch[2]!); } catch { return null; } // both capture groups are required by the pattern (group 2 may capture an empty string, but always participates)
       }
       // Plain string → escape and use as substring match
       return new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
@@ -74,7 +74,7 @@ export function computeThinkTimes(requests: RecordedRequest[]): number[] {
   return filtered.map((r, i) => {
     if (i === 0) return 0;
     const curr = r.timestamp ?? 0;
-    const prev = filtered[i - 1].timestamp ?? 0;
+    const prev = filtered[i - 1]!.timestamp ?? 0; // i === 0 returns above, so i - 1 is always a valid index here
     if (!curr || !prev) return 0;
     // Cap at 10s — longer gaps are usually page load wait time, not think time
     return Math.min(Math.max(curr - prev, 0), 10_000);
@@ -154,7 +154,7 @@ export async function startSession(
   const browser = await puppeteer.launch({
     headless: false,
     executablePath: chromiumPath,
-    env: launchEnv as NodeJS.ProcessEnv | undefined,
+    ...(launchEnv ? { env: launchEnv } : {}), // omit the key entirely rather than pass env: undefined
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',

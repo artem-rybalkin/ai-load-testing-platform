@@ -37,7 +37,7 @@ describe('compileIgnorePatterns', () => {
   });
 
   it('converts a plain string to a substring-match RegExp', () => {
-    const [pattern] = compileIgnorePatterns(['analytics']);
+    const pattern = compileIgnorePatterns(['analytics'])[0]!;
     expect(pattern).toBeInstanceOf(RegExp);
     expect(pattern.test('https://api.example.com/analytics/track')).toBe(true);
     expect(pattern.test('https://api.example.com/users')).toBe(false);
@@ -45,26 +45,26 @@ describe('compileIgnorePatterns', () => {
 
   it('escapes special regex characters in plain strings', () => {
     // The dot in "api.example.com" should match literally, not any char
-    const [pattern] = compileIgnorePatterns(['api.example.com']);
+    const pattern = compileIgnorePatterns(['api.example.com'])[0]!;
     expect(pattern.test('api.example.com/path')).toBe(true);
     expect(pattern.test('apiXexampleYcom')).toBe(false);
   });
 
   it('escapes asterisk and plus signs in plain strings', () => {
-    const [pattern] = compileIgnorePatterns(['a+b*c']);
+    const pattern = compileIgnorePatterns(['a+b*c'])[0]!;
     expect(pattern.test('a+b*c')).toBe(true);
     expect(pattern.test('aaabbbccc')).toBe(false);
   });
 
   it('converts a /regex/flags pattern to a RegExp with those flags', () => {
-    const [pattern] = compileIgnorePatterns(['/analytics/i']);
+    const pattern = compileIgnorePatterns(['/analytics/i'])[0]!;
     expect(pattern.flags).toContain('i');
     expect(pattern.test('ANALYTICS')).toBe(true);
     expect(pattern.test('Analytics')).toBe(true);
   });
 
   it('converts a /regex/ pattern without flags', () => {
-    const [pattern] = compileIgnorePatterns(['/\\.js$/']);
+    const pattern = compileIgnorePatterns(['/\\.js$/'])[0]!;
     expect(pattern.test('bundle.js')).toBe(true);
     expect(pattern.test('bundle.css')).toBe(false);
   });
@@ -80,12 +80,12 @@ describe('compileIgnorePatterns', () => {
   });
 
   it('trims whitespace from each pattern before processing', () => {
-    const [pattern] = compileIgnorePatterns(['  analytics  ']);
+    const pattern = compileIgnorePatterns(['  analytics  '])[0]!;
     expect(pattern.test('analytics')).toBe(true);
   });
 
   it('supports multiple flags on a regex pattern', () => {
-    const [pattern] = compileIgnorePatterns(['/foo/gi']);
+    const pattern = compileIgnorePatterns(['/foo/gi'])[0]!;
     expect(pattern.flags).toContain('g');
     expect(pattern.flags).toContain('i');
   });
@@ -93,9 +93,9 @@ describe('compileIgnorePatterns', () => {
   it('handles an array of multiple valid plain strings', () => {
     const result = compileIgnorePatterns(['analytics', 'hotjar', 'sentry']);
     expect(result).toHaveLength(3);
-    expect(result[0].test('analytics')).toBe(true);
-    expect(result[1].test('hotjar.com')).toBe(true);
-    expect(result[2].test('sentry.io')).toBe(true);
+    expect(result[0]!.test('analytics')).toBe(true);
+    expect(result[1]!.test('hotjar.com')).toBe(true);
+    expect(result[2]!.test('sentry.io')).toBe(true);
   });
 });
 
@@ -114,7 +114,7 @@ describe('toFlowSteps', () => {
     ];
     const steps = toFlowSteps(requests);
     expect(steps).toHaveLength(1);
-    expect(steps[0].url).toBe('https://api.example.com/ok');
+    expect(steps[0]!.url).toBe('https://api.example.com/ok');
   });
 
   it('does NOT filter out 4xx client error responses', () => {
@@ -142,7 +142,7 @@ describe('toFlowSteps', () => {
     const steps = toFlowSteps([
       makeRequest({ url: 'https://api.example.com/login', method: 'POST' }),
     ]);
-    expect(steps[0].name).toBe('Step 1: POST /login');
+    expect(steps[0]!.name).toBe('Step 1: POST /login');
   });
 
   it('numbers steps sequentially starting at 1', () => {
@@ -152,9 +152,9 @@ describe('toFlowSteps', () => {
       makeRequest({ url: 'https://api.example.com/c', requestId: 'r3' }),
     ];
     const steps = toFlowSteps(requests);
-    expect(steps[0].name).toMatch(/^Step 1:/);
-    expect(steps[1].name).toMatch(/^Step 2:/);
-    expect(steps[2].name).toMatch(/^Step 3:/);
+    expect(steps[0]!.name).toMatch(/^Step 1:/);
+    expect(steps[1]!.name).toMatch(/^Step 2:/);
+    expect(steps[2]!.name).toMatch(/^Step 3:/);
   });
 
   it('numbering reflects post-filter index, not original array index', () => {
@@ -164,46 +164,46 @@ describe('toFlowSteps', () => {
       makeRequest({ url: 'https://api.example.com/good', responseStatus: 200, requestId: 'r2' }),
     ]);
     expect(steps).toHaveLength(1);
-    expect(steps[0].name).toMatch(/^Step 1:/);
+    expect(steps[0]!.name).toMatch(/^Step 1:/);
   });
 
   it('uppercases the HTTP method in the step object', () => {
     const steps = toFlowSteps([makeRequest({ method: 'get' })]);
-    expect(steps[0].method).toBe('GET');
+    expect(steps[0]!.method).toBe('GET');
   });
 
   it('preserves the full original URL in step.url', () => {
     const url = 'https://api.example.com/users?page=2&limit=10';
     const steps = toFlowSteps([makeRequest({ url })]);
-    expect(steps[0].url).toBe(url);
+    expect(steps[0]!.url).toBe(url);
   });
 
   it('uses only the pathname in the step name (no query string or fragment)', () => {
     const steps = toFlowSteps([
       makeRequest({ url: 'https://api.example.com/users?page=2#section', method: 'GET' }),
     ]);
-    expect(steps[0].name).toBe('Step 1: GET /users');
+    expect(steps[0]!.name).toBe('Step 1: GET /users');
   });
 
   it('falls back to the full URL in step name when URL is not parseable', () => {
     const badUrl = 'not-a-valid-url-at-all';
     const steps = toFlowSteps([makeRequest({ url: badUrl })]);
-    expect(steps[0].name).toContain(badUrl);
+    expect(steps[0]!.name).toContain(badUrl);
   });
 
   it('defaults body to empty string when request body is undefined', () => {
     const steps = toFlowSteps([makeRequest({ body: undefined })]);
-    expect(steps[0].body).toBe('');
+    expect(steps[0]!.body).toBe('');
   });
 
   it('preserves request body when provided', () => {
     const steps = toFlowSteps([makeRequest({ body: '{"key":"value"}' })]);
-    expect(steps[0].body).toBe('{"key":"value"}');
+    expect(steps[0]!.body).toBe('{"key":"value"}');
   });
 
   it('initialises extract as an empty object', () => {
     const steps = toFlowSteps([makeRequest()]);
-    expect(steps[0].extract).toEqual({});
+    expect(steps[0]!.extract).toEqual({});
   });
 
   it('strips all internal browser-managed headers', () => {
@@ -226,7 +226,7 @@ describe('toFlowSteps', () => {
       'pragma': 'no-cache',
     };
     const steps = toFlowSteps([makeRequest({ headers: internalHeaders })]);
-    expect(steps[0].headers).toEqual({});
+    expect(steps[0]!.headers).toEqual({});
   });
 
   it('strips internal headers matched case-insensitively', () => {
@@ -235,8 +235,8 @@ describe('toFlowSteps', () => {
         headers: { 'Cookie': 'session=abc', 'Authorization': 'Bearer token' },
       }),
     ]);
-    expect(steps[0].headers).not.toHaveProperty('Cookie');
-    expect(steps[0].headers).not.toHaveProperty('Authorization');
+    expect(steps[0]!.headers).not.toHaveProperty('Cookie');
+    expect(steps[0]!.headers).not.toHaveProperty('Authorization');
   });
 
   it('preserves non-trivial application headers', () => {
@@ -250,15 +250,15 @@ describe('toFlowSteps', () => {
         },
       }),
     ]);
-    expect(steps[0].headers!['content-type']).toBe('application/json');
-    expect(steps[0].headers!['x-api-key']).toBe('my-key');
-    expect(steps[0].headers!['x-correlation-id']).toBe('12345');
-    expect(steps[0].headers!['accept']).toBe('application/json');
+    expect(steps[0]!.headers!['content-type']).toBe('application/json');
+    expect(steps[0]!.headers!['x-api-key']).toBe('my-key');
+    expect(steps[0]!.headers!['x-correlation-id']).toBe('12345');
+    expect(steps[0]!.headers!['accept']).toBe('application/json');
   });
 
   it('handles a request with no headers gracefully', () => {
     const steps = toFlowSteps([makeRequest({ headers: {} })]);
-    expect(steps[0].headers).toEqual({});
+    expect(steps[0]!.headers).toEqual({});
   });
 });
 
@@ -328,7 +328,7 @@ describe('detectDuplicateSteps', () => {
     ];
     const suggestions = detectDuplicateSteps(steps);
     expect(suggestions).toHaveLength(1);
-    expect(suggestions[0].indices).toEqual([0, 2]);
+    expect(suggestions[0]!.indices).toEqual([0, 2]);
   });
 
   it('includes the common path in the suggestion', () => {
@@ -336,7 +336,7 @@ describe('detectDuplicateSteps', () => {
       makeStep('GET', 'https://api.example.com/category?id=A'),
       makeStep('GET', 'https://api.example.com/category?id=B'),
     ];
-    const [s] = detectDuplicateSteps(steps);
+    const s = detectDuplicateSteps(steps)[0]!;
     expect(s.commonPath).toContain('/category');
   });
 
@@ -345,7 +345,7 @@ describe('detectDuplicateSteps', () => {
       makeStep('GET', 'https://api.example.com/items?page=1'),
       makeStep('GET', 'https://api.example.com/items?page=2'),
     ];
-    const [s] = detectDuplicateSteps(steps);
+    const s = detectDuplicateSteps(steps)[0]!;
     expect(s.paramKey).toBe('page');
   });
 
@@ -355,7 +355,7 @@ describe('detectDuplicateSteps', () => {
       makeStep('GET', 'https://api.example.com/cat?id=2'),
       makeStep('GET', 'https://api.example.com/cat?id=3'),
     ];
-    const [s] = detectDuplicateSteps(steps);
+    const s = detectDuplicateSteps(steps)[0]!;
     expect(s.indices).toHaveLength(3);
   });
 

@@ -74,7 +74,7 @@ describe('detectCorrelations — early returns', () => {
 
   it('returns steps unchanged when fewer than 2 requests are provided', async () => {
     const mock = await getMock();
-    const result = await detectCorrelations([TWO_REQUESTS[0]], TWO_STEPS);
+    const result = await detectCorrelations([TWO_REQUESTS[0]!], TWO_STEPS);
     expect(result).toEqual(TWO_STEPS);
     expect(mock).not.toHaveBeenCalled();
   });
@@ -94,8 +94,8 @@ describe('detectCorrelations — happy path', () => {
     const mock = await getMock();
     mock.mockResolvedValueOnce('{"correlations":[]}');
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
-    expect(result[0].extract).toEqual({});
-    expect(result[1].extract).toEqual({});
+    expect(result[0]!.extract).toEqual({});
+    expect(result[1]!.extract).toEqual({});
   });
 
   it('adds an extract rule to the source step when Gemini returns a correlation', async () => {
@@ -111,11 +111,11 @@ describe('detectCorrelations — happy path', () => {
         }));
 
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
-    expect(result[0].extract).toEqual({
+    expect(result[0]!.extract).toEqual({
       access_token: { source: 'jsonpath', expression: '$.access_token' },
     });
     // Step 1 is a consumer, not a producer — no extract rule added to it
-    expect(result[1].extract).toEqual({});
+    expect(result[1]!.extract).toEqual({});
   });
 
   it('applies multiple correlations across different source steps', async () => {
@@ -131,9 +131,9 @@ describe('detectCorrelations — happy path', () => {
         }));
 
     const result = await detectCorrelations(threeRequests, threeSteps);
-    expect(result[0].extract).toHaveProperty('token');
-    expect(result[1].extract).toHaveProperty('csrf');
-    expect(result[1].extract!.csrf).toEqual({ source: 'header', expression: 'X-CSRF-Token' });
+    expect(result[0]!.extract).toHaveProperty('token');
+    expect(result[1]!.extract).toHaveProperty('csrf');
+    expect(result[1]!.extract!.csrf).toEqual({ source: 'header', expression: 'X-CSRF-Token' });
   });
 
   it('supports all four ExtractSource types', async () => {
@@ -151,10 +151,10 @@ describe('detectCorrelations — happy path', () => {
           ],
         }));
     const result = await detectCorrelations(fourRequests, fourSteps);
-    expect(result[0].extract!.jp_var.source).toBe('jsonpath');
-    expect(result[1].extract!.hdr_var.source).toBe('header');
-    expect(result[2].extract!.ck_var.source).toBe('cookie');
-    expect(result[3].extract!.rx_var.source).toBe('regex');
+    expect(result[0]!.extract!.jp_var!.source).toBe('jsonpath');
+    expect(result[1]!.extract!.hdr_var!.source).toBe('header');
+    expect(result[2]!.extract!.ck_var!.source).toBe('cookie');
+    expect(result[3]!.extract!.rx_var!.source).toBe('regex');
   });
 });
 
@@ -177,7 +177,7 @@ describe('detectCorrelations — PII redaction', () => {
     const mock = await getMock();
     await detectCorrelations(requests, TWO_STEPS);
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string;
     expect(prompt).not.toContain('jane.doe@example.com');
     expect(prompt).not.toContain('john@example.com');
     expect(prompt).not.toContain('4111111111111111');
@@ -202,7 +202,7 @@ describe('detectCorrelations — PII redaction', () => {
     const mock = await getMock();
     await detectCorrelations(requests, TWO_STEPS);
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string;
     expect(prompt).not.toContain('binarydata');
     expect(prompt).toContain('[BINARY_BODY_OMITTED]');
   });
@@ -264,8 +264,8 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
         }));
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // No extract rule should have been added
-    expect(result[0].extract).toEqual({});
-    expect(result[1].extract).toEqual({});
+    expect(result[0]!.extract).toEqual({});
+    expect(result[1]!.extract).toEqual({});
   });
 
   it('skips correlation entry with sourceStepIndex >= steps.length', async () => {
@@ -274,7 +274,7 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
           correlations: [{ sourceStepIndex: 99, variableName: 'bad', source: 'jsonpath', expression: '$.x', usedInStepIndices: [] }],
         }));
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
-    expect(result[0].extract).toEqual({});
+    expect(result[0]!.extract).toEqual({});
   });
 
   it('sanitizes variable names by replacing non-alphanumeric/underscore chars with _', async () => {
@@ -284,7 +284,7 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
         }));
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // Hyphens and dots become underscores
-    expect(result[0].extract).toHaveProperty('my_token_val');
+    expect(result[0]!.extract).toHaveProperty('my_token_val');
   });
 
   it('uses var_N fallback when sanitized variable name is empty', async () => {
@@ -295,7 +295,7 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
     const result = await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // "---" sanitized → "___" which is not empty, so var_N fallback won't trigger
     // BUT if the result is empty string:
-    const extractKeys = Object.keys(result[0].extract ?? {});
+    const extractKeys = Object.keys(result[0]!.extract ?? {});
     expect(extractKeys.length).toBeGreaterThan(0);
   });
 
@@ -304,10 +304,10 @@ describe('detectCorrelations — applyCorrelations edge cases', () => {
     mock.mockResolvedValueOnce(JSON.stringify({
           correlations: [{ sourceStepIndex: 0, variableName: 'token', source: 'jsonpath', expression: '$.tok', usedInStepIndices: [1] }],
         }));
-    const originalExtract = { ...TWO_STEPS[0].extract };
+    const originalExtract = { ...TWO_STEPS[0]!.extract };
     await detectCorrelations(TWO_REQUESTS, TWO_STEPS);
     // Original steps should be unchanged
-    expect(TWO_STEPS[0].extract).toEqual(originalExtract);
+    expect(TWO_STEPS[0]!.extract).toEqual(originalExtract);
   });
 });
 
@@ -329,8 +329,8 @@ describe('detectCorrelations — {{varName}} substitution', () => {
         }));
 
     const result = await detectCorrelations(requests, steps);
-    expect(result[0].extract).toEqual({ access_token: { source: 'jsonpath', expression: '$.access_token' } });
-    expect(result[1].headers!.Authorization).toBe('Bearer {{access_token}}');
+    expect(result[0]!.extract).toEqual({ access_token: { source: 'jsonpath', expression: '$.access_token' } });
+    expect(result[1]!.headers!.Authorization).toBe('Bearer {{access_token}}');
   });
 
   it('replaces the literal value with {{varName}} in a consuming body', async () => {
@@ -348,7 +348,7 @@ describe('detectCorrelations — {{varName}} substitution', () => {
         }));
 
     const result = await detectCorrelations(requests, steps);
-    expect(result[1].body).toBe('{"sessionId":"{{session_id}}","item":"sku1"}');
+    expect(result[1]!.body).toBe('{"sessionId":"{{session_id}}","item":"sku1"}');
   });
 
   it('does not substitute when the extracted value cannot be resolved', async () => {
@@ -366,7 +366,7 @@ describe('detectCorrelations — {{varName}} substitution', () => {
         }));
 
     const result = await detectCorrelations(requests, steps);
-    expect(result[1].headers!.Authorization).toBe('Bearer tok123');
+    expect(result[1]!.headers!.Authorization).toBe('Bearer tok123');
   });
 
   it('does not substitute values shorter than 3 characters', async () => {
@@ -384,7 +384,7 @@ describe('detectCorrelations — {{varName}} substitution', () => {
         }));
 
     const result = await detectCorrelations(requests, steps);
-    expect(result[1].headers!['X-Item-Id']).toBe('42');
+    expect(result[1]!.headers!['X-Item-Id']).toBe('42');
   });
 
   it('re-adds a stripped Authorization header to the consuming step when the recorded request used it', async () => {
@@ -408,7 +408,7 @@ describe('detectCorrelations — {{varName}} substitution', () => {
         }));
 
     const result = await detectCorrelations(requests, steps);
-    expect(result[1].headers!.Authorization).toBe('Bearer {{access_token}}');
+    expect(result[1]!.headers!.Authorization).toBe('Bearer {{access_token}}');
   });
 
   it('extracts a cookie value and substitutes it in a later header', async () => {
@@ -426,7 +426,7 @@ describe('detectCorrelations — {{varName}} substitution', () => {
         }));
 
     const result = await detectCorrelations(requests, steps);
-    expect(result[1].headers!.Cookie).toBe('session={{session}}');
+    expect(result[1]!.headers!.Cookie).toBe('session={{session}}');
   });
 });
 
@@ -437,15 +437,15 @@ describe('suggestStepNames', () => {
     const mock = await getMock();
     mock.mockResolvedValueOnce('["Authenticate — get token", "Load homepage"]');
     const result = await suggestStepNames(TWO_STEPS);
-    expect(result[0].name).toBe('Authenticate — get token');
-    expect(result[1].name).toBe('Load homepage');
+    expect(result[0]!.name).toBe('Authenticate — get token');
+    expect(result[1]!.name).toBe('Load homepage');
   });
 
   it('returns original steps when Gemini returns wrong array length', async () => {
     const mock = await getMock();
     mock.mockResolvedValueOnce('["Only one name"]');
     const result = await suggestStepNames(TWO_STEPS);
-    expect(result[0].name).toBe(TWO_STEPS[0].name);
+    expect(result[0]!.name).toBe(TWO_STEPS[0]!.name);
   });
 
   it('returns original steps when Gemini returns non-JSON', async () => {
@@ -537,7 +537,7 @@ describe('performance', () => {
     // substituteValue runs for each correlation.
     const headers: Record<string, string> = {};
     for (let i = 0; i < 10; i++) {
-      headers[`X-Field-${i}`] = fields[`field_${i}`];
+      headers[`X-Field-${i}`] = fields[`field_${i}`]!; // populated by the identical loop above
     }
     const steps = [
       makeStep('Login', 'https://api.example.com/login'),
@@ -560,7 +560,7 @@ describe('performance', () => {
     const elapsed = performance.now() - start;
 
     // All 10 extract rules should be applied to the source step.
-    expect(Object.keys(result[0].extract ?? {})).toHaveLength(10);
+    expect(Object.keys(result[0]!.extract ?? {})).toHaveLength(10);
     // Budget is intentionally generous (not a tight perf benchmark) — this only
     // needs to catch an accidental O(n²)-type regression, not measure exact
     // timing. A tight 100ms budget flaked repeatedly on shared CI runners under
@@ -597,11 +597,11 @@ describe('detectDuplicateSteps', () => {
     ];
     const result = detectDuplicateSteps(steps);
     expect(result).toHaveLength(1);
-    expect(result[0].indices).toEqual([0, 1]);
-    expect(result[0].commonPath).toBe('https://api.example.com/items');
-    expect(result[0].paramKey).toBe('id');
-    expect(result[0].suggestion).toContain('Steps 1, 2');
-    expect(result[0].suggestion).toContain('id');
+    expect(result[0]!.indices).toEqual([0, 1]);
+    expect(result[0]!.commonPath).toBe('https://api.example.com/items');
+    expect(result[0]!.paramKey).toBe('id');
+    expect(result[0]!.suggestion).toContain('Steps 1, 2');
+    expect(result[0]!.suggestion).toContain('id');
   });
 
   it('does not flag duplicates when method differs even if path is the same', () => {
@@ -619,8 +619,8 @@ describe('detectDuplicateSteps', () => {
     ];
     const result = detectDuplicateSteps(steps);
     expect(result).toHaveLength(1);
-    expect(result[0].paramKey).toBeUndefined();
-    expect(result[0].suggestion).not.toContain('with different');
+    expect(result[0]!.paramKey).toBeUndefined();
+    expect(result[0]!.suggestion).not.toContain('with different');
   });
 
   it('handles three or more steps hitting the same endpoint', () => {
@@ -631,8 +631,8 @@ describe('detectDuplicateSteps', () => {
     ];
     const result = detectDuplicateSteps(steps);
     expect(result).toHaveLength(1);
-    expect(result[0].indices).toEqual([0, 1, 2]);
-    expect(result[0].suggestion).toContain('Steps 1, 2, 3');
+    expect(result[0]!.indices).toEqual([0, 1, 2]);
+    expect(result[0]!.suggestion).toContain('Steps 1, 2, 3');
   });
 
   it('skips steps with invalid URLs without throwing', () => {

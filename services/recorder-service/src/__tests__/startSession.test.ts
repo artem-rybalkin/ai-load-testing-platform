@@ -147,7 +147,7 @@ describe('startSession — CDP request/response assembly', () => {
     await emitExchange(cdp, { requestId: 'r1', mimeType: 'application/json', responseBody: '{"token":"xyz"}' });
 
     expect(cdp.send).toHaveBeenCalledWith('Network.getResponseBody', { requestId: 'r1' });
-    expect(session.completed[0].responseBody).toBe('{"token":"xyz"}');
+    expect(session.completed[0]!.responseBody).toBe('{"token":"xyz"}');
   });
 
   it('does NOT fetch the response body for non-JSON content-type', async () => {
@@ -158,7 +158,7 @@ describe('startSession — CDP request/response assembly', () => {
     await emitExchange(cdp, { requestId: 'r1', mimeType: 'text/html' });
 
     expect(cdp.send).not.toHaveBeenCalledWith('Network.getResponseBody', expect.anything());
-    expect(session.completed[0].responseBody).toBeUndefined();
+    expect(session.completed[0]!.responseBody).toBeUndefined();
   });
 
   it('does not crash and leaves responseBody undefined when getResponseBody throws (body unavailable)', async () => {
@@ -173,7 +173,7 @@ describe('startSession — CDP request/response assembly', () => {
     await emitExchange(cdp, { requestId: 'r1', mimeType: 'application/json' });
 
     expect(session.completed).toHaveLength(1);
-    expect(session.completed[0].responseBody).toBeUndefined();
+    expect(session.completed[0]!.responseBody).toBeUndefined();
   });
 
   it('never adds a request to the exchange when loadingFinished fires with no prior requestWillBeSent/responseReceived', async () => {
@@ -233,7 +233,7 @@ describe('startSession — skip filtering during capture', () => {
     await emitExchange(cdp, { requestId: 'r2', url: 'https://api.example.com/users' });
 
     expect(session.completed).toHaveLength(1);
-    expect(session.completed[0].url).toBe('https://api.example.com/users');
+    expect(session.completed[0]!.url).toBe('https://api.example.com/users');
   });
 
   it('still captures normal API requests unaffected by skip rules', async () => {

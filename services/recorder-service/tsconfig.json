@@ -2,10 +2,7 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist",
-    // TODO: not yet migrated to the repo-wide noUncheckedIndexedAccess/exactOptionalPropertyTypes rollout — see TODO.md
-    "noUncheckedIndexedAccess": false,
-    "exactOptionalPropertyTypes": false
+    "outDir": "dist"
   },
   "include": ["src/**/*"],
   "references": [

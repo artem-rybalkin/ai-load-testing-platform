@@ -117,7 +117,7 @@ describe('Finding #1 — auth headers forwarded verbatim to Gemini', () => {
 
     await detectCorrelations(requests, steps);
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string;
     // Desired: the literal bearer token should be redacted before reaching Gemini.
     // Current: buildSummary includes requestHeaders as-is with no redactPII call
     // (correlator.ts:108-113), so the token appears verbatim in the prompt.
@@ -149,7 +149,7 @@ describe('Finding #1 — auth headers forwarded verbatim to Gemini', () => {
 
     await detectCorrelations(requests, steps);
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string;
     expect(prompt).not.toContain(apiKey);
   });
 });
@@ -198,7 +198,7 @@ describe('Finding #2 — PII straddling the truncation boundary reaches Gemini',
 
     await detectCorrelations(requests, steps);
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string;
     // Desired: redactPII runs on the full body before slicing, so 'user@example.com'
     // is matched in full and replaced with '[REDACTED_EMAIL]' before the 500-char cut.
     // Current: slice runs first → 'user@exa' leaks into the prompt unredacted.
@@ -318,7 +318,7 @@ describe('Finding #4 — correlations mis-attached when a 5xx request is in the 
     // Current: applyCorrelations uses sourceStepIndex=2 to index into result[]
     // (filtered), so the rule goes to result[2] (the step for req3 — WRONG);
     // and usedInStepIndices=[3] is silently dropped because 3 >= result.length.
-    expect(result[1].extract).toHaveProperty('session_token');
+    expect(result[1]!.extract).toHaveProperty('session_token'); // rawSteps confirmed length 3 above; result is 1:1 with the input steps
   });
 });
 

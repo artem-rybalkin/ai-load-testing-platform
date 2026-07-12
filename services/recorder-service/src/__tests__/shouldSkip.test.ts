@@ -17,26 +17,26 @@ describe('compileIgnorePatterns', () => {
   });
 
   it('converts a plain string to a substring-match RegExp', () => {
-    const [re] = compileIgnorePatterns(['analytics.example.com']);
+    const re = compileIgnorePatterns(['analytics.example.com'])[0]!;
     expect(re.test('https://analytics.example.com/track')).toBe(true);
     expect(re.test('https://other.com')).toBe(false);
   });
 
   it('escapes regex special characters in plain strings', () => {
-    const [re] = compileIgnorePatterns(['a.b.c']); // dots are literal
+    const re = compileIgnorePatterns(['a.b.c'])[0]!; // dots are literal
     expect(re.test('a.b.c')).toBe(true);
     expect(re.test('axbxc')).toBe(false); // dots not wildcarded
   });
 
   it('treats /pattern/ as a regex literal', () => {
-    const [re] = compileIgnorePatterns(['/track(event|pageview)/']);
+    const re = compileIgnorePatterns(['/track(event|pageview)/'])[0]!;
     expect(re.test('https://cdn.com/trackevent?q=1')).toBe(true);
     expect(re.test('https://cdn.com/trackpageview')).toBe(true);
     expect(re.test('https://cdn.com/other')).toBe(false);
   });
 
   it('applies regex flags when specified', () => {
-    const [re] = compileIgnorePatterns(['/ANALYTICS/i']);
+    const re = compileIgnorePatterns(['/ANALYTICS/i'])[0]!;
     expect(re.test('https://analytics.example.com')).toBe(true);
   });
 
@@ -53,12 +53,12 @@ describe('compileIgnorePatterns', () => {
       '',              // blank — dropped
     ]);
     expect(patterns).toHaveLength(2);
-    expect(patterns[0].test('https://analytics.example.com/x')).toBe(true);
-    expect(patterns[1].test('https://cdn.example.com/x')).toBe(true);
+    expect(patterns[0]!.test('https://analytics.example.com/x')).toBe(true);
+    expect(patterns[1]!.test('https://cdn.example.com/x')).toBe(true);
   });
 
   it('trims whitespace from each pattern before compiling', () => {
-    const [re] = compileIgnorePatterns(['  sentry.io  ']);
+    const re = compileIgnorePatterns(['  sentry.io  '])[0]!;
     expect(re.test('https://sentry.io/api/store/')).toBe(true);
   });
 });
@@ -189,20 +189,20 @@ describe('shouldSkip — user ignorePatterns', () => {
 
 describe('compileIgnorePatterns — edge cases', () => {
   it('handles a regex with no flags', () => {
-    const [re] = compileIgnorePatterns(['/track/']);
+    const re = compileIgnorePatterns(['/track/'])[0]!;
     expect(re.flags).toBe('');
     expect(re.test('tracking')).toBe(true);
   });
 
   it('handles a regex with multiple flags', () => {
-    const [re] = compileIgnorePatterns(['/test/gi']);
+    const re = compileIgnorePatterns(['/test/gi'])[0]!;
     expect(re.flags).toContain('g');
     expect(re.flags).toContain('i');
   });
 
   it('a plain string with slashes is treated as a substring matcher (not regex)', () => {
     // "/path/to/" without the outer /…/ delimiter pattern → treated as plain string
-    const [re] = compileIgnorePatterns(['path/to']);
+    const re = compileIgnorePatterns(['path/to'])[0]!;
     // The / and . are literal — the plain string escaper turns '/' to '\/'? No:
     // only regex special chars are escaped. '/' is not a special char in JS regex.
     expect(re.test('https://example.com/path/to/resource')).toBe(true);
@@ -212,6 +212,6 @@ describe('compileIgnorePatterns — edge cases', () => {
     const patterns = Array.from({ length: 100 }, (_, i) => `domain${i}.example.com`);
     const compiled = compileIgnorePatterns(patterns);
     expect(compiled).toHaveLength(100);
-    expect(compiled[42].test('https://domain42.example.com/api')).toBe(true);
+    expect(compiled[42]!.test('https://domain42.example.com/api')).toBe(true);
   });
 });

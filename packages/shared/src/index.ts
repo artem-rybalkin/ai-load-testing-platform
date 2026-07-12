@@ -371,11 +371,11 @@ export interface RecordedRequest {
   url: string;
   method: string;
   headers: Record<string, string>;
-  body?: string;
+  body?: string | undefined;
   responseStatus: number;
   responseHeaders: Record<string, string>;
-  responseBody?: string; // only for JSON responses; used by AI correlation
-  timestamp?: number;    // epoch ms when the request was initiated; used for think-time computation
+  responseBody?: string | undefined; // only for JSON responses; used by AI correlation
+  timestamp?: number | undefined;    // epoch ms when the request was initiated; used for think-time computation
 }
 
 /** Recording session state returned by the recorder-service */

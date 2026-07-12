@@ -265,7 +265,7 @@ describe('POST /recordings/:id/stop', () => {
     await app.inject({ method: 'POST', url: `/recordings/${id}/stop` });
 
     expect(completed.get(id)).toBeDefined();
-    expect(completed.get(id)!.steps[0].name).toBe('api-call');
+    expect(completed.get(id)!.steps[0]!.name).toBe('api-call');
     // Timestamp should be recent
     expect(Date.now() - completed.get(id)!.at).toBeLessThan(1000);
   });
