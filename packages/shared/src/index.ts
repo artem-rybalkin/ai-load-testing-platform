@@ -66,18 +66,18 @@ export interface TeamUsage {
 }
 
 export interface SLOThresholds {
-  p95?: number;            // ms — default 1000
-  avg?: number;            // ms — default 500
-  errorRate?: number;      // % — default 1
-  serverErrorRate?: number;// % server (5xx) errors — default 1
-  timeoutRate?: number;    // % timeout errors — default 1
-  checksFailRate?: number; // % of k6 check() assertions allowed to fail — default 10 (i.e. ≥90% must pass)
-  lcp?: number;            // ms — default 2500
-  fcp?: number;            // ms — default 1800
-  ttfb?: number;           // ms — default 800
-  cls?: number;            // score — default 0.1
-  inp?: number;            // ms — default 200 (Interaction to Next Paint)
-  tbt?: number;            // ms — default 200 (Total Blocking Time)
+  p95?: number | undefined;            // ms — default 1000
+  avg?: number | undefined;            // ms — default 500
+  errorRate?: number | undefined;      // % — default 1
+  serverErrorRate?: number | undefined;// % server (5xx) errors — default 1
+  timeoutRate?: number | undefined;    // % timeout errors — default 1
+  checksFailRate?: number | undefined; // % of k6 check() assertions allowed to fail — default 10 (i.e. ≥90% must pass)
+  lcp?: number | undefined;            // ms — default 2500
+  fcp?: number | undefined;            // ms — default 1800
+  ttfb?: number | undefined;           // ms — default 800
+  cls?: number | undefined;            // score — default 0.1
+  inp?: number | undefined;            // ms — default 200 (Interaction to Next Paint)
+  tbt?: number | undefined;            // ms — default 200 (Total Blocking Time)
 }
 
 export interface ErrorBreakdown {
@@ -99,9 +99,9 @@ export interface FlowStep {
   name: string;
   url: string;
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  body?: string;
-  headers?: Record<string, string>;
-  extract?: Record<string, ExtractRule>; // variable_name → extraction rule
+  body?: string | undefined;
+  headers?: Record<string, string> | undefined;
+  extract?: Record<string, ExtractRule> | undefined; // variable_name → extraction rule
 }
 
 export interface StepMetrics {
@@ -118,16 +118,16 @@ export interface TestRequest {
   targetUrl: string;
   description: string;
   options: BackendTestOptions | ClientTestOptions;
-  thresholds?: SLOThresholds;
-  steps?: FlowStep[];
-  envVars?: Record<string, string>;
-  testData?: Array<Record<string, string>>; // inline data table — stored in test_results.test_data for re-run restoration
-  csvData?: string;                          // base64-encoded CSV content
-  csvFilename?: string;                      // original filename hint
-  customScript?: string;                     // user-supplied k6 script; bypasses AI generation entirely
-  setupFirstStep?: boolean;                  // flow tests only: run step 1 once via k6 setup() instead of every VU/iteration — for preconditions (e.g. login) that aren't the thing being measured
-  projectId?: string;                        // set by api-service from session; filters DB scope
-  workspaceId?: string;                      // optional sub-project grouping within a team
+  thresholds?: SLOThresholds | undefined;
+  steps?: FlowStep[] | undefined;
+  envVars?: Record<string, string> | undefined;
+  testData?: Array<Record<string, string>> | undefined; // inline data table — stored in test_results.test_data for re-run restoration
+  csvData?: string | undefined;                          // base64-encoded CSV content
+  csvFilename?: string | undefined;                      // original filename hint
+  customScript?: string | undefined;                     // user-supplied k6 script; bypasses AI generation entirely
+  setupFirstStep?: boolean | undefined;                  // flow tests only: run step 1 once via k6 setup() instead of every VU/iteration — for preconditions (e.g. login) that aren't the thing being measured
+  projectId?: string | undefined;                        // set by api-service from session; filters DB scope
+  workspaceId?: string | undefined;                      // optional sub-project grouping within a team
   createdAt: string;
 }
 
@@ -154,27 +154,27 @@ export type LiveMetricWindowSec = 10 | 30 | 60;
 export const DEFAULT_LIVE_METRIC_WINDOW_SEC: LiveMetricWindowSec = 30;
 
 export interface HttpOptions {
-  keepAlive?: boolean;             // default true in k6
-  timeout?: string;                // per-request timeout, e.g. "30s"
-  discardResponseBodies?: boolean; // skip body parsing — saves memory on large responses
+  keepAlive?: boolean | undefined;             // default true in k6
+  timeout?: string | undefined;                // per-request timeout, e.g. "30s"
+  discardResponseBodies?: boolean | undefined; // skip body parsing — saves memory on large responses
 }
 
 export interface BackendTestOptions {
   vus: number;
   duration: string;
-  rampUp?: string;
-  profile?: LoadProfile;
-  peakVus?: number;
-  httpOptions?: HttpOptions;
-  headers?: Record<string, string>; // custom request headers sent with every HTTP request
+  rampUp?: string | undefined;
+  profile?: LoadProfile | undefined;
+  peakVus?: number | undefined;
+  httpOptions?: HttpOptions | undefined;
+  headers?: Record<string, string> | undefined; // custom request headers sent with every HTTP request
 }
 
 export interface ClientTestOptions {
   sessions: number;
   duration: string;
   collectWebVitals: boolean;
-  headers?: Record<string, string>; // custom headers set via page.setExtraHTTPHeaders
-  device?: string;                  // Puppeteer KnownDevices key (e.g. 'iPhone 13'); unset = no emulation (desktop viewport)
+  headers?: Record<string, string> | undefined; // custom headers set via page.setExtraHTTPHeaders
+  device?: string | undefined;                  // Puppeteer KnownDevices key (e.g. 'iPhone 13'); unset = no emulation (desktop viewport)
 }
 
 // ── Chat-based "one prompt" test creation ───────────────────────────────────
@@ -248,15 +248,15 @@ export interface TestResult {
   targetUrl: string;
   status: TestStatus;
   metrics: BackendMetrics | ClientMetrics;
-  thresholds?: SLOThresholds;
-  scriptId?: string;       // set by workers; consumer saves it to test_results.script_id
-  reusedScript?: boolean;  // set by workers; consumer saves it to test_results.reused_script
-  projectId?: string;      // set by workers from test.projectId; consumer saves it to test_results.project_id
+  thresholds?: SLOThresholds | undefined;
+  scriptId?: string | undefined;       // set by workers; consumer saves it to test_results.script_id
+  reusedScript?: boolean | undefined;  // set by workers; consumer saves it to test_results.reused_script
+  projectId?: string | undefined;      // set by workers from test.projectId; consumer saves it to test_results.project_id
   startedAt: string;
-  completedAt?: string;
-  perfStatus?: 'passed' | 'degraded' | 'failed';
-  analysis?: AnalysisResult;
-  executionLog?: string;   // ANSI-stripped, severity-prefixed lines joined by \n; capped at 5000 lines / 100 KB
+  completedAt?: string | undefined;
+  perfStatus?: 'passed' | 'degraded' | 'failed' | undefined;
+  analysis?: AnalysisResult | undefined;
+  executionLog?: string | undefined;   // ANSI-stripped, severity-prefixed lines joined by \n; capped at 5000 lines / 100 KB
 }
 
 export interface BackendMetrics {
@@ -268,15 +268,15 @@ export interface BackendMetrics {
   p95ResponseTime: number;
   p99ResponseTime: number;
   rps: number;
-  statusCodes?: Record<string, number>;
-  errorBreakdown?: ErrorBreakdown;
-  stepMetrics?: StepMetrics[];
+  statusCodes?: Record<string, number> | undefined;
+  errorBreakdown?: ErrorBreakdown | undefined;
+  stepMetrics?: StepMetrics[] | undefined;
   // Count of k6 check() assertion invocations — separate from requestsFailed
   // (HTTP-status-based). A test can have requestsFailed: 0 yet still have
   // failing checks if the AI-written body/content assertions don't match.
   // Optional: absent for results recorded before this metric was tracked.
-  checksTotal?: number;
-  checksFailed?: number;
+  checksTotal?: number | undefined;
+  checksFailed?: number | undefined;
   // Set when a capacity/stress-profile test's abortOnFail threshold fired,
   // stopping k6 before it reached the configured duration/VUs — without this
   // the result page shows a run that's mysteriously shorter than requested
@@ -284,9 +284,9 @@ export interface BackendMetrics {
   // didn't include a parseable vus/vus_max line (e.g. a very early abort).
   stoppedEarly?: {
     thresholds: string[]; // metric names that breached, e.g. ['http_req_duration', 'http_req_failed']
-    vusReached?: number;
-    vusTarget?: number;
-  };
+    vusReached?: number | undefined;
+    vusTarget?: number | undefined;
+  } | undefined;
 }
 
 export interface LighthouseScore {
@@ -308,20 +308,20 @@ export interface ResourceBreakdown {
 
 export interface ClientMetrics {
   type: 'client';
-  lcp?: number;   // undefined when PerformanceObserver never fired (e.g. non-paintable response)
+  lcp?: number | undefined;   // undefined when PerformanceObserver never fired (e.g. non-paintable response)
   fid: number;
-  cls?: number;   // undefined when PerformanceObserver never fired; note: genuine CLS=0 also maps to undefined
-  ttfb?: number;  // undefined when navigation timing entry is absent (e.g. redirect / data: URL)
-  fcp?: number;   // undefined when PerformanceObserver never fired
-  inp?: number;              // Interaction to Next Paint (ms) — CWV since March 2024
-  tbt?: number;              // Total Blocking Time (ms) — from Lighthouse
-  tti?: number;              // Time to Interactive (ms) — from Lighthouse
-  jsErrors?: number;         // JS errors thrown during page load
-  longTaskCount?: number;    // Tasks >50ms blocking main thread
-  domNodeCount?: number;     // DOM node count at load — from Lighthouse
-  pageLoadCount?: number;    // Number of times the page was navigated/opened (sessions + Lighthouse audit)
-  resourceBreakdown?: ResourceBreakdown;
-  lighthouseScore?: LighthouseScore;
+  cls?: number | undefined;   // undefined when PerformanceObserver never fired; note: genuine CLS=0 also maps to undefined
+  ttfb?: number | undefined;  // undefined when navigation timing entry is absent (e.g. redirect / data: URL)
+  fcp?: number | undefined;   // undefined when PerformanceObserver never fired
+  inp?: number | undefined;              // Interaction to Next Paint (ms) — CWV since March 2024
+  tbt?: number | undefined;              // Total Blocking Time (ms) — from Lighthouse
+  tti?: number | undefined;              // Time to Interactive (ms) — from Lighthouse
+  jsErrors?: number | undefined;         // JS errors thrown during page load
+  longTaskCount?: number | undefined;    // Tasks >50ms blocking main thread
+  domNodeCount?: number | undefined;     // DOM node count at load — from Lighthouse
+  pageLoadCount?: number | undefined;    // Number of times the page was navigated/opened (sessions + Lighthouse audit)
+  resourceBreakdown?: ResourceBreakdown | undefined;
+  lighthouseScore?: LighthouseScore | undefined;
 }
 export interface TestScript {
   id: string;
@@ -335,12 +335,12 @@ export interface TestScript {
 }
 
 export interface EnrichedTestRequest extends TestRequest {
-  generatedScript?: string;
-  scriptId?: string;
-  reusedScript?: boolean;
-  scriptCacheKey?: string; // for flow tests: hash key used in test_scripts table
-  cachedScript?: string;             // carried to ai-service when description comparison is needed
-  cachedScriptDescription?: string | null; // stored description of the cached script
+  generatedScript?: string | undefined;
+  scriptId?: string | undefined;
+  reusedScript?: boolean | undefined;
+  scriptCacheKey?: string | undefined; // for flow tests: hash key used in test_scripts table
+  cachedScript?: string | undefined;             // carried to ai-service when description comparison is needed
+  cachedScriptDescription?: string | null | undefined; // stored description of the cached script
 }
 
 export interface LiveStepMetric {
@@ -764,7 +764,7 @@ const isIpv6Literal = (host: string): boolean => host.startsWith('[') && host.en
 
 /** Parses the first (leftmost) hextet of a bracket-stripped IPv6 address as a 0-65535 integer. "" (from a leading "::") is 0. */
 const firstHextet = (addr: string): number => {
-  const first = addr.split(':')[0];
+  const first = addr.split(':')[0]!; // .split() always returns at least one element
   return first === '' ? 0 : parseInt(first, 16);
 };
 
@@ -777,11 +777,11 @@ const isPrivateIpv6 = (rawAddr: string): boolean => {
   if (hex >= 0xfc00 && hex <= 0xfdff) return true; // unique-local fc00::/7
   // IPv4-mapped: "::ffff:a.b.c.d" (dotted) or "::ffff:xxxx:yyyy" (hex, post-URL-normalization)
   const dotted = addr.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (dotted) return SSRF_PRIVATE_IPV4_RE.test(dotted[1]);
+  if (dotted) return SSRF_PRIVATE_IPV4_RE.test(dotted[1]!); // capture group 1 is required by the pattern
   const hexPair = addr.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
   if (hexPair) {
-    const hi = parseInt(hexPair[1], 16);
-    const lo = parseInt(hexPair[2], 16);
+    const hi = parseInt(hexPair[1]!, 16); // capture groups 1 and 2 are required by the pattern
+    const lo = parseInt(hexPair[2]!, 16);
     return SSRF_PRIVATE_IPV4_RE.test([hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.'));
   }
   return false;

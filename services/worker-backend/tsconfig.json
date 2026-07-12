@@ -7,7 +7,10 @@
     "typeRoots": [
       "../../node_modules/@types",
       "node_modules/@types"
-    ]
+    ],
+    // TODO: not yet migrated to the repo-wide noUncheckedIndexedAccess/exactOptionalPropertyTypes rollout — see TODO.md
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
   },
   "include": ["src/**/*"],
   "references": [
