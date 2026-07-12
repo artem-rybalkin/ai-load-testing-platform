@@ -367,12 +367,12 @@ const FLOW_PROMPT = (test: TestRequest, abortConfig: CapacityAbortConfig): strin
 
   // Parameterization instructions
   const testDataColumns = test.testData && test.testData.length > 0
-    ? Object.keys(test.testData[0])
+    ? Object.keys(test.testData[0]!) // guarded by the length check above
     : null;
   const csvColumns = test.csvData
     ? (((): string[] | null => {
         try {
-          const firstLine = Buffer.from(test.csvData, 'base64').toString('utf-8').split('\n')[0];
+          const firstLine = Buffer.from(test.csvData, 'base64').toString('utf-8').split('\n')[0]!; // .split() always returns at least one element
           return firstLine.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
         } catch { return null; }
       })())
@@ -435,7 +435,7 @@ Variable placeholders:
   const useSetup = test.setupFirstStep === true;
   const setupInstructions = useSetup ? `
 Step 1 as a one-time precondition — MANDATORY structure change:
-- Step 1 ("${steps[0].name}") is a one-time precondition (e.g. login), NOT the thing being load-tested. Move it OUT of the per-VU default function and INTO a k6 setup() function, so it runs exactly ONCE for the whole test run instead of once per VU per iteration.
+- Step 1 ("${steps[0]!.name}") is a one-time precondition (e.g. login), NOT the thing being load-tested. Move it OUT of the per-VU default function and INTO a k6 setup() function, so it runs exactly ONCE for the whole test run instead of once per VU per iteration.
 - Structure: export function setup() { const vars = {}; group('Step 1: ...', function() { /* Step 1's request + checks + extraction, unchanged */ }); return vars; } — then export default function(data) { const vars = { ...data }; /* Steps 2..N as normal */ }
 - Any values Step 1 extracts MUST be assigned onto the local \`vars\` object inside setup() and returned — that is the ONLY way steps 2..N (which receive it via the \`data\` parameter) can read them.
 - Step 1's group() call goes ONLY inside setup() — do NOT also run it inside the default function.

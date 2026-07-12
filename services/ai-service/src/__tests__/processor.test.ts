@@ -116,7 +116,7 @@ describe('processAiRequest — standard generation path', () => {
     const { channel, deps } = makeDeps({ generateScript: vi.fn().mockResolvedValue(script) });
     await processAiRequest(BASE_TEST, deps);
 
-    const payload = JSON.parse(channel.sendToQueue.mock.calls[0][1].toString());
+    const payload = JSON.parse(channel.sendToQueue.mock.calls[0]![1].toString());
     expect(payload.generatedScript).toBe(script);
   });
 
@@ -151,7 +151,7 @@ describe('processAiRequest — REUSE path', () => {
     await processAiRequest(reuseTest, deps);
 
     expect(channel.sendToQueue).toHaveBeenCalledOnce();
-    const payload = JSON.parse(channel.sendToQueue.mock.calls[0][1].toString());
+    const payload = JSON.parse(channel.sendToQueue.mock.calls[0]![1].toString());
     expect(payload.generatedScript).toBe(reuseTest.cachedScript);
     expect(payload.reusedScript).toBe(true);
     expect(payload.scriptId).toBe('cached-script-id'); // preserved
@@ -165,7 +165,7 @@ describe('processAiRequest — REUSE path', () => {
     await processAiRequest(reuseTest, deps);
 
     expect(deps.compareDescriptions).not.toHaveBeenCalled();
-    const payload = JSON.parse(channel.sendToQueue.mock.calls[0][1].toString());
+    const payload = JSON.parse(channel.sendToQueue.mock.calls[0]![1].toString());
     expect(payload.reusedScript).toBe(true);
   });
 
@@ -218,7 +218,7 @@ describe('processAiRequest — REGENERATE path', () => {
     await processAiRequest(test, deps);
 
     expect(generateScript).toHaveBeenCalled();
-    const payload = JSON.parse(channel.sendToQueue.mock.calls[0][1].toString());
+    const payload = JSON.parse(channel.sendToQueue.mock.calls[0]![1].toString());
     expect(payload.generatedScript).toBe(newScript);
     expect(payload.scriptId).toBeUndefined(); // cleared so worker re-saves
   });
@@ -237,7 +237,7 @@ describe('processAiRequest — REGENERATE path', () => {
     await processAiRequest(test, deps);
 
     expect(generateScript).toHaveBeenCalled();
-    const payload = JSON.parse(channel.sendToQueue.mock.calls[0][1].toString());
+    const payload = JSON.parse(channel.sendToQueue.mock.calls[0]![1].toString());
     expect(payload.scriptId).toBeUndefined(); // cleared
   });
 });
@@ -411,7 +411,7 @@ describe('regression: REGENERATE→generate-failure requeues original message (f
       // A retry should have been published (retryCount=0 < MAX_RETRIES=3)
       expect(channel.publish).toHaveBeenCalledOnce();
 
-      const requeuedBuffer = channel.publish.mock.calls[0][2] as Buffer;
+      const requeuedBuffer = channel.publish.mock.calls[0]![2] as Buffer; // toHaveBeenCalledOnce() above
       const requeuedMsg = JSON.parse(requeuedBuffer.toString()) as Record<string, unknown>;
 
       // Correct behavior: the requeued message should NOT carry cachedScript/cachedScriptDescription

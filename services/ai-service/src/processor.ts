@@ -22,7 +22,7 @@ class GeminiQuotaExceededError extends Error {}
 // amqplib's full MessageProperties (contentType, deliveryMode, priority, etc.).
 interface MinimalMessage {
   content: Buffer;
-  properties: { headers?: amqplib.MessagePropertyHeaders };
+  properties: { headers?: amqplib.MessagePropertyHeaders | undefined };
 }
 
 export interface ProcessorDeps {

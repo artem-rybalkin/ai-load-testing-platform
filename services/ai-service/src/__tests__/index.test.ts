@@ -169,7 +169,8 @@ describe('ai-service index.ts', () => {
   it('routes a non-JSON message to the DLQ, acks it, and never calls processAiRequest', async () => {
     const { startConsumer, DLQ } = await import('../index');
     await startConsumer();
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+    // startConsumer() above always registers exactly one consumer
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer }) => Promise<void>;
 
     await handler({ content: Buffer.from('not valid json {{{') });
 
@@ -181,7 +182,8 @@ describe('ai-service index.ts', () => {
   it('ignores a null message (consumer cancellation notice)', async () => {
     const { startConsumer } = await import('../index');
     await startConsumer();
-    const handler = channel.consume.mock.calls[0][1] as (msg: null) => Promise<void>;
+    // startConsumer() above always registers exactly one consumer
+    const handler = channel.consume.mock.calls[0]![1] as (msg: null) => Promise<void>;
 
     await expect(handler(null)).resolves.toBeUndefined();
     expect(mockProcessAiRequest).not.toHaveBeenCalled();
@@ -193,14 +195,15 @@ describe('ai-service index.ts', () => {
     process.env.RESULTS_URL = 'http://results-service:3004';
     const { startConsumer } = await import('../index');
     await startConsumer();
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+    // startConsumer() above always registers exactly one consumer
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer }) => Promise<void>;
     const test = makeTest();
     const msg = { content: Buffer.from(JSON.stringify(test)) };
 
     await handler(msg);
 
     expect(mockProcessAiRequest).toHaveBeenCalledOnce();
-    const [passedTest, deps] = mockProcessAiRequest.mock.calls[0];
+    const [passedTest, deps] = mockProcessAiRequest.mock.calls[0]!;
     expect(passedTest.id).toBe(test.id);
     expect(deps.channel).toBe(channel);
     expect(deps.msg).toBe(msg);

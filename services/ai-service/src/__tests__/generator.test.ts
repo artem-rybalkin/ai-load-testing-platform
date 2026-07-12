@@ -39,35 +39,35 @@ const getLastPrompt = async (): Promise<string> => {
 describe('FLOW_PROMPT — extraction rules', () => {
   it('renders jsonpath extract rule in step definition', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { token: { source: 'jsonpath', expression: '$.access_token' } };
+    test.steps![0]!.extract = { token: { source: 'jsonpath', expression: '$.access_token' } };
     await generateScript(test);
     expect(await getLastPrompt()).toContain('token ← jsonpath: $.access_token');
   });
 
   it('renders header extract rule in step definition', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { token: { source: 'header', expression: 'X-Auth-Token' } };
+    test.steps![0]!.extract = { token: { source: 'header', expression: 'X-Auth-Token' } };
     await generateScript(test);
     expect(await getLastPrompt()).toContain('token ← header["X-Auth-Token"]');
   });
 
   it('renders cookie extract rule in step definition', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { sid: { source: 'cookie', expression: 'session' } };
+    test.steps![0]!.extract = { sid: { source: 'cookie', expression: 'session' } };
     await generateScript(test);
     expect(await getLastPrompt()).toContain('sid ← cookie["session"]');
   });
 
   it('renders regex extract rule in step definition', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { csrf: { source: 'regex', expression: 'value="([^"]+)"' } };
+    test.steps![0]!.extract = { csrf: { source: 'regex', expression: 'value="([^"]+)"' } };
     await generateScript(test);
     expect(await getLastPrompt()).toContain('csrf ← regex: value="([^"]+)"');
   });
 
   it('includes defensive-fallback extraction instructions (not exec.vu.abort) when any step has extractions', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { token: { source: 'jsonpath', expression: '$.token' } };
+    test.steps![0]!.extract = { token: { source: 'jsonpath', expression: '$.token' } };
     await generateScript(test);
     const prompt = await getLastPrompt();
     // Must instruct AI to use a fallback value and keep running — not abort the VU
@@ -84,7 +84,7 @@ describe('FLOW_PROMPT — extraction rules', () => {
 
   it('instructs tagging dynamic URL paths with a fixed name when any step has extractions', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { productId: { source: 'jsonpath', expression: '$.id' } };
+    test.steps![0]!.extract = { productId: { source: 'jsonpath', expression: '$.id' } };
     await generateScript(test);
     const prompt = await getLastPrompt();
     expect(prompt).toContain('Dynamic URL paths');
@@ -154,8 +154,8 @@ describe('FLOW_PROMPT — thresholds', () => {
 describe('FLOW_PROMPT — {{varName}} placeholder substitution', () => {
   it('includes placeholder instructions when a step header contains {{varName}}', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { access_token: { source: 'jsonpath', expression: '$.access_token' } };
-    test.steps![1].headers = { Authorization: 'Bearer {{access_token}}' };
+    test.steps![0]!.extract = { access_token: { source: 'jsonpath', expression: '$.access_token' } };
+    test.steps![1]!.headers = { Authorization: 'Bearer {{access_token}}' };
     await generateScript(test);
     const prompt = await getLastPrompt();
     expect(prompt).toContain('Variable placeholders');
@@ -164,8 +164,8 @@ describe('FLOW_PROMPT — {{varName}} placeholder substitution', () => {
 
   it('includes placeholder instructions when a step body contains {{varName}}', async () => {
     const test = baseFlow();
-    test.steps![0].extract = { session_id: { source: 'jsonpath', expression: '$.session_id' } };
-    test.steps![1].body = '{"sessionId":"{{session_id}}"}';
+    test.steps![0]!.extract = { session_id: { source: 'jsonpath', expression: '$.session_id' } };
+    test.steps![1]!.body = '{"sessionId":"{{session_id}}"}';
     await generateScript(test);
     expect(await getLastPrompt()).toContain('Variable placeholders');
   });
@@ -207,12 +207,12 @@ describe('FLOW_PROMPT — parameterization', () => {
 describe('FLOW_PROMPT — combined extract + placeholder + parameterization', () => {
   it('renders extract rules, {{varName}} placeholders, and SharedArray parameterization together', async () => {
     const test = baseFlow();
-    test.steps![0].extract = {
+    test.steps![0]!.extract = {
       access_token: { source: 'jsonpath', expression: '$.access_token' },
       csrf: { source: 'regex', expression: 'value="([^"]+)"' },
     };
-    test.steps![1].headers = { Authorization: 'Bearer {{access_token}}' };
-    test.steps![1].body = '{"csrf":"{{csrf}}","username":"{{username}}"}';
+    test.steps![1]!.headers = { Authorization: 'Bearer {{access_token}}' };
+    test.steps![1]!.body = '{"csrf":"{{csrf}}","username":"{{username}}"}';
     test.testData = [
       { username: 'user1', password: 'pass1' },
       { username: 'user2', password: 'pass2' },
@@ -780,7 +780,7 @@ describe('checkAndIncrementGeminiUsage', () => {
     const result = await checkAndIncrementGeminiUsage('team-quota');
     expect(result).toBeNull();
 
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0]!; // checkAndIncrementGeminiUsage() above always calls fetch
     expect(String(url)).toContain('/internal/gemini-usage');
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ teamId: 'team-quota' });
 
@@ -823,7 +823,7 @@ describe('regression: FLOW_PROMPT step-data PII not fenced (finding #1)', () => 
 
       const test = baseFlow();
       // Simulate a login step body of the kind a real flow recording would capture.
-      test.steps![0].body = '{"email":"user@example.com","password":"hunter2"}';
+      test.steps![0]!.body = '{"email":"user@example.com","password":"hunter2"}';
       await generateScript(test);
       const prompt = await getLastPrompt();
 
