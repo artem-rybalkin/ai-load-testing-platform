@@ -23,10 +23,10 @@ describe('connectWithBackoff', () => {
 
       expect(connect).toHaveBeenCalledTimes(3);
       expect(onRetry).toHaveBeenCalledTimes(2);
-      expect(onRetry.mock.calls[0][1]).toBe(1);
-      expect(onRetry.mock.calls[0][2]).toBe(1000);  // 1s
-      expect(onRetry.mock.calls[1][1]).toBe(2);
-      expect(onRetry.mock.calls[1][2]).toBe(2000);  // 2s
+      expect(onRetry.mock.calls[0]![1]).toBe(1);
+      expect(onRetry.mock.calls[0]![2]).toBe(1000);  // 1s
+      expect(onRetry.mock.calls[1]![1]).toBe(2);
+      expect(onRetry.mock.calls[1]![2]).toBe(2000);  // 2s
     } finally {
       vi.useRealTimers();
     }

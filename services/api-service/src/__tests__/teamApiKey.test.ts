@@ -99,7 +99,7 @@ const validBody = {
 describe('per-team API key auth (api-service)', () => {
   it('scopes POST /tests to the team owning a valid x-api-key', async () => {
     const teamResult = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-with-key') RETURNING id`);
-    const teamId = teamResult.rows[0].id;
+    const teamId = teamResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 
     const rawKey = randomBytes(24).toString('hex');
     await pool.query(
@@ -116,13 +116,13 @@ describe('per-team API key auth (api-service)', () => {
       const { rows } = await pool.query<{ last_used_at: Date | null }>(
         `SELECT last_used_at FROM team_api_keys WHERE team_id = $1`, [teamId]
       );
-      expect(rows[0].last_used_at).not.toBeNull();
+      expect(rows[0]!.last_used_at).not.toBeNull(); // the INSERT above always creates exactly this row
     });
   });
 
   it('rejects a revoked team key', async () => {
     const teamResult = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-revoked-key') RETURNING id`);
-    const teamId = teamResult.rows[0].id;
+    const teamId = teamResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 
     const rawKey = randomBytes(24).toString('hex');
     await pool.query(

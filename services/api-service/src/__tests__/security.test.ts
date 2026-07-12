@@ -329,7 +329,7 @@ describe('envVar injection protection', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    const published = vi.mocked(publishTest).mock.calls[0][0] as { envVars?: Record<string, string> };
+    const published = vi.mocked(publishTest).mock.calls[0]![0] as { envVars?: Record<string, string> }; // the 200 above confirms the test was published
     expect(published.envVars).toEqual({ API_TOKEN: 'abc123', USER_NAME: 'test' });
   });
 });

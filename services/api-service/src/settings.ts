@@ -14,7 +14,7 @@ const getNumberSetting = async (pool: Pool, key: string, envVar: string | undefi
   try {
     const { rows } = await pool.query<{ value: string }>(`SELECT value FROM app_settings WHERE key = $1`, [key]);
     if (rows.length > 0) {
-      const n = Number(rows[0].value);
+      const n = Number(rows[0]!.value); // guarded by rows.length > 0 above
       if (isValid(n)) return n;
     }
   } catch { /* fall through to env var / default below */ }

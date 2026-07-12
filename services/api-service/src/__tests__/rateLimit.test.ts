@@ -70,7 +70,7 @@ describe('rate limiting', () => {
 
     expect(responses.slice(0, 3).every(r => r.statusCode !== 429)).toBe(true);
 
-    const limited = responses[3];
+    const limited = responses[3]!; // loop above pushes exactly 4 responses
     expect(limited.statusCode).toBe(429);
     expect(limited.headers['retry-after']).toBeDefined();
   });

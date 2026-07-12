@@ -126,7 +126,7 @@ describe('findExistingScript', () => {
     expect(result!.script).not.toContain('vus: 5');
 
     const parsed = JSON.parse(
-      result!.script.match(/export const options = (\{[\s\S]*?\});/)![1]
+      result!.script.match(/export const options = (\{[\s\S]*?\});/)![1]! // capture group 1 is required by the pattern
     );
     expect(parsed.stages).toHaveLength(3);
     const plateau = parsed.stages.find((s: { target: number }) => s.target === 20);
@@ -150,7 +150,7 @@ describe('findExistingScript', () => {
 
     expect(result).not.toBeNull();
     const parsed = JSON.parse(
-      result!.script.match(/export const options = (\{[\s\S]*?\});/)![1]
+      result!.script.match(/export const options = (\{[\s\S]*?\});/)![1]! // capture group 1 is required by the pattern
     );
     // This test's local schema (createSchema above) has no app_settings table at
     // all — getCapacityAbortConfig must fail open to the hardcoded default

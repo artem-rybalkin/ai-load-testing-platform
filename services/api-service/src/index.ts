@@ -33,8 +33,8 @@ export const parseDurationSeconds = (d: string | number): number | null => {
   let m: RegExpExecArray | null;
   while ((m = re.exec(d)) !== null) {
     matched = true;
-    const n = parseFloat(m[1]);
-    const unit = m[2].toLowerCase();
+    const n = parseFloat(m[1]!); // both capture groups are required by the pattern
+    const unit = m[2]!.toLowerCase();
     if (unit === 'h') total += n * 3600;
     else if (unit === 'm') total += n * 60;
     else if (unit === 'ms') total += n / 1000;
@@ -129,7 +129,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         );
         if (rows.length > 0) {
           pool.query(`UPDATE team_api_keys SET last_used_at = NOW() WHERE key_hash = $1`, [keyHash]).catch(() => {});
-          request.projectId = rows[0].team_id;
+          request.projectId = rows[0]!.team_id; // guarded by rows.length > 0 above
           request.role = 'admin';
           return;
         }
@@ -218,7 +218,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
 
       // For flow tests, targetUrl defaults to first step's URL
       const effectiveTargetUrl = (type === 'flow' && steps?.length)
-        ? (targetUrl || steps[0].url)
+        ? (targetUrl || steps[0]!.url) // steps?.length above guarantees steps[0] exists
         : targetUrl;
 
       // Validate URL format and scheme

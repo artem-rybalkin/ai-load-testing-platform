@@ -85,7 +85,7 @@ describe('POST /tests', () => {
       expect.stringContaining('/results/pending'),
       expect.objectContaining({ method: 'POST' })
     );
-    const pendingBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const pendingBody = JSON.parse(mockFetch.mock.calls[0]![1].body); // the /tests request above always fires this fetch
     expect(pendingBody.testId).toBe(json.test.id);
     expect(pendingBody.type).toBe('backend');
     expect(mockPublishTest).toHaveBeenCalledWith(expect.objectContaining({ targetUrl: 'http://example.com' }), false);
@@ -198,7 +198,7 @@ describe('POST /tests — workspaceId passthrough contract', () => {
       payload: { ...validBody, workspaceId: '00000000-0000-0000-0000-aabbccddeeff' },
     });
     expect(res.statusCode).toBe(200);
-    const pendingBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const pendingBody = JSON.parse(mockFetch.mock.calls[0]![1].body); // the /tests request above always fires this fetch
     expect(pendingBody.workspaceId).toBe('00000000-0000-0000-0000-aabbccddeeff');
   });
 
@@ -215,7 +215,7 @@ describe('POST /tests — workspaceId passthrough contract', () => {
 
   it('omits workspaceId from /results/pending body when not provided', async () => {
     await app.inject({ method: 'POST', url: '/tests', payload: validBody });
-    const pendingBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const pendingBody = JSON.parse(mockFetch.mock.calls[0]![1].body); // the /tests request above always fires this fetch
     expect(pendingBody.workspaceId).toBeUndefined();
   });
 });
@@ -425,7 +425,7 @@ describe('POST /tests — parameterization', () => {
   it('publishes without testData when not provided', async () => {
     const res = await app.inject({ method: 'POST', url: '/tests', payload: flowBody });
     expect(res.statusCode).toBe(200);
-    const published = mockPublishTest.mock.calls[0][0] as { testData?: unknown };
+    const published = mockPublishTest.mock.calls[0]![0] as { testData?: unknown }; // the 200 above confirms the test was published
     expect(published.testData).toBeUndefined();
   });
 });

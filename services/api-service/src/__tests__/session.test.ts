@@ -83,10 +83,10 @@ beforeEach(async () => {
   const userResult = await pool.query<{ id: string }>(
     `INSERT INTO users (email, password_hash, name) VALUES ('alice@example.com', 'hash', 'Alice') RETURNING id`
   );
-  userId = userResult.rows[0].id;
+  userId = userResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 
   const teamResult = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-a') RETURNING id`);
-  teamId = teamResult.rows[0].id;
+  teamId = teamResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 
   await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamId, userId]);
 });
@@ -126,7 +126,7 @@ describe('getApiSession', () => {
     const memberResult = await pool.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, name) VALUES ('bob@example.com', 'hash', 'Bob') RETURNING id`
     );
-    const memberId = memberResult.rows[0].id;
+    const memberId = memberResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
     await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'viewer')`, [teamId, memberId]);
 
     const token = await insertSession(pool, memberId, teamId);

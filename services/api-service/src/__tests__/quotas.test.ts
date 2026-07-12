@@ -62,7 +62,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll(pool, 'TRUNCATE test_results, team_quotas, projects CASCADE');
   const teamResult = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-a') RETURNING id`);
-  teamId = teamResult.rows[0].id;
+  teamId = teamResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 });
 
 describe('getTeamQuota', () => {
@@ -202,7 +202,7 @@ describe('checkTestQuota', () => {
        VALUES ($1, 1, 1000, 3600, 10, 100)`,
       [teamId]
     );
-    await insertTestResult(pool, 'running', otherTeam.rows[0].id);
+    await insertTestResult(pool, 'running', otherTeam.rows[0]!.id); // INSERT ... RETURNING always returns exactly one row
 
     const result = await checkTestQuota(pool, teamId, {
       type: 'backend',

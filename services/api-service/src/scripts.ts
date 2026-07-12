@@ -80,7 +80,8 @@ export const findExistingScript = async (
 
   if (rows.length === 0) return null;
 
-  let script: string = rows[0].script;
+  const row = rows[0]!; // guarded by rows.length === 0 check above
+  let script: string = row.script;
 
   if (testType === 'backend' && options) {
     // Only fetch the abort-threshold config for the one profile that uses it —
@@ -92,13 +93,13 @@ export const findExistingScript = async (
   }
 
   return {
-    id: rows[0].id,
-    targetUrl: rows[0].target_url,
-    testType: rows[0].test_type as TestType,
+    id: row.id,
+    targetUrl: row.target_url,
+    testType: row.test_type as TestType,
     script,
-    description: rows[0].description ?? null,
-    usedCount: rows[0].used_count,
-    createdAt: rows[0].created_at.toISOString(),
-    updatedAt: rows[0].updated_at.toISOString()
+    description: row.description ?? null,
+    usedCount: row.used_count,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
   };
 };

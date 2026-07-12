@@ -14,7 +14,7 @@ export const getTeamQuota = async (pool: Pool, teamId: string): Promise<TeamQuot
 
   if (rows.length === 0) return { ...DEFAULT_TEAM_QUOTA };
 
-  const row = rows[0];
+  const row = rows[0]!; // guarded by rows.length === 0 check above
   return {
     maxConcurrentTests: row.max_concurrent_tests,
     maxVusPerTest: row.max_vus_per_test,
@@ -27,7 +27,7 @@ export const getTeamQuota = async (pool: Pool, teamId: string): Promise<TeamQuot
 interface TestQuotaCheckInput {
   type: TestType;
   options: BackendTestOptions | ClientTestOptions;
-  durationSeconds?: number;
+  durationSeconds?: number | undefined;
 }
 
 /** Returns an error message if the requested test would exceed the team's quota, or null if OK. */
@@ -62,7 +62,7 @@ export const checkTestQuota = async (
     `SELECT COUNT(*) FROM test_results WHERE project_id = $1 AND status IN ('pending','running')`,
     [teamId]
   );
-  const concurrent = parseInt(rows[0].count, 10);
+  const concurrent = parseInt(rows[0]!.count, 10); // COUNT(*) with no GROUP BY always returns exactly one row
   if (concurrent >= quota.maxConcurrentTests) {
     return `Team has reached its concurrent test limit (max ${quota.maxConcurrentTests})`;
   }

@@ -246,7 +246,7 @@ describe('queue module', () => {
       await connect();
       const test = { id: 'abc-123', type: 'backend', targetUrl: 'https://example.com' } as never;
       await queueMod.publishTest(test, false);
-      const buf = mockChannel.sendToQueue.mock.calls[0][1] as Buffer;
+      const buf = mockChannel.sendToQueue.mock.calls[0]![1] as Buffer; // publishTest() above always calls sendToQueue
       expect(JSON.parse(buf.toString())).toMatchObject({
         id: 'abc-123', targetUrl: 'https://example.com',
       });
@@ -277,7 +277,7 @@ describe('queue module', () => {
     it('includes the testId in the JSON payload', async () => {
       await connect();
       queueMod.publishCancel('test-xyz');
-      const buf = mockChannel.publish.mock.calls[0][2] as Buffer;
+      const buf = mockChannel.publish.mock.calls[0]![2] as Buffer; // publishCancel() above always calls publish
       expect(JSON.parse(buf.toString())).toEqual({ testId: 'test-xyz' });
     });
   });

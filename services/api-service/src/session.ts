@@ -28,7 +28,7 @@ export const getApiSession = async (pool: Pool, token: string | undefined): Prom
   );
   if (rows.length === 0) return null;
 
-  const { user_id: userId, team_id: teamId } = rows[0];
+  const { user_id: userId, team_id: teamId } = rows[0]!; // guarded by rows.length === 0 check above
   if (!teamId) return { projectId: null, role: null };
 
   const { rows: memberRows } = await pool.query<{ role: TeamRole }>(
