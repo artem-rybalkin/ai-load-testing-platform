@@ -188,7 +188,7 @@ describe('worker-backend index.ts', () => {
     const { start } = await import('../index');
     await start();
     expect(channel.consume).toHaveBeenCalledTimes(2);
-    expect(channel.consume.mock.calls[1][0]).toBe('backend-tests');
+    expect(channel.consume.mock.calls[1]![0]).toBe('backend-tests');
   });
 
   // ── Connection/channel lifecycle ─────────────────────────────────────────
@@ -254,8 +254,8 @@ describe('worker-backend index.ts', () => {
       const result = await saveScript('http://x.com', 'k6script', 'existing-id');
 
       expect(result).toBe('existing-id');
-      expect(mockQuery.mock.calls[0][0]).toMatch(/UPDATE test_scripts SET used_count/);
-      expect(mockQuery.mock.calls[0][1]).toEqual(['existing-id']);
+      expect(mockQuery.mock.calls[0]![0]).toMatch(/UPDATE test_scripts SET used_count/);
+      expect(mockQuery.mock.calls[0]![1]).toEqual(['existing-id']);
     });
 
     it('inserts a new script row and returns the generated id when no scriptId is given', async () => {
@@ -265,8 +265,8 @@ describe('worker-backend index.ts', () => {
       const result = await saveScript('http://x.com', 'k6script', undefined, 'desc', 'proj-1', 'ws-1');
 
       expect(result).toBe('new-uuid');
-      expect(mockQuery.mock.calls[0][0]).toMatch(/INSERT INTO test_scripts/);
-      expect(mockQuery.mock.calls[0][1]).toEqual(['http://x.com', 'k6script', 'desc', 'proj-1', 'ws-1']);
+      expect(mockQuery.mock.calls[0]![0]).toMatch(/INSERT INTO test_scripts/);
+      expect(mockQuery.mock.calls[0]![1]).toEqual(['http://x.com', 'k6script', 'desc', 'proj-1', 'ws-1']);
     });
 
     it('preserves an existing project_id/workspace_id on conflict via COALESCE', async () => {
@@ -275,8 +275,8 @@ describe('worker-backend index.ts', () => {
 
       await saveScript('http://x.com', 'k6script');
 
-      expect(mockQuery.mock.calls[0][0]).toMatch(/project_id = COALESCE/);
-      expect(mockQuery.mock.calls[0][0]).toMatch(/workspace_id = COALESCE/);
+      expect(mockQuery.mock.calls[0]![0]).toMatch(/project_id = COALESCE/);
+      expect(mockQuery.mock.calls[0]![0]).toMatch(/workspace_id = COALESCE/);
     });
   });
 
@@ -303,7 +303,7 @@ describe('worker-backend index.ts', () => {
 
       await notifyFailed('tid-2', 'partial log');
 
-      const [url, opts] = mockFetch.mock.calls[0];
+      const [url, opts] = mockFetch.mock.calls[0]!;
       expect(url).toBe('http://results-service:3004/results/tid-2/fail');
       expect(JSON.parse(opts.body)).toEqual({ executionLog: 'partial log' });
     });
@@ -341,7 +341,7 @@ describe('worker-backend index.ts', () => {
       );
       const { start } = await import('../index');
       await start();
-      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler = channel.consume.mock.calls[1]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       const test = makeTest();
       await queueHandler(makeMsg(test));
@@ -357,9 +357,9 @@ describe('worker-backend index.ts', () => {
       // silently drops a completed test's result with no way to know it happened.
       expect(channel.waitForConfirms).toHaveBeenCalledOnce();
       expect(channel.ack).toHaveBeenCalledOnce();
-      const sendOrder = channel.sendToQueue.mock.invocationCallOrder[channel.sendToQueue.mock.calls.indexOf(sent!)];
-      const confirmOrder = channel.waitForConfirms.mock.invocationCallOrder[0];
-      const ackOrder = channel.ack.mock.invocationCallOrder[0];
+      const sendOrder = channel.sendToQueue.mock.invocationCallOrder[channel.sendToQueue.mock.calls.indexOf(sent!)]!;
+      const confirmOrder = channel.waitForConfirms.mock.invocationCallOrder[0]!;
+      const ackOrder = channel.ack.mock.invocationCallOrder[0]!;
       expect(sendOrder).toBeLessThan(confirmOrder);
       expect(confirmOrder).toBeLessThan(ackOrder);
     });
@@ -368,7 +368,7 @@ describe('worker-backend index.ts', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ status: 'cancelled' }] });
       const { start } = await import('../index');
       await start();
-      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler = channel.consume.mock.calls[1]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       await queueHandler(makeMsg(makeTest()));
 
@@ -380,13 +380,13 @@ describe('worker-backend index.ts', () => {
       mockRunK6Test.mockRejectedValue(Object.assign(new Error('k6 crashed'), { partialLog: 'boom' }));
       const { start } = await import('../index');
       await start();
-      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler = channel.consume.mock.calls[1]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       await queueHandler(makeMsg(makeTest({ id: 'retry-test' })));
 
       // handleRetry (real, imported from runner.ts) republishes with an incremented retry count.
       expect(channel.publish).toHaveBeenCalledOnce();
-      expect(channel.publish.mock.calls[0][1]).toBe('backend-tests');
+      expect(channel.publish.mock.calls[0]![1]).toBe('backend-tests');
       expect(channel.sendToQueue).not.toHaveBeenCalledWith('test-results', expect.anything(), expect.anything());
     });
 
@@ -403,8 +403,8 @@ describe('worker-backend index.ts', () => {
 
       const { start } = await import('../index');
       await start();
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
-      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler  = channel.consume.mock.calls[1]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       const test = makeTest({ id: 'stop-test-1' });
       const queuePromise = queueHandler(makeMsg(test));
@@ -437,8 +437,8 @@ describe('worker-backend index.ts', () => {
 
       const { start } = await import('../index');
       await start();
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
-      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler  = channel.consume.mock.calls[1]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       const test = makeTest({ id: 'stop-test-2' });
       const queuePromise = queueHandler(makeMsg(test));
@@ -458,7 +458,7 @@ describe('worker-backend index.ts', () => {
     it('cancel-queue consumer kills the tracked process and acks', async () => {
       const { start } = await import('../index');
       await start();
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       const fakeProc = { kill: vi.fn() };
       mockRunK6Test.mockImplementation((testId: string, ..._rest: unknown[]) => {
@@ -466,7 +466,7 @@ describe('worker-backend index.ts', () => {
         ctx.runningTests.set(testId, fakeProc);
         return new Promise(() => {}); // never resolves — process is "running"
       });
-      const queueHandler = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler = channel.consume.mock.calls[1]![1] as (msg: { content: Buffer }) => Promise<void>;
       void queueHandler(makeMsg(makeTest({ id: 'kill-me' })));
       await vi.waitFor(() => expect(mockRunK6Test).toHaveBeenCalled());
 
@@ -479,7 +479,7 @@ describe('worker-backend index.ts', () => {
     it('cancel-queue consumer is a no-op (but still acks) for an unknown testId', async () => {
       const { start } = await import('../index');
       await start();
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       await expect(
         cancelHandler(makeMsg({ testId: 'never-started' })),
@@ -517,8 +517,8 @@ describe('worker-backend index.ts', () => {
       // start() only uses microtasks (mocked amqplib resolves immediately), not setTimeout — safe with fake timers.
       await start();
 
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer }) => Promise<void>;
-      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: { content: Buffer }) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer }) => Promise<void>;
+      const queueHandler  = channel.consume.mock.calls[1]![1] as (msg: { content: Buffer }) => Promise<void>;
 
       // A process that stubbornly ignores SIGTERM — stays alive in runningTests forever.
       const fakeProc = { kill: vi.fn() };

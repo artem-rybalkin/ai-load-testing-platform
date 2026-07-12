@@ -9,33 +9,33 @@ const toMs = (val: number, unit: string | undefined): number => {
 export const parseK6Output = (output: string): BackendMetrics => {
   const getAvg = (metric: string): number => {
     const m = output.match(new RegExp(`${metric}[^\\n]*\\bavg=([\\d.]+)(ms|s|µs)?`));
-    return m ? toMs(parseFloat(m[1]), m[2]) : 0;
+    return m ? toMs(parseFloat(m[1]!), m[2]) : 0; // capture group 1 is required by the pattern; group 2 is genuinely optional and toMs() already accepts undefined
   };
 
   const getPercentile = (metric: string, p: string): number => {
     const m = output.match(new RegExp(`${metric}[^\\n]*\\bp\\(${p}\\)=([\\d.]+)(ms|s|µs)?`));
-    if (m) return toMs(parseFloat(m[1]), m[2]);
+    if (m) return toMs(parseFloat(m[1]!), m[2]); // capture group 1 is required by the pattern
     // k6 default output uses "med=" for p50 instead of "p(50)="
     if (p === '50') {
       const med = output.match(new RegExp(`${metric}[^\\n]*\\bmed=([\\d.]+)(ms|s|µs)?`));
-      return med ? toMs(parseFloat(med[1]), med[2]) : 0;
+      return med ? toMs(parseFloat(med[1]!), med[2]) : 0; // capture group 1 is required by the pattern
     }
     return 0;
   };
 
   const getCount = (metric: string): number => {
     const m = output.match(new RegExp(`${metric}[^:]*:\\s*(\\d+)\\s+[\\d.]+\\/s`));
-    return m ? parseInt(m[1]) : 0;
+    return m ? parseInt(m[1]!) : 0; // capture group 1 is required by the pattern
   };
 
   const getRate = (metric: string): number => {
     const m = output.match(new RegExp(`${metric}[^:]*:\\s*\\d+\\s+([\\d.]+)\\/s`));
-    return m ? parseFloat(m[1]) : 0;
+    return m ? parseFloat(m[1]!) : 0; // capture group 1 is required by the pattern
   };
 
   const getFailRate = (): number => {
     const m = output.match(/http_req_failed[^:]*:\s*([\d.]+)%/);
-    return m ? parseFloat(m[1]) : 0;
+    return m ? parseFloat(m[1]!) : 0; // capture group 1 is required by the pattern
   };
 
   const total = getCount('http_reqs');
@@ -74,9 +74,9 @@ const parseStoppedEarly = (output: string): { stoppedEarly?: NonNullable<Backend
 
   return {
     stoppedEarly: {
-      thresholds: reasonMatch[1].split(',').map(s => s.trim()),
-      ...(vusReachedMatch ? { vusReached: parseInt(vusReachedMatch[1], 10) } : {}),
-      ...(vusTargetMatch  ? { vusTarget:  parseInt(vusTargetMatch[1], 10) }  : {}),
+      thresholds: reasonMatch[1]!.split(',').map(s => s.trim()), // capture group 1 is required by the pattern
+      ...(vusReachedMatch ? { vusReached: parseInt(vusReachedMatch[1]!, 10) } : {}), // capture group 1 is required by the pattern
+      ...(vusTargetMatch  ? { vusTarget:  parseInt(vusTargetMatch[1]!, 10) }  : {}), // capture group 1 is required by the pattern
     },
   };
 };

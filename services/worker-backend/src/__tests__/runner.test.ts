@@ -389,7 +389,7 @@ describe('runK6Test — envVar injection safety', () => {
     run.emit('close', 0);
     await promise;
 
-    return mockSpawn.mock.calls[1][1] as string[]; // second spawn call = k6 run (calls cleared in setupFs beforeEach)
+    return mockSpawn.mock.calls[1]![1] as string[]; // second spawn call = k6 run (calls cleared in setupFs beforeEach)
   }
 
   it('passes valid env vars as --env KEY=VALUE args', async () => {

@@ -483,14 +483,16 @@ describe('aggregateWindow', () => {
     const byName = Object.fromEntries(result!.stepMetrics!.map(s => [s.name, s]));
 
     expect(byName['Login']).toBeDefined();
-    expect(byName['Login'].avgResponseTime).toBe(150); // avg(100, 200)
-    expect(byName['Login'].rps).toBeCloseTo(2 / LIVE_WINDOW_SEC, 2);
-    expect(byName['Login'].errorRate).toBe(0);
+    const login = byName['Login']!;
+    expect(login.avgResponseTime).toBe(150); // avg(100, 200)
+    expect(login.rps).toBeCloseTo(2 / LIVE_WINDOW_SEC, 2);
+    expect(login.errorRate).toBe(0);
 
     expect(byName['Checkout']).toBeDefined();
-    expect(byName['Checkout'].avgResponseTime).toBe(400); // avg(300, 500)
-    expect(byName['Checkout'].rps).toBeCloseTo(4 / LIVE_WINDOW_SEC, 2);
-    expect(byName['Checkout'].errorRate).toBeCloseTo(50, 1); // avg(1, 0) * 100
+    const checkout = byName['Checkout']!;
+    expect(checkout.avgResponseTime).toBe(400); // avg(300, 500)
+    expect(checkout.rps).toBeCloseTo(4 / LIVE_WINDOW_SEC, 2);
+    expect(checkout.errorRate).toBeCloseTo(50, 1); // avg(1, 0) * 100
   });
 
   it('falls back to duration count for rps and 0 errorRate when http_req_failed points are absent for a group', () => {
@@ -673,16 +675,16 @@ describe('parseK6GroupMetrics', () => {
     const result = parseK6GroupMetrics(lines);
 
     expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Login');
-    expect(result[0].avgResponseTime).toBe(200); // avg(150, 250)
-    expect(result[0].requestsTotal).toBe(2);
-    expect(result[0].requestsFailed).toBe(0);
+    expect(result[0]!.name).toBe('Login');
+    expect(result[0]!.avgResponseTime).toBe(200); // avg(150, 250)
+    expect(result[0]!.requestsTotal).toBe(2);
+    expect(result[0]!.requestsFailed).toBe(0);
   });
 
   it('strips the leading :: from the group name', () => {
     const lines = [makeGroupPoint('http_req_duration', 120, 'Step 1: POST /login')].join('\n');
     const result = parseK6GroupMetrics(lines);
-    expect(result[0].name).toBe('Step 1: POST /login');
+    expect(result[0]!.name).toBe('Step 1: POST /login');
   });
 
   it('skips the root :: group (top-level k6 scope)', () => {
@@ -693,7 +695,7 @@ describe('parseK6GroupMetrics', () => {
 
     const result = parseK6GroupMetrics(lines);
     expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Login');
+    expect(result[0]!.name).toBe('Login');
   });
 
   it('returns StepMetrics for each distinct group', () => {
@@ -720,8 +722,8 @@ describe('parseK6GroupMetrics', () => {
 
     const result = parseK6GroupMetrics(lines);
 
-    expect(result[0].p95ResponseTime).toBe(900);
-    expect(result[0].avgResponseTime).toBe(Math.round((19 * 100 + 900) / 20));
+    expect(result[0]!.p95ResponseTime).toBe(900);
+    expect(result[0]!.avgResponseTime).toBe(Math.round((19 * 100 + 900) / 20));
   });
 
   it('calculates requestsFailed from averaged http_req_failed values', () => {
@@ -743,8 +745,8 @@ describe('parseK6GroupMetrics', () => {
 
     const result = parseK6GroupMetrics(lines);
 
-    expect(result[0].requestsTotal).toBe(4);
-    expect(result[0].requestsFailed).toBe(2);
+    expect(result[0]!.requestsTotal).toBe(4);
+    expect(result[0]!.requestsFailed).toBe(2);
   });
 
   it('uses durations.length as requestsTotal fallback when no http_reqs points', () => {
@@ -756,7 +758,7 @@ describe('parseK6GroupMetrics', () => {
 
     const result = parseK6GroupMetrics(lines);
 
-    expect(result[0].requestsTotal).toBe(3);
+    expect(result[0]!.requestsTotal).toBe(3);
   });
 
   it('returns zero requestsFailed when no http_req_failed points', () => {
@@ -765,7 +767,7 @@ describe('parseK6GroupMetrics', () => {
       makeGroupPoint('http_reqs', 1, 'Login'),
     ].join('\n');
 
-    expect(parseK6GroupMetrics(lines)[0].requestsFailed).toBe(0);
+    expect(parseK6GroupMetrics(lines)[0]!.requestsFailed).toBe(0);
   });
 
   it('skips malformed JSON lines and continues processing', () => {
@@ -778,14 +780,14 @@ describe('parseK6GroupMetrics', () => {
     const result = parseK6GroupMetrics(lines);
 
     expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('Login');
+    expect(result[0]!.name).toBe('Login');
   });
 
   it('handles a single-item duration array (p95 = that single value)', () => {
     const lines = [makeGroupPoint('http_req_duration', 999, 'Checkout')].join('\n');
     const result = parseK6GroupMetrics(lines);
-    expect(result[0].avgResponseTime).toBe(999);
-    expect(result[0].p95ResponseTime).toBe(999);
+    expect(result[0]!.avgResponseTime).toBe(999);
+    expect(result[0]!.p95ResponseTime).toBe(999);
   });
 });
 

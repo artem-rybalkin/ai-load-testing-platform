@@ -98,7 +98,7 @@ export const saveScript = async (
      RETURNING id`,
     [targetUrl, script, description ?? null, projectId ?? null, workspaceId ?? null]
   );
-  return rows[0].id;
+  return rows[0]!.id; // INSERT ... ON CONFLICT DO UPDATE ... RETURNING always returns exactly one row
 };
 
 // Status transitions go through results-service's REST endpoints rather than
