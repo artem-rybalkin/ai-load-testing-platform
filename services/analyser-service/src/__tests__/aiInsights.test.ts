@@ -214,7 +214,7 @@ describe('generateAiInsights — prompt includes key context', () => {
 
     await generateAiInsights(makeCtx({ targetUrl: 'https://checkout.example.com/api/pay' }));
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
     expect(prompt).toContain('https://checkout.example.com/api/pay');
   });
 
@@ -226,7 +226,7 @@ describe('generateAiInsights — prompt includes key context', () => {
       thresholdViolations: ['p95 response time 1500ms exceeds threshold 1000ms'],
     }));
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
     expect(prompt).toContain('p95 response time 1500ms exceeds threshold 1000ms');
   });
 
@@ -236,7 +236,7 @@ describe('generateAiInsights — prompt includes key context', () => {
 
     await generateAiInsights(makeCtx({ thresholdViolations: [] }));
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
     expect(prompt).toContain('None');
   });
 
@@ -248,7 +248,7 @@ describe('generateAiInsights — prompt includes key context', () => {
       metrics: { ...baseMetrics, requestsFailed: 0, checksTotal: 200, checksFailed: 20 },
     }));
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
     expect(prompt).toContain('Check assertions failed: 20 (10%)');
   });
 
@@ -258,7 +258,7 @@ describe('generateAiInsights — prompt includes key context', () => {
 
     await generateAiInsights(makeCtx({ metrics: baseMetrics }));
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
     expect(prompt).not.toContain('Check assertions failed');
   });
 });
@@ -300,7 +300,7 @@ describe('performance', () => {
 
     await generateAiInsights(makeCtx({ metrics: manyStepsMetrics }));
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
 
     // Compute expected top-5 steps by p95ResponseTime (descending), matching
     // the sort+slice(0, 5) implemented in buildPayload's topStepsByP95.
@@ -317,7 +317,7 @@ describe('performance', () => {
 
     // A step that should NOT be in the top 5 must not appear in the steps line
     const bottomStep = [...manyStepsMetrics.stepMetrics!]
-      .sort((a, b) => a.p95ResponseTime - b.p95ResponseTime)[0];
+      .sort((a, b) => a.p95ResponseTime - b.p95ResponseTime)[0]!; // fixture always has 50 steps
     if (!top5.includes(bottomStep)) {
       expect(stepsLine).not.toContain(bottomStep.name);
     }
@@ -338,7 +338,7 @@ describe('performance', () => {
 
     await generateAiInsights(makeCtx({ metrics: metricsWithErrors }));
 
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
     expect(prompt).toContain('Error breakdown: 30 HTTP 5xx (server errors), 50 HTTP 4xx (request errors), 15 timeouts, 5 network errors');
 
     // Even with 50 steps + error breakdown, the prompt stays well within a

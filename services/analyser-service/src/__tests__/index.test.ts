@@ -177,7 +177,7 @@ describe('POST /analyse', () => {
 
     expect(response.statusCode).toBe(200);
     expect(mock).toHaveBeenCalledTimes(1);
-    const prompt = mock.mock.calls[0][0] as string;
+    const prompt = mock.mock.calls[0]![0] as string;
     expect(prompt).toContain('Grafana Loki');
     expect(prompt).toContain('error rate spike at 12:05 UTC');
   });
