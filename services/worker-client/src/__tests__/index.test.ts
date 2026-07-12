@@ -197,7 +197,7 @@ describe('worker-client index.ts', () => {
       mockRunClientTest.mockResolvedValue({ metrics: makeMetrics(), executionLog: 'log' });
       const { start } = await import('../index');
       await start();
-      const queueHandler = channel.consume.mock.calls[1][1] as (msg: unknown) => Promise<void>;
+      const queueHandler = channel.consume.mock.calls[1]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
 
       await queueHandler(makeMsg(makeTest()));
 
@@ -210,9 +210,9 @@ describe('worker-client index.ts', () => {
       // silently drops a completed test's result with no way to know it happened.
       expect(channel.waitForConfirms).toHaveBeenCalledOnce();
       expect(channel.ack).toHaveBeenCalledOnce();
-      const sendOrder = channel.sendToQueue.mock.invocationCallOrder[channel.sendToQueue.mock.calls.indexOf(sent!)];
-      const confirmOrder = channel.waitForConfirms.mock.invocationCallOrder[0];
-      const ackOrder = channel.ack.mock.invocationCallOrder[0];
+      const sendOrder = channel.sendToQueue.mock.invocationCallOrder[channel.sendToQueue.mock.calls.indexOf(sent!)]!;
+      const confirmOrder = channel.waitForConfirms.mock.invocationCallOrder[0]!; // asserted toHaveBeenCalledOnce() above
+      const ackOrder = channel.ack.mock.invocationCallOrder[0]!; // asserted toHaveBeenCalledOnce() above
       expect(sendOrder).toBeLessThan(confirmOrder);
       expect(confirmOrder).toBeLessThan(ackOrder);
     });
@@ -221,11 +221,11 @@ describe('worker-client index.ts', () => {
       mockRunClientTest.mockResolvedValue({ metrics: makeMetrics(), executionLog: '' });
       const { start } = await import('../index');
       await start();
-      const queueHandler = channel.consume.mock.calls[1][1] as (msg: unknown) => Promise<void>;
+      const queueHandler = channel.consume.mock.calls[1]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
 
       await queueHandler(makeMsg(makeTest({ targetUrl: 'http://localhost:8080' })));
 
-      const passedTest = mockRunClientTest.mock.calls[0][0] as TestRequest;
+      const passedTest = mockRunClientTest.mock.calls[0]![0] as TestRequest; // awaited queueHandler() above already invoked it
       expect(passedTest.targetUrl).toBe('http://host.docker.internal:8080');
     });
 
@@ -233,12 +233,12 @@ describe('worker-client index.ts', () => {
       mockRunClientTest.mockRejectedValue(Object.assign(new Error('puppeteer crashed'), { partialLog: 'boom' }));
       const { start } = await import('../index');
       await start();
-      const queueHandler = channel.consume.mock.calls[1][1] as (msg: unknown) => Promise<void>;
+      const queueHandler = channel.consume.mock.calls[1]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
 
       await queueHandler(makeMsg(makeTest({ id: 'retry-test' })));
 
       expect(channel.publish).toHaveBeenCalledOnce();
-      expect(channel.publish.mock.calls[0][1]).toBe('client-tests');
+      expect(channel.publish.mock.calls[0]![1]).toBe('client-tests');
       expect(channel.sendToQueue).not.toHaveBeenCalledWith('test-results', expect.anything(), expect.anything());
     });
 
@@ -251,8 +251,8 @@ describe('worker-client index.ts', () => {
 
       const { start } = await import('../index');
       await start();
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
-      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: unknown) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
+      const queueHandler  = channel.consume.mock.calls[1]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
 
       const test = makeTest({ id: 'stop-test-1' });
       const queuePromise = queueHandler(makeMsg(test));
@@ -274,8 +274,8 @@ describe('worker-client index.ts', () => {
       });
       const { start } = await import('../index');
       await start();
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
-      const queueHandler  = channel.consume.mock.calls[1][1] as (msg: unknown) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
+      const queueHandler  = channel.consume.mock.calls[1]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
 
       void queueHandler(makeMsg(makeTest({ id: 'kill-me' })));
       await vi.waitFor(() => expect(mockRunClientTest).toHaveBeenCalled());
@@ -289,7 +289,7 @@ describe('worker-client index.ts', () => {
     it('cancel-queue consumer is a no-op (but still acks) for an unknown testId', async () => {
       const { start } = await import('../index');
       await start();
-      const cancelHandler = channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
+      const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
 
       await expect(cancelHandler(makeMsg({ testId: 'never-started' }))).resolves.toBeUndefined();
       expect(channel.ack).toHaveBeenCalled();
@@ -324,8 +324,8 @@ describe('worker-client index.ts', () => {
         const { start } = await import('../index');
         await start();
 
-        const cancelHandler = channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
-        const queueHandler  = channel.consume.mock.calls[1][1] as (msg: unknown) => Promise<void>;
+        const cancelHandler = channel.consume.mock.calls[0]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
+        const queueHandler  = channel.consume.mock.calls[1]![1] as (msg: unknown) => Promise<void>; // start() always registers cancel (0) then queue (1) consumers
 
         const test = makeTest({ id: 'cancel-during-acquire' });
         const queuePromise = queueHandler(makeMsg(test));

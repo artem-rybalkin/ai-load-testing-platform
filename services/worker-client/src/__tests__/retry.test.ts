@@ -72,7 +72,7 @@ describe('handleRetry — retry increments', () => {
     const ch = makeChannel();
     handleRetry(ch, makeMsg({ 'x-custom': 'abc', 'x-retry-count': 0 }), 'client-tests', 'client-tests.dlq', 'test-123');
 
-    const opts = (ch.publish as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    const opts = (ch.publish as ReturnType<typeof vi.fn>).mock.calls[0]![3]; // handleRetry() above always calls ch.publish
     expect(opts.headers['x-custom']).toBe('abc');
   });
 });
@@ -141,7 +141,7 @@ describe('handleRetry — queue name passthrough', () => {
     const msg = { ...makeMsg(), content };
     handleRetry(ch, msg, 'q', 'q.dlq', 'abc');
 
-    const republishedContent = (ch.publish as ReturnType<typeof vi.fn>).mock.calls[0][2] as Buffer;
+    const republishedContent = (ch.publish as ReturnType<typeof vi.fn>).mock.calls[0]![2] as Buffer; // handleRetry() above always calls ch.publish
     expect(republishedContent.toString()).toBe(content.toString());
   });
 });

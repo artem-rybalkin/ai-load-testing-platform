@@ -296,7 +296,7 @@ describe('runClientTest — multiple sessions', () => {
     let callCount = 0;
     const pagesInOrder = [failingPage, page2, page3];
     const browser = makeMockBrowser({
-      newPageResult: () => pagesInOrder[callCount++],
+      newPageResult: () => pagesInOrder[callCount++]!, // sessions: 3 below always matches this 3-element array
     });
     const { ctx } = makeCtx({ browser });
     const test = { ...BASE_TEST, options: { sessions: 3, duration: '30s', collectWebVitals: true } as TestRequest['options'] };
@@ -507,7 +507,7 @@ describe('runClientTest — device emulation', () => {
     };
     await runClientTest(test, ctx);
     expect(page.emulate).toHaveBeenCalledOnce();
-    const emulated = page.emulate.mock.calls[0][0];
+    const emulated = page.emulate.mock.calls[0]![0];
     expect(emulated.userAgent).toContain('iPhone');
     expect(emulated.viewport.isMobile).toBe(true);
   });
@@ -541,13 +541,13 @@ describe('runClientTest — execution log', () => {
     const { ctx } = makeCtx();
     await runClientTest(BASE_TEST, ctx);
     expect(ctx.postLogLines).toHaveBeenCalled();
-    const firstCall = (ctx.postLogLines as ReturnType<typeof vi.fn>).mock.calls[0];
+    const firstCall = (ctx.postLogLines as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(firstCall[0]).toBe(BASE_TEST.id); // testId
     const batch = firstCall[1] as Array<{ level: string; line: string }>;
     expect(Array.isArray(batch)).toBe(true);
     expect(batch.length).toBeGreaterThan(0);
-    expect(typeof batch[0].level).toBe('string');
-    expect(typeof batch[0].line).toBe('string');
+    expect(typeof batch[0]!.level).toBe('string');
+    expect(typeof batch[0]!.line).toBe('string');
   });
 
   it('executionLog contains session completion message', async () => {

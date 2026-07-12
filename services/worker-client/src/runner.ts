@@ -199,7 +199,7 @@ export const runClientTest = async (
 
             new PerformanceObserver((list) => {
               const entries = list.getEntries();
-              lcp = entries[entries.length - 1].startTime;
+              lcp = entries[entries.length - 1]!.startTime; // PerformanceObserver only invokes the callback with a non-empty entry list
             }).observe({ type: 'largest-contentful-paint', buffered: true });
 
             new PerformanceObserver((list) => {
