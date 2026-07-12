@@ -47,7 +47,7 @@ export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }):
           `INSERT INTO workspaces (team_id, name, description) VALUES ($1, $2, $3) RETURNING id, team_id, name, description, created_at`,
           [projectId, name.trim(), description?.trim() ?? null],
         );
-        const r = rows[0];
+        const r = rows[0]!; // INSERT ... RETURNING always returns exactly one row
         return reply.code(201).send({ id: r.id, teamId: r.team_id, name: r.name, description: r.description ?? null, createdAt: r.created_at });
       } catch (err: unknown) {
         if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'A workspace with that name already exists' });
@@ -79,7 +79,7 @@ export function workspaceRoutes(app: FastifyInstance, { pool }: { pool: Pool }):
           vals,
         );
         if (!rows.length) return reply.code(404).send({ error: 'Workspace not found' });
-        const r = rows[0];
+        const r = rows[0]!; // guarded by rows.length above
         return { id: r.id, teamId: r.team_id, name: r.name, description: r.description ?? null, createdAt: r.created_at };
       } catch (err: unknown) {
         if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'A workspace with that name already exists' });

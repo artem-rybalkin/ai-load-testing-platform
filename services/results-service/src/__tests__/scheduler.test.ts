@@ -131,13 +131,13 @@ describe('triggerSchedule — via captured cron callback', () => {
   it('calls POST /tests on api-service with the schedule body', async () => {
     await insertSchedule();
     await startScheduler(pool);
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
     expect(mockFetch).toHaveBeenCalledWith(
       expect.stringContaining('/tests'),
       expect.objectContaining({ method: 'POST' })
     );
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
     expect(body.type).toBe('backend');
     expect(body.targetUrl).toBe('http://example.com');
     expect(body.options).toMatchObject({ vus: 5, duration: '30s' });
@@ -146,28 +146,28 @@ describe('triggerSchedule — via captured cron callback', () => {
   it('updates last_run_at in DB after a successful trigger', async () => {
     const id = await insertSchedule();
     await startScheduler(pool);
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
     const { rows } = await pool.query('SELECT last_run_at FROM schedules WHERE id = $1', [id]);
-    expect(rows[0].last_run_at).not.toBeNull();
+    expect(rows[0]!.last_run_at).not.toBeNull();
   });
 
   it('does not update last_run_at when the api-service returns an error', async () => {
     const id = await insertSchedule();
     await startScheduler(pool);
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
     const { rows } = await pool.query('SELECT last_run_at FROM schedules WHERE id = $1', [id]);
-    expect(rows[0].last_run_at).toBeNull();
+    expect(rows[0]!.last_run_at).toBeNull();
   });
 
   it('uses a default description when schedule description is null', async () => {
     await insertSchedule();
     await startScheduler(pool);
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
     expect(body.description).toContain('Scheduled');
     expect(typeof body.description).toBe('string');
   });
@@ -187,10 +187,10 @@ describe('triggerSchedule — API_KEY header', () => {
     delete process.env.API_KEY;
     await insertSchedule();
     await startScheduler(pool);
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
 
-    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    const headers = mockFetch.mock.calls[0]![1].headers as Record<string, string>;
     expect(headers).not.toHaveProperty('X-API-Key');
     expect(headers).toEqual({ 'Content-Type': 'application/json' });
   });
@@ -199,10 +199,10 @@ describe('triggerSchedule — API_KEY header', () => {
     process.env.API_KEY = 'test-api-key';
     await insertSchedule();
     await startScheduler(pool);
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
 
-    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    const headers = mockFetch.mock.calls[0]![1].headers as Record<string, string>;
     expect(headers['X-API-Key']).toBe('test-api-key');
   });
 });
@@ -222,7 +222,7 @@ describe('triggerSchedule — multi-replica leader election', () => {
     const id = await insertSchedule();
     await startScheduler(pool);
 
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
 
     // Pin Date so both "replicas" compute the identical fire_window lock key —
     // triggerSchedule reads new Date() synchronously before its first await, so
@@ -249,7 +249,7 @@ describe('triggerSchedule — multi-replica leader election', () => {
       'SELECT last_run_at FROM schedules WHERE id = $1',
       [id]
     );
-    expect(rows[0].last_run_at).not.toBeNull();
+    expect(rows[0]!.last_run_at).not.toBeNull();
   });
 });
 
@@ -267,10 +267,10 @@ describe('triggerSchedule — X-Internal-Key header (regression)', () => {
     delete process.env.INTERNAL_API_KEY;
     await insertSchedule();
     await startScheduler(pool);
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
 
-    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    const headers = mockFetch.mock.calls[0]![1].headers as Record<string, string>;
     expect(headers).not.toHaveProperty('X-Internal-Key');
   });
 
@@ -279,10 +279,10 @@ describe('triggerSchedule — X-Internal-Key header (regression)', () => {
     process.env.INTERNAL_API_KEY = 'test-internal-key';
     await insertSchedule();
     await startScheduler(pool);
-    const callback = mockCronSchedule.mock.calls[0][1] as () => Promise<void>;
+    const callback = mockCronSchedule.mock.calls[0]![1] as () => Promise<void>;
     await callback();
 
-    const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>;
+    const headers = mockFetch.mock.calls[0]![1].headers as Record<string, string>;
     expect(headers['X-Internal-Key']).toBe('test-internal-key');
     expect(headers).not.toHaveProperty('X-API-Key');
   });

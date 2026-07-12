@@ -42,7 +42,7 @@ const triggerSchedule = async (pool: Pool, schedule: Schedule): Promise<void> =>
       [lockKey]
     );
 
-    if (!lockRows[0].acquired) {
+    if (!lockRows[0]!.acquired) { // SELECT of a scalar function with no FROM clause always returns exactly one row
       // Another replica already claimed this firing window — skip silently.
       await client.query('ROLLBACK');
       log.info(
@@ -117,7 +117,7 @@ export const reloadSchedule = async (pool: Pool, id: string): Promise<void> => {
     activeTasks.delete(id);
     return;
   }
-  registerSchedule(pool, rows[0]);
+  registerSchedule(pool, rows[0]!); // guarded by the rows.length === 0 check above
 };
 
 export const removeSchedule = (id: string): void => {

@@ -490,5 +490,5 @@ export const findOrCreateProject = async (name: string, p: Pool = pool): Promise
     `INSERT INTO projects (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
     [name.trim().toLowerCase()]
   );
-  return rows[0].id;
+  return rows[0]!.id; // INSERT ... ON CONFLICT DO UPDATE ... RETURNING always returns exactly one row
 };

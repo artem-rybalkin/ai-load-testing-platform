@@ -221,7 +221,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
                ORDER BY r.created_at DESC LIMIT $3`,
               [projectId, workspaceId, limit],
             );
-        return { results: rows, nextBefore: rows.length === limit ? rows[rows.length - 1].created_at : null };
+        return { results: rows, nextBefore: rows.length === limit ? rows[rows.length - 1]!.created_at : null }; // limit is always >= 1, so rows.length === limit implies at least one row
       } catch {
         return reply.code(500).send({ error: 'Failed to fetch results' });
       }
@@ -260,7 +260,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
         [[a, b], projectId],
       );
       if (rows.length < 2) return reply.code(404).send({ error: 'One or both results not found' });
-      const [resultA, resultB] = rows[0].test_id === a ? [rows[0], rows[1]] : [rows[1], rows[0]];
+      const [resultA, resultB] = rows[0]!.test_id === a ? [rows[0]!, rows[1]!] : [rows[1]!, rows[0]!]; // guarded by rows.length < 2 above
       return { resultA, resultB };
     },
   );
@@ -435,7 +435,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
           [testId, projectId],
         );
         if (rows.length === 0) return reply.code(404).send({ error: 'Not found' });
-        return { log: rows[0].executionLog ?? null };
+        return { log: rows[0]!.executionLog ?? null }; // guarded by rows.length === 0 above
       } catch {
         return reply.code(500).send({ error: 'Failed to fetch execution log' });
       }
@@ -454,7 +454,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
         [testId, projectId],
       );
       if (rows.length === 0) return reply.code(404).send({ error: 'Completed result not found' });
-      const { target_url, type } = rows[0];
+      const { target_url, type } = rows[0]!; // guarded by rows.length === 0 above
       await pool.query(
         `UPDATE test_results SET is_baseline = FALSE
          WHERE target_url = $1 AND type = $2 AND ($3::uuid IS NULL OR project_id = $3::uuid)`,
@@ -494,7 +494,7 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
       );
       if (rows.length === 0) return reply.code(404).send({ error: 'Result not found' });
 
-      const result = rows[0];
+      const result = rows[0]!; // guarded by rows.length === 0 above
 
       // AI-8: Executive summary
       let execSummary = '';
@@ -651,7 +651,7 @@ Return only the summary text, no JSON, no markdown.`,
       );
       if (rows.length === 0) return reply.code(404).send({ error: 'Result not found' });
 
-      const result = rows[0];
+      const result = rows[0]!; // guarded by rows.length === 0 above
       const csvEscape = (v: unknown): string => {
         // Object/array column values (e.g. a jsonb column selected via SELECT *)
         // previously rendered as the literal string "[object Object]" here —

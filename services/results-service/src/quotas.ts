@@ -13,7 +13,7 @@ export const getTeamQuota = async (pool: Pool, teamId: string): Promise<TeamQuot
 
   if (rows.length === 0) return { ...DEFAULT_TEAM_QUOTA };
 
-  const row = rows[0];
+  const row = rows[0]!; // guarded by rows.length === 0 above
   return {
     maxConcurrentTests: row.max_concurrent_tests,
     maxVusPerTest: row.max_vus_per_test,
@@ -48,7 +48,7 @@ export const checkScheduleQuota = async (pool: Pool, teamId: string | undefined)
     `SELECT COUNT(*) FROM schedules WHERE project_id = $1 AND enabled = TRUE`,
     [teamId]
   );
-  const enabled = parseInt(rows[0].count, 10);
+  const enabled = parseInt(rows[0]!.count, 10); // COUNT(*) with no GROUP BY always returns exactly one row
   if (enabled >= quota.maxScheduledTests) {
     return `Team has reached its enabled-schedule limit (max ${quota.maxScheduledTests})`;
   }
@@ -117,7 +117,7 @@ export const checkAndIncrementGeminiUsage = async (pool: Pool, teamId: string | 
 
   // INSERT path (first call of the day): call_count is now 1.
   // Guard against the edge case where the configured limit is 0.
-  if (rows[0].call_count > limit) {
+  if (rows[0]!.call_count > limit) { // guarded by the rows.length === 0 check above
     return `Team has reached its daily AI quota (max ${limit} calls/day)`;
   }
 
@@ -196,8 +196,8 @@ export const getTeamUsage = async (pool: Pool, teamId: string): Promise<TeamUsag
   ]);
 
   return {
-    concurrentTests: parseInt(concurrentRes.rows[0].count, 10),
-    scheduledTests: parseInt(scheduledRes.rows[0].count, 10),
+    concurrentTests: parseInt(concurrentRes.rows[0]!.count, 10), // COUNT(*) with no GROUP BY always returns exactly one row
+    scheduledTests: parseInt(scheduledRes.rows[0]!.count, 10), // COUNT(*) with no GROUP BY always returns exactly one row
     geminiCallsToday: geminiRes.rows[0]?.call_count ?? 0,
   };
 };

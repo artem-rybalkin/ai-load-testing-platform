@@ -181,7 +181,7 @@ describe('startConsumer', () => {
   it('routes a non-JSON message to the DLQ, acks it, and never touches the database', async () => {
     const { startConsumer, DLQ } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer } | null) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer } | null) => Promise<void>;
 
     await handler({ content: Buffer.from('not valid json {{{') });
 
@@ -194,7 +194,7 @@ describe('startConsumer', () => {
   it('routes a message failing schema validation (missing required field) to the DLQ', async () => {
     const { startConsumer, DLQ } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer } | null) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer } | null) => Promise<void>;
 
     await handler({ content: Buffer.from(JSON.stringify({ targetUrl: 'https://example.com' })) }); // no testId, no status, no metrics
 
@@ -205,7 +205,7 @@ describe('startConsumer', () => {
   it('ignores a null message (consumer cancellation notice)', async () => {
     const { startConsumer } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: null) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: null) => Promise<void>;
 
     await expect(handler(null)).resolves.toBeUndefined();
     expect(channel.ack).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe('startConsumer', () => {
   it('parses a valid message, persists it via the real handleResult, and acks', async () => {
     const { startConsumer } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
     const result = makeResult();
 
     await handler({ content: Buffer.from(JSON.stringify(result)), properties: { headers: {} } });
@@ -239,7 +239,7 @@ describe('startConsumer', () => {
   it('republishes with an incremented x-retry-count when handleResult throws and retries remain', async () => {
     const { startConsumer, QUEUE } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
     const result = makeResult({ scriptId: crypto.randomUUID() });
     const msg = { content: Buffer.from(JSON.stringify(result)), properties: { headers: { 'x-retry-count': 0 } } };
 
@@ -256,7 +256,7 @@ describe('startConsumer', () => {
   it('routes to the DLQ once MAX_RETRIES is exhausted', async () => {
     const { startConsumer, DLQ } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
     const result = makeResult({ scriptId: crypto.randomUUID() });
     const msg = { content: Buffer.from(JSON.stringify(result)), properties: { headers: { 'x-retry-count': 3 } } };
 
@@ -270,7 +270,7 @@ describe('startConsumer', () => {
   it('routes to the DLQ when retryCount exceeds MAX_RETRIES', async () => {
     const { startConsumer, DLQ } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
     const result = makeResult({ scriptId: crypto.randomUUID() });
     const msg = { content: Buffer.from(JSON.stringify(result)), properties: { headers: { 'x-retry-count': 8 } } };
 
@@ -282,7 +282,7 @@ describe('startConsumer', () => {
   it('treats a missing x-retry-count header as 0 (first attempt)', async () => {
     const { startConsumer, QUEUE } = await import('../consumer');
     await startConsumer({ pool });
-    const handler = channel.consume.mock.calls[0][1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
+    const handler = channel.consume.mock.calls[0]![1] as (msg: { content: Buffer; properties: { headers: Record<string, number> } }) => Promise<void>;
     const result = makeResult({ scriptId: crypto.randomUUID() });
     const msg = { content: Buffer.from(JSON.stringify(result)), properties: { headers: {} } };
 

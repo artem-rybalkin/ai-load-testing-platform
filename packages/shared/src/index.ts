@@ -360,7 +360,7 @@ export interface LiveMetricPoint {
   clientErrorRate: number;
   /** % of requests in this window that returned an HTTP 5xx status */
   serverErrorRate: number;
-  stepMetrics?: LiveStepMetric[];
+  stepMetrics?: LiveStepMetric[] | undefined;
 }
 
 // ── Flow Recording ────────────────────────────────────────────────────────────

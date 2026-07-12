@@ -139,7 +139,7 @@ const fireWebhooks = async (p: Pool, result: TestResult, perfStatus: string, pro
   const results = await Promise.allSettled(deliveries.map(d => d.promise));
   results.forEach((res, i) => {
     if (res.status === 'rejected') {
-      log.warn({ url: deliveries[i].url, err: (res.reason as Error).message }, 'Webhook delivery failed');
+      log.warn({ url: deliveries[i]!.url, err: (res.reason as Error).message }, 'Webhook delivery failed'); // results is 1:1 with deliveries
     }
   });
 };
@@ -166,7 +166,7 @@ export const handleResult = async (p: Pool, result: TestResult): Promise<void> =
      LIMIT 1`,
     [result.targetUrl, result.metrics.type, result.testId, projectId]
   );
-  const previousMetrics = prevRows.length > 0 ? prevRows[0].metrics : null;
+  const previousMetrics = prevRows.length > 0 ? prevRows[0]!.metrics : null;
 
   // 2. Call analyser-service (up to 12 s) without holding a pg client
   const analysis: AnalysisResult = await callAnalyserService(

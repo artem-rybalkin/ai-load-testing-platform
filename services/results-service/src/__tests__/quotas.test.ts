@@ -38,7 +38,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll(pool, 'TRUNCATE gemini_usage, team_quotas, schedules, test_results, projects CASCADE');
   const teamResult = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-a') RETURNING id`);
-  teamId = teamResult.rows[0].id;
+  teamId = teamResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 });
 
 describe('getTeamQuota', () => {
@@ -158,9 +158,9 @@ describe('getTeamUsage', () => {
 
   it('does not count other teams usage', async () => {
     const otherTeam = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-b') RETURNING id`);
-    await insertTestResult('running', otherTeam.rows[0].id);
-    await insertSchedule(otherTeam.rows[0].id, true);
-    await incrementGeminiUsage(pool, otherTeam.rows[0].id);
+    await insertTestResult('running', otherTeam.rows[0]!.id); // INSERT ... RETURNING always returns exactly one row
+    await insertSchedule(otherTeam.rows[0]!.id, true);
+    await incrementGeminiUsage(pool, otherTeam.rows[0]!.id);
 
     expect(await getTeamUsage(pool, teamId)).toEqual({
       concurrentTests: 0,

@@ -36,7 +36,8 @@ export const getSession = async (pool: Pool, token: string | undefined): Promise
     [hashToken(token)]
   );
   if (rows.length === 0) return null;
-  return { userId: rows[0].user_id, teamId: rows[0].team_id, expiresAt: rows[0].expires_at };
+  const row = rows[0]!; // guarded by rows.length === 0 above
+  return { userId: row.user_id, teamId: row.team_id, expiresAt: row.expires_at };
 };
 
 /** Marks a session as revoked (logout). */

@@ -1561,7 +1561,7 @@ describe('POST /internal/gemini-usage', () => {
 
   it('allows and increments call_count on the first call of the day', async () => {
     const team = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('gemini-usage-team-1') RETURNING id`);
-    const teamId = team.rows[0].id;
+    const teamId = team.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 
     const res = await app.inject({ method: 'POST', url: '/internal/gemini-usage', payload: { teamId } });
     expect(res.statusCode).toBe(200);
@@ -1570,12 +1570,13 @@ describe('POST /internal/gemini-usage', () => {
     const { rows } = await pool.query<{ call_count: number }>(
       `SELECT call_count FROM gemini_usage WHERE team_id = $1 AND usage_date = CURRENT_DATE`, [teamId],
     );
-    expect(rows[0].call_count).toBe(1);
+    expect(rows[0]!.call_count).toBe(1); // the POST above always inserts/updates this row first
+
   });
 
   it('returns allowed=false with an error once the daily quota is exhausted', async () => {
     const team = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('gemini-usage-team-2') RETURNING id`);
-    const teamId = team.rows[0].id;
+    const teamId = team.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
     await pool.query(
       `INSERT INTO team_quotas (team_id, max_concurrent_tests, max_vus_per_test, max_test_duration_seconds, max_scheduled_tests, max_gemini_calls_per_day)
        VALUES ($1, 10, 100, 3600, 10, 1)`,

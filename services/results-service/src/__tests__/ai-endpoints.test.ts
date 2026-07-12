@@ -389,7 +389,7 @@ describe('POST /ai/translate', () => {
       method: 'POST', url: '/ai/translate',
       payload: { script: PLAYWRIGHT_SCRIPT, targetUrl: 'https://myapp.example.com' },
     });
-    const promptArg = mockGenerateAIText.mock.calls[0][0] as string;
+    const promptArg = mockGenerateAIText.mock.calls[0]![0] as string;
     expect(promptArg).toContain('https://myapp.example.com');
   });
 
@@ -777,7 +777,7 @@ describe('POST /chat/parse', () => {
         method: 'POST', url: '/auth/register',
         payload: { email: 'chat-flow@example.com', password: 'password123', teamName: 'chat-flow-team', name: 'Chat Tester' },
       });
-      const cookie = (reg.headers['set-cookie'] as string).split(';')[0];
+      const cookie = (reg.headers['set-cookie'] as string).split(';')[0]!; // .split() always returns at least one element
       const teamId = reg.json().currentTeamId as string;
 
       const before = await pool.query<{ call_count: number }>(
@@ -826,7 +826,7 @@ describe('POST /chat/parse', () => {
         method: 'POST', url: '/auth/register',
         payload: { email: 'chat-quota@example.com', password: 'password123', teamName: 'chat-quota-team', name: 'Quota Tester' },
       });
-      const cookie = (reg.headers['set-cookie'] as string).split(';')[0];
+      const cookie = (reg.headers['set-cookie'] as string).split(';')[0]!; // .split() always returns at least one element
       const teamId = reg.json().currentTeamId as string;
 
       await pool.query(
@@ -963,7 +963,7 @@ describe('POST /chat/parse', () => {
         method: 'POST', url: '/auth/register',
         payload: { email: 'chat-override@example.com', password: 'password123', teamName: 'chat-override-team', name: 'Override Tester' },
       });
-      const cookie = (reg.headers['set-cookie'] as string).split(';')[0];
+      const cookie = (reg.headers['set-cookie'] as string).split(';')[0]!; // .split() always returns at least one element
       const teamId = reg.json().currentTeamId as string;
 
       // Seed a team-level override pointing at 'openai' instead of the global default ('gemini').
@@ -984,7 +984,7 @@ describe('POST /chat/parse', () => {
 
       // generateAIText's second argument is the resolved AiProviderSetting — assert it reflects
       // the team override ('openai'), not the global default ('gemini').
-      const settingArg = mockGenerateAIText.mock.calls[0][1];
+      const settingArg = mockGenerateAIText.mock.calls[0]![1];
       expect(settingArg.provider).toBe('openai');
     } finally {
       await sessionApp.close();
@@ -1004,7 +1004,7 @@ describe('POST /chat/parse', () => {
     const res = await app.inject({ method: 'POST', url: '/chat/parse', payload: { messages } });
     expect(res.statusCode).toBe(200);
 
-    const promptArg = mockGenerateAIText.mock.calls[0][0] as string;
+    const promptArg = mockGenerateAIText.mock.calls[0]![0] as string;
     // The 5 oldest messages (message-0..message-4) must be truncated; the most recent 20 remain.
     expect(promptArg).not.toContain('message-0');
     expect(promptArg).not.toContain('message-4');
@@ -1030,7 +1030,7 @@ describe('Gemini quota enforcement', () => {
   let sessionApp: FastifyInstance;
 
   const sessionCookie = (res: { headers: Record<string, unknown> }): string =>
-    (res.headers['set-cookie'] as string).split(';')[0];
+    (res.headers['set-cookie'] as string).split(';')[0]!; // .split() always returns at least one element
 
   beforeAll(async () => {
     process.env.SESSION_SECRET = SESSION_SECRET;
@@ -1110,7 +1110,7 @@ describe('POST /chat/parse — HAR attachment PII must be redacted before reachi
         },
       });
 
-      const prompt = mockGenerateAIText.mock.calls[0][0] as string;
+      const prompt = mockGenerateAIText.mock.calls[0]![0] as string;
 
       // Correct: the email must appear only in redacted form.
       // Bug: processAttachments/summarizeHar never calls redactPII() — raw PII reaches the LLM.
@@ -1174,7 +1174,7 @@ describe('GET /results/:testId/diagnose — external log source content must be 
 
       await app.inject({ method: 'GET', url: `/results/${testId}/diagnose` });
 
-      const prompt = mockGenerateAIText.mock.calls[0][0] as string;
+      const prompt = mockGenerateAIText.mock.calls[0]![0] as string;
 
       // Correct: external log content must be PII-redacted before reaching the LLM.
       // Bug: externalMetrics.ts passes raw fetched text into the prompt — email leaks.
@@ -1210,7 +1210,7 @@ describe('POST /ai/param-suggestions — steps must be PII-redacted before reach
         },
       });
 
-      const prompt = mockGenerateAIText.mock.calls[0][0] as string;
+      const prompt = mockGenerateAIText.mock.calls[0]![0] as string;
 
       // Correct: PII in step bodies must be redacted (→ [REDACTED_EMAIL]) before the prompt.
       // Bug: JSON.stringify(steps) goes straight into fenceUserContent with no redactPII() call.
@@ -1277,7 +1277,7 @@ describe('POST /ai/webhook-noise — result distribution must be scoped to the c
         headers: { 'x-api-key': rawKey },
       });
 
-      const prompt = mockGenerateAIText.mock.calls[0][0] as string;
+      const prompt = mockGenerateAIText.mock.calls[0]![0] as string;
 
       // Correct: Team A's prompt must only show {"passed":2} — no "failed" key.
       // Bug: no project_id filter → the prompt includes both teams: {"passed":2,"failed":5}.
@@ -1324,7 +1324,7 @@ describe('processAttachments — HAR filename must be XML-escaped in the prompt 
         },
       });
 
-      const prompt = mockGenerateAIText.mock.calls[0][0] as string;
+      const prompt = mockGenerateAIText.mock.calls[0]![0] as string;
 
       // Correct: the filename must be escaped so the attribute boundary is preserved.
       // After the fix the prompt should contain &quot; — not the raw double-quote.

@@ -25,7 +25,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
       'SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2',
       [orgId, userId],
     );
-    return rows.length > 0 ? rows[0].role : null;
+    return rows.length > 0 ? rows[0]!.role : null;
   };
 
   // ── POST /teams ───────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
     const normalizedName = name.trim().toLowerCase();
     try {
       const { rows } = await pool.query<{ id: string }>('INSERT INTO projects (name) VALUES ($1) RETURNING id', [normalizedName]);
-      const teamId = rows[0].id;
+      const teamId = rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
       await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamId, request.user.id]);
       return { id: teamId, name: normalizedName, role: 'admin' as TeamRole };
     } catch (err) {
@@ -73,7 +73,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
     if (userRows.length === 0) return reply.code(404).send({ error: 'No user with that email' });
 
     try {
-      await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)`, [request.params.id, userRows[0].id, memberRole]);
+      await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)`, [request.params.id, userRows[0]!.id, memberRole]); // guarded by userRows.length === 0 above
     } catch (err) {
       if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'User is already a member of this team' });
       throw err;
@@ -98,7 +98,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
           `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
           [request.params.id, request.params.userId],
         );
-        if (parseInt(rows[0].count, 10) === 0) {
+        if (parseInt(rows[0]!.count, 10) === 0) { // COUNT(*) with no GROUP BY always returns exactly one row
           await client.query('ROLLBACK');
           return reply.code(409).send({ error: 'Cannot remove the last admin' });
         }
@@ -140,12 +140,12 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
         return reply.code(404).send({ error: 'Member not found' });
       }
 
-      if (rows[0].role === 'admin') {
+      if (rows[0]!.role === 'admin') { // guarded by rows.length === 0 above
         const { rows: adminRows } = await client.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM team_members WHERE team_id = $1 AND role = 'admin' AND user_id != $2`,
           [request.params.id, request.params.userId],
         );
-        if (parseInt(adminRows[0].count, 10) === 0) {
+        if (parseInt(adminRows[0]!.count, 10) === 0) { // COUNT(*) with no GROUP BY always returns exactly one row
           await client.query('ROLLBACK');
           return reply.code(409).send({ error: 'Cannot remove the last admin' });
         }
@@ -293,7 +293,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
     const normalizedName = name.trim().toLowerCase();
     try {
       const { rows } = await pool.query<{ id: string }>('INSERT INTO organizations (name) VALUES ($1) RETURNING id', [normalizedName]);
-      const orgId = rows[0].id;
+      const orgId = rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
       await pool.query(`INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, 'owner')`, [orgId, request.user.id]);
       return { id: orgId, name: normalizedName, role: 'owner' as OrgRole };
     } catch (err) {
@@ -352,7 +352,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
     if (userRows.length === 0) return reply.code(404).send({ error: 'No user with that email' });
 
     try {
-      await pool.query(`INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)`, [request.params.id, userRows[0].id, memberRole]);
+      await pool.query(`INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)`, [request.params.id, userRows[0]!.id, memberRole]); // guarded by userRows.length === 0 above
     } catch (err) {
       if ((err as { code?: string }).code === '23505') return reply.code(409).send({ error: 'User is already a member of this organization' });
       throw err;
@@ -380,7 +380,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
           `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
           [request.params.id, request.params.userId],
         );
-        if (parseInt(rows[0].count, 10) === 0) {
+        if (parseInt(rows[0]!.count, 10) === 0) { // COUNT(*) with no GROUP BY always returns exactly one row
           await client.query('ROLLBACK');
           return reply.code(409).send({ error: 'Cannot remove the last owner' });
         }
@@ -425,12 +425,12 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
         return reply.code(404).send({ error: 'Member not found' });
       }
 
-      if (rows[0].role === 'owner') {
+      if (rows[0]!.role === 'owner') { // guarded by rows.length === 0 above
         const { rows: ownerRows } = await client.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM org_members WHERE org_id = $1 AND role = 'owner' AND user_id != $2`,
           [request.params.id, request.params.userId],
         );
-        if (parseInt(ownerRows[0].count, 10) === 0) {
+        if (parseInt(ownerRows[0]!.count, 10) === 0) { // COUNT(*) with no GROUP BY always returns exactly one row
           await client.query('ROLLBACK');
           return reply.code(409).send({ error: 'Cannot remove the last owner' });
         }
@@ -463,7 +463,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
         'INSERT INTO projects (name, org_id) VALUES ($1, $2) RETURNING id',
         [normalizedName, request.params.id],
       );
-      const teamId = rows[0].id;
+      const teamId = rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
       await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamId, request.user.id]);
       return { id: teamId, name: normalizedName, role: 'admin' as TeamRole };
     } catch (err) {
@@ -484,7 +484,7 @@ export function teamOrgRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPoo
       `INSERT INTO team_api_keys (team_id, name, key_hash) VALUES ($1, $2, $3) RETURNING id, created_at AS "createdAt"`,
       [request.params.id, name.trim(), hashApiKey(rawKey)],
     );
-    return { id: rows[0].id, name: name.trim(), key: rawKey, createdAt: rows[0].createdAt };
+    return { id: rows[0]!.id, name: name.trim(), key: rawKey, createdAt: rows[0]!.createdAt }; // INSERT ... RETURNING always returns exactly one row
   });
 
   // ── GET /teams/:id/api-keys ───────────────────────────────────────────────

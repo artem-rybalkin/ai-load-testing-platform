@@ -85,11 +85,11 @@ export const buildApp = async (
     timeWindow: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000,
     redis: redisClient,
     skipOnError: true,
-    allowList: (request) => isInternal(request.url.split('?')[0], request.method),
+    allowList: (request) => isInternal(request.url.split('?')[0]!, request.method), // .split() always returns at least one element
   });
 
   app.addHook('onRequest', async (request, reply) => {
-    const url = request.url.split('?')[0];
+    const url = request.url.split('?')[0]!; // .split() always returns at least one element
     if (url.startsWith('/auth/')) return;
     if (publicPaths.has(url)) return;
     // GET is read by ai-service (no session) to pick the active provider; PUT
@@ -124,7 +124,7 @@ export const buildApp = async (
         if (rows.length > 0) {
           pool.query(`UPDATE team_api_keys SET last_used_at = NOW() WHERE key_hash = $1`, [keyHash]).catch(() => {});
           request.user = null;
-          request.projectId = rows[0].team_id;
+          request.projectId = rows[0]!.team_id; // guarded by rows.length > 0 above
           request.role = 'admin';
           request.orgId = null;
           request.orgRole = null;
@@ -155,10 +155,11 @@ export const buildApp = async (
         [session.userId, session.teamId]
       );
       if (rows.length === 0) return reply.code(401).send({ error: 'Not authenticated' });
+      const userRow = rows[0]!; // guarded by rows.length === 0 above
 
-      request.user = { id: rows[0].id, email: rows[0].email, name: rows[0].name };
+      request.user = { id: userRow.id, email: userRow.email, name: userRow.name };
       request.projectId = session.teamId ?? undefined;
-      request.role = rows[0].role;
+      request.role = userRow.role;
       request.orgId = null;
       request.orgRole = null;
 
@@ -179,8 +180,8 @@ export const buildApp = async (
           [session.userId, request.projectId]
         );
         if (orgRows.length > 0) {
-          request.orgId = orgRows[0].orgId;
-          request.orgRole = orgRows[0].role;
+          request.orgId = orgRows[0]!.orgId; // guarded by orgRows.length > 0 above
+          request.orgRole = orgRows[0]!.role;
         }
       }
 

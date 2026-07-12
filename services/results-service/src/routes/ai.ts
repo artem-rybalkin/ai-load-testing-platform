@@ -318,8 +318,8 @@ ${fenceUserContent('playwright_script', script.slice(0, 8000))}`,
         const history = rows.map((r: { metrics: Record<string, number>; perf_status: string; created_at: string }) => ({
           p95: r.metrics.p95ResponseTime ?? r.metrics.p95_response_time,
           avg: r.metrics.avgResponseTime ?? r.metrics.avg_response_time,
-          errorRate: r.metrics.requestsTotal > 0
-            ? ((r.metrics.requestsFailed / r.metrics.requestsTotal) * 100).toFixed(2)
+          errorRate: (r.metrics.requestsTotal ?? 0) > 0
+            ? (((r.metrics.requestsFailed ?? 0) / r.metrics.requestsTotal!) * 100).toFixed(2)
             : '0',
           rps: r.metrics.rps,
           perfStatus: r.perf_status,
@@ -426,10 +426,10 @@ Return ONLY valid JSON with this shape (all times in ms, rates as %):
         totalRequests: metrics.requestsTotal,
         errorBreakdown: eb,
         errorRates: {
-          clientError:  `${((eb.clientError / total) * 100).toFixed(1)}%`,
-          serverError:  `${((eb.serverError / total) * 100).toFixed(1)}%`,
-          timeout:      `${((eb.timeout / total) * 100).toFixed(1)}%`,
-          networkError: `${((eb.networkError / total) * 100).toFixed(1)}%`,
+          clientError:  `${(((eb.clientError ?? 0) / total) * 100).toFixed(1)}%`,
+          serverError:  `${(((eb.serverError ?? 0) / total) * 100).toFixed(1)}%`,
+          timeout:      `${(((eb.timeout ?? 0) / total) * 100).toFixed(1)}%`,
+          networkError: `${(((eb.networkError ?? 0) / total) * 100).toFixed(1)}%`,
         },
         p95ResponseTime: metrics.p95ResponseTime,
         avgResponseTime: metrics.avgResponseTime,

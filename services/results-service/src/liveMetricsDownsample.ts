@@ -10,7 +10,7 @@ export function downsampleLivePoints<T>(rows: T[], cap: number = MAX_LIVE_POINTS
   if (rows.length <= cap) return rows;
   const stride = Math.ceil(rows.length / cap);
   const sampled = rows.filter((_, i) => i % stride === 0);
-  const last = rows[rows.length - 1];
+  const last = rows[rows.length - 1]!; // rows.length > cap (checked above) implies rows.length >= 1
   if (sampled[sampled.length - 1] !== last) sampled.push(last);
   return sampled;
 }

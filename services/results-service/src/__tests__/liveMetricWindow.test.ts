@@ -24,7 +24,7 @@ let app: FastifyInstance;
 const SESSION_SECRET = 'test-session-secret-32-chars-min!';
 
 const sessionCookie = (res: { headers: Record<string, unknown> }): string =>
-  (res.headers['set-cookie'] as string).split(';')[0];
+  (res.headers['set-cookie'] as string).split(';')[0]!; // .split() always returns at least one element
 
 const registerUser = async (email: string, teamName: string, password = 'password123'): Promise<Awaited<ReturnType<typeof app.inject>>> =>
   app.inject({

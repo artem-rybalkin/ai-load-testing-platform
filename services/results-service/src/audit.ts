@@ -5,8 +5,8 @@ export type AuditAction = 'view' | 'export_pdf' | 'export_csv' | 'delete' | 'era
 export type AuditResourceType = 'test_result' | 'script' | 'team_data';
 
 export interface AuditEntry {
-  teamId?: string | null;
-  userId?: string | null;
+  teamId?: string | null | undefined;
+  userId?: string | null | undefined;
   action: AuditAction;
   resourceType: AuditResourceType;
   resourceId: string;

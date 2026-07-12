@@ -9,7 +9,7 @@ export async function getAiProviderSetting(pool: Pool): Promise<AiProviderSettin
   );
   if (rows.length === 0) return DEFAULT_AI_PROVIDER_SETTING;
   try {
-    const parsed = JSON.parse(rows[0].value) as { provider?: unknown; fallbacks?: unknown };
+    const parsed = JSON.parse(rows[0]!.value) as { provider?: unknown; fallbacks?: unknown }; // guarded by rows.length === 0 above
     const provider: AiProviderName = AI_PROVIDER_NAMES.includes(parsed.provider as AiProviderName) ? (parsed.provider as AiProviderName) : 'gemini';
     const fallbacks: AiProviderName[] = Array.isArray(parsed.fallbacks)
       ? parsed.fallbacks.filter((f: unknown): f is AiProviderName => AI_PROVIDER_NAMES.includes(f as AiProviderName))
@@ -34,11 +34,12 @@ export async function getTeamAiProviderSetting(pool: Pool, teamId: string): Prom
     [teamId]
   );
   if (rows.length === 0) return null;
-  const provider: AiProviderName = AI_PROVIDER_NAMES.includes(rows[0].provider as AiProviderName)
-    ? (rows[0].provider as AiProviderName)
+  const row = rows[0]!; // guarded by rows.length === 0 above
+  const provider: AiProviderName = AI_PROVIDER_NAMES.includes(row.provider as AiProviderName)
+    ? (row.provider as AiProviderName)
     : 'gemini';
-  const fallbacks: AiProviderName[] = Array.isArray(rows[0].fallbacks)
-    ? rows[0].fallbacks.filter((f): f is AiProviderName => AI_PROVIDER_NAMES.includes(f as AiProviderName))
+  const fallbacks: AiProviderName[] = Array.isArray(row.fallbacks)
+    ? row.fallbacks.filter((f): f is AiProviderName => AI_PROVIDER_NAMES.includes(f as AiProviderName))
     : [];
   return { provider, fallbacks };
 }
@@ -69,7 +70,7 @@ export async function getLiveMetricWindowSetting(pool: Pool): Promise<LiveMetric
     `SELECT value FROM app_settings WHERE key = 'live_metric_window_sec'`
   );
   if (rows.length === 0) return DEFAULT_LIVE_METRIC_WINDOW_SEC;
-  const parsed = Number(rows[0].value);
+  const parsed = Number(rows[0]!.value); // guarded by rows.length === 0 above
   return LIVE_METRIC_WINDOW_VALUES.includes(parsed as LiveMetricWindowSec)
     ? (parsed as LiveMetricWindowSec)
     : DEFAULT_LIVE_METRIC_WINDOW_SEC;
@@ -122,7 +123,7 @@ async function getNumberSetting(
   try {
     const { rows } = await pool.query<{ value: string }>(`SELECT value FROM app_settings WHERE key = $1`, [key]);
     if (rows.length > 0) {
-      const n = Number(rows[0].value);
+      const n = Number(rows[0]!.value); // guarded by rows.length > 0 above
       if (isValid(n)) return n;
     }
   } catch { /* fall through to env var / default below */ }

@@ -129,7 +129,7 @@ describe('ws module', () => {
 
       wsMod.broadcast(event);
 
-      expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual(event);
+      expect(JSON.parse(ws.send.mock.calls[0]![0])).toEqual(event);
     });
 
     it('sends correct payload for a test:live event', () => {
@@ -149,7 +149,7 @@ describe('ws module', () => {
 
       wsMod.broadcast(event);
 
-      expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual(event);
+      expect(JSON.parse(ws.send.mock.calls[0]![0])).toEqual(event);
     });
 
     it('does NOT send to a non-OPEN (CLOSING) client', () => {
@@ -282,7 +282,7 @@ describe('ws module', () => {
 
       // And the event is published for other replicas
       expect(publishMock).toHaveBeenCalledOnce();
-      const [channel, payload] = publishMock.mock.calls[0];
+      const [channel, payload] = publishMock.mock.calls[0]!;
       expect(channel).toBe('ws:broadcast');
       const parsed = JSON.parse(payload);
       expect(parsed.event).toEqual({ type: 'tests:changed' });
@@ -307,7 +307,7 @@ describe('ws module', () => {
 
       // Trigger a local broadcast to learn this replica's origin id
       wsMod.broadcast({ type: 'tests:changed' });
-      const ownOrigin = JSON.parse(publishMock.mock.calls[0][1]).origin;
+      const ownOrigin = JSON.parse(publishMock.mock.calls[0]![1]).origin;
       ws.send.mockClear();
 
       // Simulate Redis echoing the same message back to this replica

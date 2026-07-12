@@ -33,7 +33,7 @@ describe('downsampleLivePoints', () => {
     const rows = points(777);
     const result = downsampleLivePoints(rows, 100);
     for (let k = 1; k < result.length; k++) {
-      expect(result[k].i).toBeGreaterThan(result[k - 1].i);
+      expect(result[k]!.i).toBeGreaterThan(result[k - 1]!.i); // guarded by the loop's k < result.length condition
     }
   });
 

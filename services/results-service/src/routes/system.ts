@@ -64,7 +64,8 @@ export function systemRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool
         [projectId],
       );
       if (rows.length === 0) return { quotaExceeded: false };
-      return { quotaExceeded: true, message: rows[0].status_message, since: rows[0].created_at.toISOString() };
+      const row = rows[0]!; // guarded by rows.length === 0 above
+      return { quotaExceeded: true, message: row.status_message, since: row.created_at.toISOString() };
     } catch {
       return { quotaExceeded: false };
     }

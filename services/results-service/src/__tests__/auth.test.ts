@@ -24,7 +24,7 @@ let app: FastifyInstance;
 const SESSION_SECRET = 'test-session-secret-32-chars-min!';
 
 const sessionCookie = (res: { headers: Record<string, unknown> }): string =>
-  (res.headers['set-cookie'] as string).split(';')[0];
+  (res.headers['set-cookie'] as string).split(';')[0]!; // .split() always returns at least one element
 
 const registerUser = async (email: string, teamName: string, password = 'password123'): Promise<Awaited<ReturnType<typeof app.inject>>> =>
   app.inject({
@@ -219,11 +219,11 @@ describe('POST /auth/switch-team', () => {
 
     // Create a second team and add grace as a member directly
     const team2 = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-grace-2') RETURNING id`);
-    await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [team2.rows[0].id, userId]);
+    await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [team2.rows[0]!.id, userId]);
 
-    const res = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId: team2.rows[0].id }, headers: { cookie } });
+    const res = await app.inject({ method: 'POST', url: '/auth/switch-team', payload: { teamId: team2.rows[0]!.id }, headers: { cookie } });
     expect(res.statusCode).toBe(200);
-    expect(res.json().currentTeamId).toBe(team2.rows[0].id);
+    expect(res.json().currentTeamId).toBe(team2.rows[0]!.id);
     expect(res.json().role).toBe('member');
 
     // switch-team rotates the token — a stale pre-switch cookie must stop working...
@@ -233,7 +233,7 @@ describe('POST /auth/switch-team', () => {
     // ...while the freshly rotated cookie from the switch response keeps working.
     const rotatedCookie = sessionCookie(res);
     const me = await app.inject({ method: 'GET', url: '/auth/me', headers: { cookie: rotatedCookie } });
-    expect(me.json().currentTeamId).toBe(team2.rows[0].id);
+    expect(me.json().currentTeamId).toBe(team2.rows[0]!.id);
   });
 
   it('returns 403 when switching to a team the user is not a member of', async () => {

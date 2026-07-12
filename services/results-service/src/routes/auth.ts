@@ -65,7 +65,7 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
           'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id',
           [normalizedEmail, passwordHash, name?.trim() || null],
         );
-        const userId = userResult.rows[0].id;
+        const userId = userResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 
         const normalizedTeamName = teamName.trim().toLowerCase();
         let teamId: string;
@@ -74,7 +74,7 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
             'INSERT INTO projects (name) VALUES ($1) RETURNING id',
             [normalizedTeamName],
           );
-          teamId = teamResult.rows[0].id;
+          teamId = teamResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
         } catch (err) {
           await client.query('ROLLBACK');
           if ((err as { code?: string }).code === '23505') {
@@ -126,24 +126,25 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
         [normalizedEmail],
       );
       if (rows.length === 0) return reply.code(401).send({ error: 'Invalid email or password' });
+      const userRow = rows[0]!; // guarded by rows.length === 0 above
 
-      const valid = await bcrypt.compare(password, rows[0].password_hash);
+      const valid = await bcrypt.compare(password, userRow.password_hash);
       if (!valid) return reply.code(401).send({ error: 'Invalid email or password' });
 
-      const teams = await loadUserTeams(pool, rows[0].id);
-      const currentTeamId = teams.length > 0 ? teams[0].id : null;
-      const orgs = await loadUserOrgs(pool, rows[0].id);
+      const teams = await loadUserTeams(pool, userRow.id);
+      const currentTeamId = teams.length > 0 ? teams[0]!.id : null;
+      const orgs = await loadUserOrgs(pool, userRow.id);
 
-      const token = await createSession(pool, rows[0].id, currentTeamId);
+      const token = await createSession(pool, userRow.id, currentTeamId);
       reply.setCookie('alt_session', token, cookieOpts);
 
       const result: SessionUser = {
-        id: rows[0].id,
-        email: rows[0].email,
-        name: rows[0].name,
+        id: userRow.id,
+        email: userRow.email,
+        name: userRow.name,
         teams,
         currentTeamId,
-        role: currentTeamId ? teams[0].role : null,
+        role: currentTeamId ? teams[0]!.role : null,
         orgs,
       };
       return result;
@@ -175,7 +176,8 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
     const role = currentTeamId ? teams.find(t => t.id === currentTeamId)?.role ?? null : null;
     const orgs = await loadUserOrgs(pool, session.userId);
 
-    const result: SessionUser = { id: rows[0].id, email: rows[0].email, name: rows[0].name, teams, currentTeamId, role, orgs };
+    const row = rows[0]!; // guarded by rows.length === 0 above
+    const result: SessionUser = { id: row.id, email: row.email, name: row.name, teams, currentTeamId, role, orgs };
     return result;
   });
 
@@ -202,10 +204,14 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
     );
     const orgs = await loadUserOrgs(pool, session.userId);
 
+    // session.userId already refers to a real, just-validated user (getSession()
+    // above resolved it via the sessions table's FK to users), so this lookup by
+    // the same id is guaranteed to find a row.
+    const userRow = rows[0]!;
     const result: SessionUser = {
-      id: rows[0].id,
-      email: rows[0].email,
-      name: rows[0].name,
+      id: userRow.id,
+      email: userRow.email,
+      name: userRow.name,
       teams,
       currentTeamId: teamId,
       role: team.role,

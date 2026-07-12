@@ -208,7 +208,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [name, cron, type, target_url, description ?? null, JSON.stringify(options), thresholds ? JSON.stringify(thresholds) : null, enabled, projectId, workspaceId ?? null]
       );
-      await reloadSchedule(pool, rows[0].id);
+      await reloadSchedule(pool, rows[0]!.id); // INSERT ... RETURNING always returns exactly one row
       return reply.code(201).send({ schedule: rows[0] });
     }
   );
@@ -238,7 +238,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
           `SELECT enabled FROM schedules WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
           [id, projectId],
         );
-        if (existingRows.length > 0 && !existingRows[0].enabled) {
+        if (existingRows.length > 0 && !existingRows[0]!.enabled) {
           const quotaError = await checkScheduleQuota(pool, request.projectId);
           if (quotaError) return reply.code(429).send({ error: quotaError });
         }
@@ -271,7 +271,7 @@ export function resourceRoutes(app: FastifyInstance, { pool, rPool }: { pool: Po
         [request.params.id, projectId]
       );
       if (rows.length === 0) return reply.code(404).send({ error: 'Schedule not found' });
-      const s = rows[0];
+      const s = rows[0]!; // guarded by rows.length === 0 above
       const apiUrl = process.env.API_URL || 'http://api-service:3000';
       const apiKey = process.env.API_KEY || '';
       const internalApiKeyForCall = process.env.INTERNAL_API_KEY || '';

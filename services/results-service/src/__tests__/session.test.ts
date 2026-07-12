@@ -26,13 +26,13 @@ beforeEach(async () => {
   const userResult = await pool.query<{ id: string }>(
     `INSERT INTO users (email, password_hash, name) VALUES ('alice@example.com', 'hash', 'Alice') RETURNING id`
   );
-  userId = userResult.rows[0].id;
+  userId = userResult.rows[0]!.id; // INSERT ... RETURNING always returns exactly one row
 
   const teamA = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-a') RETURNING id`);
-  teamAId = teamA.rows[0].id;
+  teamAId = teamA.rows[0]!.id;
 
   const teamB = await pool.query<{ id: string }>(`INSERT INTO projects (name) VALUES ('team-b') RETURNING id`);
-  teamBId = teamB.rows[0].id;
+  teamBId = teamB.rows[0]!.id;
 
   await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [teamAId, userId]);
   await pool.query(`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, [teamBId, userId]);
