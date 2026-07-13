@@ -7,7 +7,7 @@ import { setupWebSocketServer } from './ws';
 import { getSession, hashApiKey } from './session';
 import { getRateLimitMax } from './settings';
 import { redisClient } from './redis';
-import type { TeamRole, OrgRole } from '@alt/shared';
+import { getSessionCookieName, type TeamRole, type OrgRole } from '@alt/shared';
 import { authRoutes } from './routes/auth';
 import { teamOrgRoutes } from './routes/teams';
 import { systemRoutes } from './routes/system';
@@ -51,6 +51,7 @@ export const buildApp = async (
   const sessionSecret = process.env.SESSION_SECRET || '';
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
   const internalApiKey = process.env.INTERNAL_API_KEY || '';
+  const sessionCookieName = getSessionCookieName();
 
   // Endpoints that bypass all HTTP auth entirely (health checks, UI websocket)
   const publicPaths = new Set(['/health', '/ws']);
@@ -144,7 +145,7 @@ export const buildApp = async (
 
     // Session auth — only enforced when SESSION_SECRET is configured
     if (sessionSecret) {
-      const session = await getSession(pool, request.cookies['alt_session']);
+      const session = await getSession(pool, request.cookies[sessionCookieName]);
       if (!session) return reply.code(401).send({ error: 'Not authenticated' });
 
       const { rows } = await pool.query<{ id: string; email: string; name: string | null; role: TeamRole | null }>(

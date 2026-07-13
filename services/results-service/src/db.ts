@@ -429,6 +429,18 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`DROP INDEX IF EXISTS idx_test_results_url_type_status`); // superseded — same leading columns
     },
   },
+  {
+    version: 17,
+    name: 'session_idle_timeout',
+    up: async (p): Promise<void> => {
+      // Backs the idle-timeout check in session.ts: a session with no traffic for
+      // SESSION_IDLE_TIMEOUT_MS is treated as expired regardless of its 30-day
+      // absolute expires_at. Existing rows default to NOW() (treated as freshly
+      // active) rather than created_at, so this migration can't retroactively
+      // idle-expire anyone already logged in.
+      await p.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────

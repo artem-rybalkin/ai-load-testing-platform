@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 
-import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, TeamRole, internalHeaders } from '@alt/shared';
+import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, TeamRole, internalHeaders, getSessionCookieName } from '@alt/shared';
 import { shutdownTracing } from '@alt/tracing';
 import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
 import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount, pool } from './scripts';
@@ -100,6 +100,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   // API key authentication — exempt /health
   const apiKeys = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
   const sessionSecret = process.env.SESSION_SECRET || '';
+  const sessionCookieName = getSessionCookieName();
 
   app.addHook('onRequest', async (request, reply) => {
     if (request.url === '/health') return;
@@ -145,7 +146,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     }
 
     if (sessionSecret) {
-      const session = await getApiSession(pool, request.cookies?.['alt_session']);
+      const session = await getApiSession(pool, request.cookies?.[sessionCookieName]);
       if (!session) return reply.code(401).send({ error: 'Not authenticated' });
 
       // A session with no current team (or no longer a member of it) has no

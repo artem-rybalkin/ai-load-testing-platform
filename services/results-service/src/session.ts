@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from 'crypto';
 import { Pool } from 'pg';
+import { SESSION_IDLE_TIMEOUT_MS, SESSION_LAST_SEEN_TOUCH_INTERVAL_MS } from '@alt/shared';
 
 export type TeamRole = 'admin' | 'member' | 'viewer';
 
@@ -27,16 +28,34 @@ export const createSession = async (pool: Pool, userId: string, teamId: string |
   return token;
 };
 
-/** Looks up a non-revoked, non-expired session by its raw cookie token. */
+/**
+ * Looks up a non-revoked, non-expired session by its raw cookie token, also
+ * enforcing an idle timeout (SESSION_IDLE_TIMEOUT_MS) independent of the
+ * session's 30-day absolute expiry. An idle-timed-out session is revoked on
+ * detection rather than silently ignored, so the periodic cleanup sweep
+ * (cleanup.ts) picks it up on its next tick same as any other revoked row.
+ */
 export const getSession = async (pool: Pool, token: string | undefined): Promise<SessionRecord | null> => {
   if (!token) return null;
-  const { rows } = await pool.query<{ user_id: string; team_id: string | null; expires_at: Date }>(
-    `SELECT user_id, team_id, expires_at FROM sessions
+  const tokenHash = hashToken(token);
+  const { rows } = await pool.query<{ user_id: string; team_id: string | null; expires_at: Date; last_seen_at: Date }>(
+    `SELECT user_id, team_id, expires_at, last_seen_at FROM sessions
      WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()`,
-    [hashToken(token)]
+    [tokenHash]
   );
   if (rows.length === 0) return null;
   const row = rows[0]!; // guarded by rows.length === 0 above
+
+  if (Date.now() - row.last_seen_at.getTime() > SESSION_IDLE_TIMEOUT_MS) {
+    await pool.query(`UPDATE sessions SET revoked_at = NOW() WHERE token_hash = $1`, [tokenHash]);
+    return null;
+  }
+  // Throttled: only write last_seen_at once per SESSION_LAST_SEEN_TOUCH_INTERVAL_MS
+  // per session, not on every single request.
+  if (Date.now() - row.last_seen_at.getTime() > SESSION_LAST_SEEN_TOUCH_INTERVAL_MS) {
+    await pool.query(`UPDATE sessions SET last_seen_at = NOW() WHERE token_hash = $1`, [tokenHash]);
+  }
+
   return { userId: row.user_id, teamId: row.team_id, expiresAt: row.expires_at };
 };
 

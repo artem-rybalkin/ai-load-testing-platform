@@ -751,6 +751,32 @@ export function internalHeaders(extra?: Record<string, string>): Record<string, 
   };
 }
 
+// ── Session cookie ──────────────────────────────────────────────────────────
+// results-service (issuer) and api-service (reader) must agree on the cookie
+// name without importing from each other, so it's computed here from the same
+// env vars both already read independently.
+
+/**
+ * The `__Host-` prefix (RFC 6265bis) locks a cookie to Secure + Path=/ + no
+ * Domain attribute, blocking a compromised sibling subdomain from forging a
+ * session cookie for the whole parent domain. It's only usable when DOMAIN is
+ * unset (single-origin deployment) — the documented production topology
+ * shares one cookie across UI/api/data subdomains via a Domain attribute,
+ * which `__Host-` explicitly forbids, so prod keeps the plain name.
+ */
+export const getSessionCookieName = (): string =>
+  process.env.NODE_ENV === 'production' && !process.env.DOMAIN ? '__Host-alt_session' : 'alt_session';
+
+/**
+ * A session with no activity for this long is treated as expired, independent
+ * of its 30-day absolute TTL — shared by results-service and api-service, both
+ * of which independently read/touch the same `sessions.last_seen_at` column,
+ * so both must agree on the threshold.
+ */
+export const SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+/** Throttles last_seen_at writes so every authenticated request isn't a DB write. */
+export const SESSION_LAST_SEEN_TOUCH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 // ── SSRF guard ──────────────────────────────────────────────────────────────
 // RFC-1918 + link-local + loopback + Docker-internal SSRF blocklist.
 // Shared by recorder-service (recording target URLs) and results-service

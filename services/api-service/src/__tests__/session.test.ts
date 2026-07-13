@@ -40,13 +40,14 @@ const createSchema = async (p: Pool): Promise<void> => {
   `);
   await p.query(`
     CREATE TABLE IF NOT EXISTS sessions (
-      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      token_hash  TEXT NOT NULL UNIQUE,
-      team_id     UUID REFERENCES projects(id) ON DELETE SET NULL,
-      created_at  TIMESTAMPTZ DEFAULT NOW(),
-      expires_at  TIMESTAMPTZ NOT NULL,
-      revoked_at  TIMESTAMPTZ
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash    TEXT NOT NULL UNIQUE,
+      team_id       UUID REFERENCES projects(id) ON DELETE SET NULL,
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      expires_at    TIMESTAMPTZ NOT NULL,
+      revoked_at    TIMESTAMPTZ,
+      last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 };
@@ -55,14 +56,19 @@ const insertSession = async (
   p: Pool,
   uId: string,
   tId: string | null,
-  opts: { revoked?: boolean; expired?: boolean } = {}
+  opts: { revoked?: boolean; expired?: boolean; lastSeenDaysAgo?: number; lastSeenMinutesAgo?: number } = {}
 ): Promise<string> => {
   const token = randomBytes(32).toString('hex');
   const tokenHash = createHash('sha256').update(token).digest('hex');
   const expiresAt = opts.expired ? `NOW() - INTERVAL '1 day'` : `NOW() + INTERVAL '30 days'`;
+  const lastSeenAt = opts.lastSeenDaysAgo
+    ? `NOW() - INTERVAL '${opts.lastSeenDaysAgo} days'`
+    : opts.lastSeenMinutesAgo
+      ? `NOW() - INTERVAL '${opts.lastSeenMinutesAgo} minutes'`
+      : 'NOW()';
   await p.query(
-    `INSERT INTO sessions (user_id, token_hash, team_id, expires_at, revoked_at)
-     VALUES ($1, $2, $3, ${expiresAt}, ${opts.revoked ? 'NOW()' : 'NULL'})`,
+    `INSERT INTO sessions (user_id, token_hash, team_id, expires_at, revoked_at, last_seen_at)
+     VALUES ($1, $2, $3, ${expiresAt}, ${opts.revoked ? 'NOW()' : 'NULL'}, ${lastSeenAt})`,
     [uId, tokenHash, tId]
   );
   return token;
@@ -120,6 +126,19 @@ describe('getApiSession', () => {
   it('returns null for an expired session', async () => {
     const token = await insertSession(pool, userId, teamId, { expired: true });
     expect(await getApiSession(pool, token)).toBeNull();
+  });
+
+  it('returns null for a session idle past the idle timeout, despite a valid absolute expires_at', async () => {
+    const token = await insertSession(pool, userId, teamId, { lastSeenDaysAgo: 8 });
+    expect(await getApiSession(pool, token)).toBeNull();
+  });
+
+  it('touches last_seen_at once stale past the touch interval, keeping an active session alive', async () => {
+    const token = await insertSession(pool, userId, teamId, { lastSeenMinutesAgo: 6 });
+    expect(await getApiSession(pool, token)).toEqual({ projectId: teamId, role: 'admin' });
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const { rows } = await pool.query('SELECT last_seen_at FROM sessions WHERE token_hash = $1', [tokenHash]);
+    expect(Date.now() - new Date(rows[0].last_seen_at).getTime()).toBeLessThan(60_000);
   });
 
   it('reflects the caller role from team_members', async () => {

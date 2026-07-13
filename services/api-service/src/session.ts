@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { Pool } from 'pg';
 
-import { TeamRole } from '@alt/shared';
+import { TeamRole, SESSION_IDLE_TIMEOUT_MS, SESSION_LAST_SEEN_TOUCH_INTERVAL_MS } from '@alt/shared';
 
 export interface ApiSession {
   projectId: string | null;
@@ -20,15 +20,27 @@ export const hashApiKey = (key: string): string => createHash('sha256').update(k
  */
 export const getApiSession = async (pool: Pool, token: string | undefined): Promise<ApiSession | null> => {
   if (!token) return null;
+  const tokenHash = hashToken(token);
 
-  const { rows } = await pool.query<{ user_id: string; team_id: string | null }>(
-    `SELECT user_id, team_id FROM sessions
+  const { rows } = await pool.query<{ user_id: string; team_id: string | null; last_seen_at: Date }>(
+    `SELECT user_id, team_id, last_seen_at FROM sessions
      WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()`,
-    [hashToken(token)]
+    [tokenHash]
   );
   if (rows.length === 0) return null;
+  const row = rows[0]!; // guarded by rows.length === 0 check above
 
-  const { user_id: userId, team_id: teamId } = rows[0]!; // guarded by rows.length === 0 check above
+  // Mirrors results-service's getSession idle-timeout check — same sessions
+  // table, both services must agree on what counts as still-active.
+  if (Date.now() - row.last_seen_at.getTime() > SESSION_IDLE_TIMEOUT_MS) {
+    await pool.query(`UPDATE sessions SET revoked_at = NOW() WHERE token_hash = $1`, [tokenHash]);
+    return null;
+  }
+  if (Date.now() - row.last_seen_at.getTime() > SESSION_LAST_SEEN_TOUCH_INTERVAL_MS) {
+    await pool.query(`UPDATE sessions SET last_seen_at = NOW() WHERE token_hash = $1`, [tokenHash]);
+  }
+
+  const { user_id: userId, team_id: teamId } = row;
   if (!teamId) return { projectId: null, role: null };
 
   const { rows: memberRows } = await pool.query<{ role: TeamRole }>(

@@ -5,13 +5,14 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
-import type { SessionUser } from '@alt/shared';
+import { getSessionCookieName, type SessionUser } from '@alt/shared';
 import { createSession, revokeSession, switchSessionTeam, getSession } from '../session';
 import { loadUserTeams, loadUserOrgs, DEV_USER, EMAIL_RE } from './helpers';
 
 export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): void {
   const sessionSecret = process.env.SESSION_SECRET || '';
   const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX) || 10;
+  const SESSION_COOKIE_NAME = getSessionCookieName();
   const cookieOpts = {
     httpOnly: true,
     sameSite: 'strict' as const,
@@ -87,7 +88,7 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
         await client.query('COMMIT');
 
         const token = await createSession(pool, userId, teamId);
-        reply.setCookie('alt_session', token, cookieOpts);
+        reply.setCookie(SESSION_COOKIE_NAME, token, cookieOpts);
 
         const result: SessionUser = {
           id: userId,
@@ -136,7 +137,7 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
       const orgs = await loadUserOrgs(pool, userRow.id);
 
       const token = await createSession(pool, userRow.id, currentTeamId);
-      reply.setCookie('alt_session', token, cookieOpts);
+      reply.setCookie(SESSION_COOKIE_NAME, token, cookieOpts);
 
       const result: SessionUser = {
         id: userRow.id,
@@ -153,8 +154,8 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
 
   // ── POST /auth/logout ─────────────────────────────────────────────────────
   app.post('/auth/logout', async (request, reply) => {
-    if (sessionSecret) await revokeSession(pool, request.cookies?.['alt_session']);
-    reply.clearCookie('alt_session', { path: '/' });
+    if (sessionSecret) await revokeSession(pool, request.cookies?.[SESSION_COOKIE_NAME]);
+    reply.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
     return { success: true };
   });
 
@@ -162,7 +163,7 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
   app.get('/auth/me', async (request, reply) => {
     if (!sessionSecret) return DEV_USER;
 
-    const session = await getSession(pool, request.cookies?.['alt_session']);
+    const session = await getSession(pool, request.cookies?.[SESSION_COOKIE_NAME]);
     if (!session) return reply.code(401).send({ error: 'Not authenticated' });
 
     const { rows } = await pool.query<{ id: string; email: string; name: string | null }>(
@@ -185,7 +186,7 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
   app.post<{ Body: { teamId: string } }>('/auth/switch-team', async (request, reply) => {
     if (!sessionSecret) return DEV_USER;
 
-    const session = await getSession(pool, request.cookies?.['alt_session']);
+    const session = await getSession(pool, request.cookies?.[SESSION_COOKIE_NAME]);
     if (!session) return reply.code(401).send({ error: 'Not authenticated' });
 
     const { teamId } = request.body ?? {};
@@ -195,8 +196,8 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
     const team = teams.find(t => t.id === teamId);
     if (!team) return reply.code(403).send({ error: 'Not a member of this team' });
 
-    const newToken = await switchSessionTeam(pool, request.cookies?.['alt_session'], session.userId, teamId);
-    if (newToken) reply.setCookie('alt_session', newToken, cookieOpts);
+    const newToken = await switchSessionTeam(pool, request.cookies?.[SESSION_COOKIE_NAME], session.userId, teamId);
+    if (newToken) reply.setCookie(SESSION_COOKIE_NAME, newToken, cookieOpts);
 
     const { rows } = await pool.query<{ id: string; email: string; name: string | null }>(
       'SELECT id, email, name FROM users WHERE id = $1',

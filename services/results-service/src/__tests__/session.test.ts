@@ -86,6 +86,38 @@ describe('createSession / getSession', () => {
     const session = await getSession(pool, token);
     expect(session).toBeNull();
   });
+
+  it('returns null for a session idle past the idle timeout, despite a valid absolute expires_at', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    await pool.query(
+      `UPDATE sessions SET last_seen_at = NOW() - INTERVAL '8 days' WHERE user_id = $1`,
+      [userId]
+    );
+    const session = await getSession(pool, token);
+    expect(session).toBeNull();
+  });
+
+  it('revokes the session row once idle-timed-out, so it stays null on a second lookup', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    await pool.query(
+      `UPDATE sessions SET last_seen_at = NOW() - INTERVAL '8 days' WHERE user_id = $1`,
+      [userId]
+    );
+    expect(await getSession(pool, token)).toBeNull();
+    const { rows } = await pool.query('SELECT revoked_at FROM sessions WHERE user_id = $1', [userId]);
+    expect(rows[0].revoked_at).not.toBeNull();
+  });
+
+  it('touches last_seen_at once stale past the touch interval, keeping an active session alive', async () => {
+    const token = await createSession(pool, userId, teamAId);
+    await pool.query(
+      `UPDATE sessions SET last_seen_at = NOW() - INTERVAL '6 minutes' WHERE user_id = $1`,
+      [userId]
+    );
+    expect(await getSession(pool, token)).not.toBeNull();
+    const { rows } = await pool.query('SELECT last_seen_at FROM sessions WHERE user_id = $1', [userId]);
+    expect(Date.now() - new Date(rows[0].last_seen_at).getTime()).toBeLessThan(60_000);
+  });
 });
 
 describe('revokeSession', () => {
