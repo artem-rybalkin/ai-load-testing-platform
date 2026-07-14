@@ -740,6 +740,7 @@ function HomeContent() {
                   csvFile={flowCsvFile}
                   onCsvChange={setFlowCsvFile}
                   teamId={user?.currentTeamId ?? undefined}
+                  totalVus={form.vus}
                 />
                 <div>
                   <div className="font-mono text-[10.5px] tracking-[0.06em] text-tx-4 uppercase mb-1.5">Run as</div>

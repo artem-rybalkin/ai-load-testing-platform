@@ -172,6 +172,23 @@ describe('POST /tests', () => {
     expect(mockPublishTest).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when a flow step userPercent increases from the previous step', async () => {
+    const flowBody = {
+      type: 'flow',
+      targetUrl: 'http://example.com',
+      description: 'funnel test',
+      options: { vus: 100, duration: '30s' },
+      steps: [
+        { name: 'login', url: 'http://example.com/login', method: 'POST', userPercent: 40 },
+        { name: 'checkout', url: 'http://example.com/checkout', method: 'POST', userPercent: 80 },
+      ],
+    };
+    const res = await app.inject({ method: 'POST', url: '/tests', payload: flowBody });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('cannot exceed step 1');
+    expect(mockPublishTest).not.toHaveBeenCalled();
+  });
+
   it('generates a UUID for the test id', async () => {
     const res = await app.inject({ method: 'POST', url: '/tests', payload: validBody });
     const { test } = res.json();

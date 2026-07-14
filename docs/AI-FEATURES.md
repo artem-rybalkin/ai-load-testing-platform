@@ -38,6 +38,7 @@ Before generating, the platform checks if a cached script exists for the same UR
 - Flow scripts use `group('Step N: name', fn)` for per-step metrics
 - Extraction rules (auth tokens, IDs) use `exec.vu.abort()` on failure — only the failing VU stops, not the entire test
 - Parameterisation: generates `SharedArray` + `open('./data.json')` or `open('./data.csv')` when test data is provided
+- **Weighted parallel journeys**: a flow step can carry an optional `userPercent` (% of VUs still active) — set the "% of users" input per step in the flow builder to model a funnel (e.g. not every user reaches checkout). When more than one distinct percent is used, the platform precomputes the VU split server-side (`computeJourneys()`) and instructs the model to generate one `exec` function + `options.scenarios` entry per journey instead of a single `export default function`. Leaving every step at 100% (the default) generates an identical script to today.
 
 ---
 

@@ -1,4 +1,4 @@
-import { TestRequest, ExtractRule, AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, fenceUserContent, USER_DATA_INSTRUCTION, SLOThresholds, deriveMultiPercentileThresholds } from '@alt/shared';
+import { TestRequest, ExtractRule, AiProviderSetting, DEFAULT_AI_PROVIDER_SETTING, generateAIText, fenceUserContent, USER_DATA_INSTRUCTION, SLOThresholds, deriveMultiPercentileThresholds, computeJourneys, type Journey } from '@alt/shared';
 import { log } from './logger';
 
 const RESULTS_URL = process.env.RESULTS_URL || 'http://results-service:3004';
@@ -337,16 +337,180 @@ const renderExtractLine = (varName: string, rule: ExtractRule): string => {
   }
 };
 
+// Builds one journey's k6 options.scenarios entry — the same per-profile
+// stage/rate shape profileInstructions() describes for a single-scenario
+// flow, but parameterized on that journey's own VU (or, for 'realistic',
+// arrival-rate) share instead of the global count. Self-contained on purpose:
+// it never touches profileInstructions()/FLOW_PROMPT's existing single-journey
+// rendering, so that path stays byte-for-byte unchanged when nobody sets a
+// userPercent (computeJourneys() then returns exactly one journey and this
+// function is never called).
+const journeyScenarioBlock = (
+  journey: Journey,
+  opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string },
+): string => {
+  const { vus: totalVus, duration, profile = 'load', peakVus, rampUp } = opts;
+  const peak = peakVus ?? totalVus * 10;
+  // Peak figures (spike's burst, capacity's ramp target) are a separate,
+  // larger number than the steady-state vus — scale them down by this
+  // journey's share of the total so the burst stays proportional too.
+  const scaledPeak = Math.max(1, Math.round(peak * journey.vus / totalVus));
+
+  switch (profile) {
+    case 'spike':
+      return `{
+      executor: 'ramping-vus',
+      startVUs: 0,
+      stages: [
+        { target: ${journey.vus}, duration: '30s' },
+        { target: ${journey.vus}, duration: '1m' },
+        { target: ${scaledPeak}, duration: '10s' },
+        { target: ${scaledPeak}, duration: '1m' },
+        { target: ${journey.vus}, duration: '10s' },
+        { target: 0, duration: '30s' },
+      ],
+      exec: '${journey.execName}',
+    }`;
+
+    case 'capacity':
+      return `{
+      executor: 'ramping-vus',
+      startVUs: 0,
+      stages: [{ target: ${scaledPeak}, duration: '${duration}' }],
+      exec: '${journey.execName}',
+    }`;
+
+    case 'soak':
+      return `{
+      executor: 'ramping-vus',
+      startVUs: 0,
+      stages: [
+        { target: ${journey.vus}, duration: '1m' },
+        { target: ${journey.vus}, duration: '${duration}' },
+        { target: 0, duration: '30s' },
+      ],
+      exec: '${journey.execName}',
+    }`;
+
+    case 'realistic': {
+      // journey.vus is already this journey's own share of the global
+      // arrival rate (computeJourneys was called with the rate as totalVus).
+      const rate = journey.vus;
+      const preAllocatedVUs = Math.max(rate, 10);
+      const maxVUs = preAllocatedVUs * 10;
+      return `{
+      executor: 'ramping-arrival-rate',
+      timeUnit: '1s',
+      startRate: ${rate},
+      preAllocatedVUs: ${preAllocatedVUs},
+      maxVUs: ${maxVUs},
+      stages: [
+        { target: ${rate}, duration: '30s' },
+        { target: ${rate}, duration: '${duration}' },
+        { target: 0, duration: '15s' },
+      ],
+      exec: '${journey.execName}',
+    }`;
+    }
+
+    default: // 'load'
+      return rampUp
+        ? `{
+      executor: 'ramping-vus',
+      startVUs: 0,
+      stages: [
+        { target: ${journey.vus}, duration: '${rampUp}' },
+        { target: ${journey.vus}, duration: '${duration}' },
+        { target: 0, duration: '10s' },
+      ],
+      exec: '${journey.execName}',
+    }`
+        : `{
+      executor: 'constant-vus',
+      vus: ${journey.vus},
+      duration: '${duration}',
+      exec: '${journey.execName}',
+    }`;
+  }
+};
+
+// Only called when computeJourneys() returns more than one journey — the
+// backward-compat single-journey case never reaches this code.
+const journeysSection = (
+  journeys: Journey[],
+  stepDefLines: string[],
+  opts: { vus: number; duration: string; profile?: string; peakVus?: number; rampUp?: string },
+): string => {
+  const scenarioEntries = journeys.map(j => `    ${j.execName}: ${journeyScenarioBlock(j, opts)}`).join(',\n');
+
+  const journeyDescriptions = journeys.map(j => `
+Journey "${j.execName}" (${j.vus} VUs) — covers Steps 1-${j.stepCount} ONLY, none of the steps after it:
+${stepDefLines.slice(0, j.stepCount).join('\n\n')}
+`).join('\n');
+
+  return `
+This flow uses WEIGHTED PARALLEL JOURNEYS — different VUs run different-length prefixes of the steps above, modeling a real funnel (not every user reaches every step). Generate ONE exec function per journey below, each covering ONLY that journey's own steps:
+${journeyDescriptions}
+MANDATORY structure for weighted parallel journeys:
+- Do NOT emit a top-level options.stages, options.vus, or a plain \`export default function\` — options.scenarios plus one named function per journey replaces all of that.
+- Set options.scenarios to exactly:
+  scenarios: {
+${scenarioEntries}
+  }
+- One function per journey, named exactly after its exec key (e.g. \`export function ${journeys[0]!.execName}() { ... }\`) — each independently declares its own \`const vars = {}\` and runs ONLY its own steps' group()s in order, then sleep(1). k6 scenarios share no iteration state, so each journey's step definitions (group, checks, extraction) must be fully repeated in its own function, never factored into a shared helper.
+- Every other requirement below (checks, defensive extraction, failure logging, dynamic-path tagging) applies identically inside each journey function.
+`;
+};
+
+// Illustrative trailing example appended only for the multi-journey case —
+// the single-journey Structure: example further below stays untouched either way.
+const multiJourneyExample = (journeys: Journey[]): string => {
+  const [first, second] = journeys;
+  return `
+Structure (multi-journey — illustrative 2-scenario skeleton; adapt to the actual ${journeys.length} journeys and steps specified above):
+import http from 'k6/http';
+import { check, sleep, group } from 'k6';
+
+export const options = {
+  scenarios: {
+    ${first!.execName}: { /* ... shape specified above ... */ exec: '${first!.execName}' },
+    ${second!.execName}: { /* ... shape specified above ... */ exec: '${second!.execName}' },
+  },
+  thresholds: { /* unchanged — same global thresholds as any other flow test */ },
+};
+
+export function ${first!.execName}() {
+  const vars = {};
+  group('Step 1: ...', function() {
+    // only this journey's own steps (Steps 1-${first!.stepCount}) — full definition, checks, defensive extraction
+  });
+  sleep(1);
+}
+
+export function ${second!.execName}() {
+  const vars = {};
+  group('Step 1: ...', function() {
+    // this journey's steps (Steps 1-${second!.stepCount}) — repeats step 1's definition; journeys share no state
+  });
+  group('Step 2: ...', function() {
+    // ...
+  });
+  sleep(1);
+}
+`;
+};
+
 const FLOW_PROMPT = (test: TestRequest, abortConfig: CapacityAbortConfig): string => {
   const steps = test.steps!;
   const opts = test.options as { vus: number; duration: string; profile?: string; peakVus?: number };
   const fallback = profileInstructions(opts, abortConfig);
   const isCapacity = opts.profile === 'capacity';
   const { p95, p90, p99, errorRateFrac } = k6Thresholds(test.thresholds);
+  const journeys = computeJourneys(steps, opts.vus);
 
   const hasExtractions = steps.some(s => s.extract && Object.keys(s.extract).length > 0);
 
-  const stepDefs = steps.map((s, i) => {
+  const stepDefLines = steps.map((s, i) => {
     const lines: string[] = [
       `  Step ${i + 1}: ${s.name}`,
       `    URL: ${fenceUserContent('url', s.url)}`,
@@ -363,7 +527,9 @@ const FLOW_PROMPT = (test: TestRequest, abortConfig: CapacityAbortConfig): strin
       }
     }
     return lines.join('\n');
-  }).join('\n\n');
+  });
+  const stepDefs = stepDefLines.join('\n\n');
+  const journeysBlock = journeys.length > 1 ? journeysSection(journeys, stepDefLines, opts) : '';
 
   // Parameterization instructions
   const testDataColumns = test.testData && test.testData.length > 0
@@ -442,7 +608,7 @@ Step 1 as a one-time precondition — MANDATORY structure change:
 - setup() runs once for the whole test, not once per VU — but treat a check()/extraction failure there the same defensively as any other step: never throw, fall back to a default value so steps 2..N can still run.
 ` : '';
 
-  return `
+  const promptBody = `
 You are a performance testing expert. Generate a k6 multi-step flow test script. ${USER_DATA_INSTRUCTION}
 
 User request: "${fenceUserContent('description', test.description)}"
@@ -451,7 +617,7 @@ ${fallback}
 ${paramSection}
 Flow steps to test (IN ORDER):
 ${stepDefs}
-${extractionInstructions}${placeholderInstructions}${setupInstructions}
+${extractionInstructions}${placeholderInstructions}${setupInstructions}${journeysBlock}
 Requirements:
 - Use k6 JavaScript API with group() for EACH step
 - Each step MUST be wrapped in: group('Step N: name', function() { ... })${useSetup ? ' — EXCEPT Step 1, which goes inside setup() per the instructions above, not inside the default function' : ''}
@@ -470,7 +636,9 @@ ${isCapacity
   ? '- This is a capacity/stress profile — use EXACTLY the options.thresholds object given in the capacity load-profile instructions above (with abortOnFail), not the plain-string form'
   : `- Always include multi-percentile thresholds — not just p(95) — plus error rate and checks: http_req_duration: ['p(90)<${p90}', 'p(95)<${p95}', 'p(99)<${p99}'] (adjust if description implies stricter SLO), http_req_failed rate < ${errorRateFrac}, and checks rate > 0.9 (at least 90% of check() assertions must pass — this is what catches a step that returns 2xx but with the wrong body)`}
 - Return ONLY the JavaScript code, no markdown fences, no explanation
+`;
 
+  const singleJourneyStructure = `
 Structure:
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
@@ -541,6 +709,8 @@ export default function(data) {
   sleep(1);
 }
 `}`;
+
+  return journeys.length > 1 ? promptBody + multiJourneyExample(journeys) : promptBody + singleJourneyStructure;
 };
 
 /**

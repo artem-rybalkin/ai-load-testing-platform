@@ -21,9 +21,10 @@ interface TestScriptRow {
 
 const canonicalStep = (s: FlowStep): unknown => ({
   name: s.name, url: s.url, method: s.method,
-  ...(s.body    !== undefined ? { body: s.body }       : {}),
-  ...(s.headers !== undefined ? { headers: s.headers } : {}),
-  ...(s.extract !== undefined ? { extract: s.extract } : {}),
+  ...(s.body        !== undefined ? { body: s.body }               : {}),
+  ...(s.headers     !== undefined ? { headers: s.headers }         : {}),
+  ...(s.extract     !== undefined ? { extract: s.extract }         : {}),
+  ...(s.userPercent !== undefined ? { userPercent: s.userPercent } : {}),
 });
 
 // setupFirstStep changes the generated script's structure (step 1 moves into

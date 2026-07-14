@@ -297,6 +297,17 @@ describe('stepsToKey', () => {
     const steps = [makeStep('https://example.com/login', 'POST')];
     expect(stepsToKey(steps, true)).not.toBe(stepsToKey(steps));
   });
+
+  it('produces the exact same key when userPercent is unset, so existing cached flow scripts stay valid', () => {
+    const steps = [makeStep('https://example.com/login', 'POST')];
+    expect(stepsToKey(steps)).toBe(stepsToKey(steps.map(s => ({ ...s }))));
+  });
+
+  it('produces a different key when a step sets userPercent, forcing regeneration for a distribution-only edit', () => {
+    const steps = [makeStep('https://example.com/login', 'POST')];
+    const withPercent = [{ ...steps[0]!, userPercent: 60 }];
+    expect(stepsToKey(withPercent)).not.toBe(stepsToKey(steps));
+  });
 });
 
 // ─── incrementUsedCount ───────────────────────────────────────────────────────

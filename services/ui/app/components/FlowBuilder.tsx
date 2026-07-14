@@ -13,7 +13,76 @@ interface Props {
   csvFile: { name: string; data: string } | null;
   onCsvChange: (file: { name: string; data: string } | null) => void;
   teamId?: string;
+  totalVus: number;
 }
+
+interface Journey { stepCount: number; vus: number; execName: string }
+
+// Effective (post-inheritance) percent of the step just before index i — the
+// clamp ceiling for that step's own input, since a funnel can only shrink.
+const effectivePercentBefore = (steps: FlowStep[], i: number): number => {
+  let prev = 100;
+  for (let k = 0; k < i; k++) prev = steps[k]?.userPercent ?? prev;
+  return prev;
+};
+
+// Duplicated from packages/shared/src/journeys.ts's computeJourneys() rather
+// than imported: @alt/shared compiles to CommonJS with a circular require
+// (aiProvider.ts imports redactPII back from index.ts) that Vite's esbuild
+// dependency pre-bundler cannot resolve when treated as a runtime dependency
+// (dev server: "Could not resolve './aiProvider'"; production: Rollup can't
+// statically trust a named export once any dynamic re-export coexists in the
+// same CJS file). Every other @alt/shared usage in this codebase is
+// `import type`, erased before bundling — this small, stable, pure function is
+// duplicated here rather than chasing a monorepo-wide bundler/circularity fix.
+const computeJourneys = (steps: FlowStep[], totalVus: number): Journey[] => {
+  const percents: number[] = [];
+  let prev = 100;
+  for (const s of steps) { prev = s.userPercent ?? prev; percents.push(prev); }
+  const firstPercent = percents[0] ?? 100;
+
+  const runs: Array<{ percent: number; stepCount: number }> = [];
+  percents.forEach((p, i) => {
+    const last = runs[runs.length - 1];
+    if (last && last.percent === p) last.stepCount = i + 1;
+    else runs.push({ percent: p, stepCount: i + 1 });
+  });
+
+  if (runs.length === 1) {
+    return [{ stepCount: steps.length, vus: totalVus, execName: 'default' }];
+  }
+
+  const shares = runs.map((run, i) => {
+    const nextPercent = runs[i + 1]?.percent ?? 0;
+    return (run.percent - nextPercent) / firstPercent;
+  });
+
+  const raw = shares.map(share => share * totalVus);
+  const floors = raw.map(Math.floor);
+  let remainder = totalVus - floors.reduce((a, b) => a + b, 0);
+  const byFracDesc = raw
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac);
+  const vusPerRun = [...floors];
+  for (let k = 0; k < byFracDesc.length && remainder > 0; k++, remainder--) {
+    vusPerRun[byFracDesc[k]!.i]!++;
+  }
+
+  const journeys = runs
+    .map((run, i) => ({ stepCount: run.stepCount, vus: vusPerRun[i]!, execName: `journey${i + 1}` }))
+    .filter(j => j.vus > 0);
+
+  if (journeys.length === 1) {
+    return [{ stepCount: journeys[0]!.stepCount, vus: totalVus, execName: 'default' }];
+  }
+  return journeys;
+};
+
+const journeyLabel = (stepCount: number, steps: FlowStep[]): string => {
+  if (stepCount >= steps.length) return 'full flow';
+  const names = steps.slice(0, stepCount).map((s, i) => s.name || `Step ${i + 1}`);
+  return stepCount === 1 ? `${names[0]} only` : names.join('→');
+};
 
 const SOURCE_PLACEHOLDERS: Record<ExtractSource, string> = {
   jsonpath: '$.data.token',
@@ -95,7 +164,7 @@ export const parseHar = (raw: string): FlowStep[] => {
   }
 };
 
-export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange, testData, onTestDataChange, csvFile, onCsvChange, teamId }: Props) {
+export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange, testData, onTestDataChange, csvFile, onCsvChange, teamId, totalVus }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const csvRef  = useRef<HTMLInputElement>(null);
   const ignoreFileRef = useRef<HTMLInputElement>(null);
@@ -756,6 +825,15 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
         </div>
       )}
 
+      {/* Weighted parallel journeys summary — only shown once steps actually diverge into >1 tier */}
+      {steps.length > 1 && computeJourneys(steps, totalVus).length > 1 && (
+        <div className="p-2 bg-accent/10 border border-accent/30 rounded-control text-[12px] text-tx-2">
+          {computeJourneys(steps, totalVus)
+            .map(j => `${j.vus} users: ${journeyLabel(j.stepCount, steps)}`)
+            .join(' · ')}
+        </div>
+      )}
+
       {/* Steps */}
       <div className="space-y-3">
         {steps.map((step, i) => (
@@ -793,6 +871,23 @@ export default function FlowBuilder({ steps, envVars, onChange, onEnvVarsChange,
                 onChange={e => update(i, { name: e.target.value })}
                 className="flex-1 border border-border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
               />
+              {steps.length > 1 && (
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={step.userPercent ?? effectivePercentBefore(steps, i)}
+                  onChange={e => {
+                    const ceiling = effectivePercentBefore(steps, i);
+                    const raw = Number(e.target.value);
+                    const clamped = Number.isFinite(raw) ? Math.min(ceiling, Math.max(0, raw)) : ceiling;
+                    update(i, { userPercent: clamped });
+                  }}
+                  aria-label={`% of users reaching step ${i + 1}`}
+                  title="% of users reaching this step"
+                  className="w-16 border border-border rounded-lg px-2 py-1 text-sm text-right focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              )}
               {i > 0 && (
                 <button type="button" onClick={() => moveStep(i, i - 1)} aria-label={`Move step ${i + 1} up`} className="text-tx-4 hover:text-tx-3 text-xs px-1">↑</button>
               )}

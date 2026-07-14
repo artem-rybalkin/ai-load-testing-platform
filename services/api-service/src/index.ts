@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 
-import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, TeamRole, internalHeaders, getSessionCookieName } from '@alt/shared';
+import { TestRequest, TestType, EnrichedTestRequest, BackendTestOptions, TeamRole, internalHeaders, getSessionCookieName, validateStepPercents } from '@alt/shared';
 import { shutdownTracing } from '@alt/tracing';
 import { connectQueue, publishTest, publishCancel, isQueueConnected, getWorkerConsumerCount } from './queue';
 import { findExistingScript, checkDbHealth, stepsToKey, incrementUsedCount, pool } from './scripts';
@@ -215,6 +215,10 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       }
       if (steps && steps.length > 20) {
         return reply.code(400).send({ error: 'Flow tests support a maximum of 20 steps' });
+      }
+      if (steps) {
+        const percentError = validateStepPercents(steps);
+        if (percentError) return reply.code(400).send({ error: percentError });
       }
 
       // For flow tests, targetUrl defaults to first step's URL

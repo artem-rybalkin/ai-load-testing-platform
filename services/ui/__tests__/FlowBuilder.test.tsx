@@ -49,6 +49,7 @@ const defaultProps = {
   onTestDataChange: vi.fn(),
   csvFile: null,
   onCsvChange: vi.fn(),
+  totalVus: 100,
 };
 
 const makeSession = (overrides: Partial<RecordingSession> = {}): RecordingSession => ({
@@ -209,6 +210,65 @@ describe('FlowBuilder — step reordering', () => {
     fireEvent.drop(card);
 
     expect(defaultProps.onChange).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Weighted parallel journeys — % of users input + summary line ─────────────
+
+describe('FlowBuilder — weighted parallel journeys', () => {
+  const threeSteps = [makeFlowStep('Login'), makeFlowStep('Search'), makeFlowStep('Checkout')];
+
+  it('does not show a % input for a single-step flow', () => {
+    render(<FlowBuilder {...defaultProps} steps={[makeFlowStep('Only step')]} />);
+    expect(screen.queryByLabelText(/% of users reaching step/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a % input per step once there is more than one step', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    expect(screen.getByLabelText('% of users reaching step 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('% of users reaching step 2')).toBeInTheDocument();
+    expect(screen.getByLabelText('% of users reaching step 3')).toBeInTheDocument();
+  });
+
+  it('defaults an untouched step\'s input to the inherited (100) percent without setting userPercent on the step object', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    expect(screen.getByLabelText('% of users reaching step 2')).toHaveValue(100);
+    expect(defaultProps.onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not show a summary line when no step diverges from 100%', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} totalVus={100} />);
+    expect(screen.queryByText(/full flow/)).not.toBeInTheDocument();
+  });
+
+  it('sets userPercent on the edited step only, leaving other steps untouched', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    fireEvent.change(screen.getByLabelText('% of users reaching step 2'), { target: { value: '60' } });
+    const [updated] = defaultProps.onChange.mock.calls[0];
+    expect(updated[0].userPercent).toBeUndefined();
+    expect(updated[1].userPercent).toBe(60);
+    expect(updated[2].userPercent).toBeUndefined();
+  });
+
+  it('clamps a step\'s percent to the previous step\'s effective percent', () => {
+    const steps = [{ ...makeFlowStep('Login'), userPercent: 60 }, makeFlowStep('Search'), makeFlowStep('Checkout')];
+    render(<FlowBuilder {...defaultProps} steps={steps} />);
+    fireEvent.change(screen.getByLabelText('% of users reaching step 2'), { target: { value: '90' } });
+    const [updated] = defaultProps.onChange.mock.calls[0];
+    expect(updated[1].userPercent).toBe(60);
+  });
+
+  it('clamps a negative input to 0', () => {
+    render(<FlowBuilder {...defaultProps} steps={threeSteps} />);
+    fireEvent.change(screen.getByLabelText('% of users reaching step 2'), { target: { value: '-10' } });
+    const [updated] = defaultProps.onChange.mock.calls[0];
+    expect(updated[1].userPercent).toBe(0);
+  });
+
+  it('shows the 40/40/20 funnel summary line matching the computed journeys', () => {
+    const steps = [makeFlowStep('Login'), { ...makeFlowStep('Search'), userPercent: 60 }, { ...makeFlowStep('Checkout'), userPercent: 20 }];
+    render(<FlowBuilder {...defaultProps} steps={steps} totalVus={100} />);
+    expect(screen.getByText('40 users: Login only · 40 users: Login→Search · 20 users: full flow')).toBeInTheDocument();
   });
 });
 

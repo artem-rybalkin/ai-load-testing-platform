@@ -245,6 +245,63 @@ describe('FLOW_PROMPT — combined extract + placeholder + parameterization', ()
   });
 });
 
+describe('FLOW_PROMPT — weighted parallel journeys', () => {
+  it('does not mention journeys/scenarios at all when no step sets userPercent (byte-for-byte backward compat)', async () => {
+    const test = baseFlow();
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+    expect(prompt).not.toContain('WEIGHTED PARALLEL JOURNEYS');
+    expect(prompt).not.toContain('options.scenarios');
+    expect(prompt).toContain('export default function()');
+  });
+
+  it('renders a 3-tier scenarios block matching the 40/40/20 funnel example', async () => {
+    const test = baseFlow();
+    test.options = { vus: 100, duration: '30s' } as never;
+    test.steps = [
+      { name: 'Login', url: 'https://example.com/login', method: 'POST' },
+      { name: 'Search', url: 'https://example.com/search', method: 'GET', userPercent: 60 },
+      { name: 'Checkout', url: 'https://example.com/checkout', method: 'POST', userPercent: 20 },
+    ];
+
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+
+    expect(prompt).toContain('WEIGHTED PARALLEL JOURNEYS');
+    expect(prompt).toContain('options.scenarios');
+    expect(prompt).toContain("journey1: {");
+    expect(prompt).toContain("journey2: {");
+    expect(prompt).toContain("journey3: {");
+    // 40/40/20 split of 100 VUs
+    expect(prompt).toContain('vus: 40');
+    expect(prompt).toContain('vus: 20');
+    // journey1 covers only step 1, journey3 covers all 3
+    expect(prompt).toContain('covers Steps 1-1 ONLY');
+    expect(prompt).toContain('covers Steps 1-3 ONLY');
+    // no default export in the multi-journey path
+    expect(prompt).not.toContain('export default function()');
+    expect(prompt).toContain("export function journey1() {");
+  });
+
+  it('scales the spike-profile peak proportionally per journey', async () => {
+    const test = baseFlow();
+    test.options = { vus: 100, duration: '30s', profile: 'spike', peakVus: 500 } as never;
+    test.steps = [
+      { name: 'Login', url: 'https://example.com/login', method: 'POST' },
+      { name: 'Checkout', url: 'https://example.com/checkout', method: 'POST', userPercent: 20 },
+    ];
+
+    await generateScript(test);
+    const prompt = await getLastPrompt();
+
+    expect(prompt).toContain("executor: 'ramping-vus'");
+    // journey1 (login-only, 80 VUs of 100) gets 80% of the 500 peak = 400
+    expect(prompt).toContain('target: 400');
+    // journey2 (full flow, 20 VUs of 100) gets 20% of the 500 peak = 100
+    expect(prompt).toContain('target: 100');
+  });
+});
+
 describe('compareDescriptions', () => {
   it('returns REUSE when Gemini responds with REUSE', async () => {
     const fn = await getMockFn();

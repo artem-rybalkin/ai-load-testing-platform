@@ -1,6 +1,7 @@
 export * from './aiProvider';
 export * from './aiValidation';
 export * from './contracts';
+export * from './journeys';
 
 /** Strip ANSI escape codes from a string (safe to call on every log line). */
 export const stripAnsi = (s: string): string =>
@@ -102,6 +103,7 @@ export interface FlowStep {
   body?: string | undefined;
   headers?: Record<string, string> | undefined;
   extract?: Record<string, ExtractRule> | undefined; // variable_name → extraction rule
+  userPercent?: number | undefined; // 0-100, % of totalVus reaching this step; missing = inherits previous step's value (step 1 defaults to 100)
 }
 
 export interface StepMetrics {

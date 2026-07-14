@@ -59,6 +59,7 @@ export const FlowStepSchema: z.ZodType<FlowStep> = z.object({
   body: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   extract: z.record(z.string(), ExtractRuleSchema).optional(),
+  userPercent: z.number().optional(),
 });
 
 const HttpOptionsSchema = z.object({
