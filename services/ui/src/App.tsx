@@ -19,6 +19,7 @@ const ResultsPage      = lazy(() => import('@/app/results/page'));
 const ResultDetailPage = lazy(() => import('@/app/results/testId/page'));
 const ComparePage      = lazy(() => import('@/app/results/compare/page'));
 const PresetsPage      = lazy(() => import('@/app/presets/page'));
+const ScriptsPage      = lazy(() => import('@/app/scripts/page'));
 const LibraryPage      = lazy(() => import('@/app/library/page'));
 const SchedulesPage    = lazy(() => import('@/app/schedules/page'));
 const WebhooksPage     = lazy(() => import('@/app/webhooks/page'));
@@ -109,6 +110,12 @@ const router = createBrowserRouter([
             path: '/presets',
             element: <PresetsPage />,
             loader: () => import('@/app/presets/page').then(m => m.loader()),
+            errorElement: <RouteErrorBoundary />,
+          },
+          {
+            path: '/scripts',
+            element: <ScriptsPage />,
+            loader: () => import('@/app/scripts/page').then(m => m.loader()),
             errorElement: <RouteErrorBoundary />,
           },
           { path: '/library', element: <LibraryPage />, errorElement: <RouteErrorBoundary /> },

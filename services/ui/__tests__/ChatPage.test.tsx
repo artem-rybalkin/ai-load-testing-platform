@@ -23,12 +23,20 @@ vi.mock('@/lib/api', () => ({
   parseChatPrompt: vi.fn(),
   createTest: vi.fn(),
   getResult: vi.fn(),
+  getScripts: vi.fn(),
+  getScript: vi.fn(),
+  saveScript: vi.fn(),
+  editScriptChat: vi.fn(),
 }));
 
-import { parseChatPrompt, createTest, getResult } from '@/lib/api';
+import { parseChatPrompt, createTest, getResult, getScripts, getScript, saveScript, editScriptChat } from '@/lib/api';
 const mockParseChatPrompt = vi.mocked(parseChatPrompt);
 const mockCreateTest = vi.mocked(createTest);
 const mockGetResult = vi.mocked(getResult);
+const mockGetScripts = vi.mocked(getScripts);
+const mockGetScript = vi.mocked(getScript);
+const mockSaveScript = vi.mocked(saveScript);
+const mockEditScriptChat = vi.mocked(editScriptChat);
 
 const sendMessage = async (text: string) => {
   const input = screen.getByPlaceholderText(/describe a test/i);
@@ -383,5 +391,121 @@ describe('ChatPage', () => {
       onEvent({ type: 'reconnected' });
     });
     await waitFor(() => expect(mockGetResult).toHaveBeenCalledTimes(2));
+  });
+});
+
+// ─── Edit mode ─────────────────────────────────────────────────────────────────
+
+const makeScript = (overrides: Record<string, unknown> = {}) => ({
+  id: 's1',
+  targetUrl: 'https://api.example.com/checkout',
+  testType: 'backend',
+  usedCount: 2,
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-01T00:00:00.000Z',
+  ...overrides,
+});
+
+describe('ChatPage — edit mode', () => {
+  beforeEach(() => {
+    mockGetScripts.mockResolvedValue({ scripts: [] });
+  });
+
+  it('shows an in-chat picker listing saved scripts when Edit Script mode is selected', async () => {
+    mockGetScripts.mockResolvedValue({ scripts: [makeScript()] });
+    render(<ChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: /edit script/i }));
+
+    await waitFor(() => expect(screen.getByText('https://api.example.com/checkout')).toBeInTheDocument());
+    expect(screen.getByText('Which saved script do you want to edit?')).toBeInTheDocument();
+  });
+
+  it('shows a no-scripts message with a link to Saved Scripts when the picker is empty', async () => {
+    render(<ChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: /edit script/i }));
+    await waitFor(() => expect(screen.getByText(/No saved scripts yet/)).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: /saved scripts/i })).toHaveAttribute('href', '/scripts');
+  });
+
+  it('shows the editing banner and compose input after picking a script', async () => {
+    mockGetScripts.mockResolvedValue({ scripts: [makeScript()] });
+    render(<ChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: /edit script/i }));
+    await waitFor(() => expect(screen.getByText('https://api.example.com/checkout')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('https://api.example.com/checkout'));
+
+    expect(screen.getByText(/Editing:/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/describe the change/i)).toBeInTheDocument();
+  });
+
+  it('sends an edit turn and renders the editReady card with Save / Keep chatting', async () => {
+    mockGetScripts.mockResolvedValue({ scripts: [makeScript()] });
+    mockEditScriptChat.mockResolvedValue({
+      status: 'editReady',
+      editedScript: 'export default function() { check(res, {}); }',
+      summary: 'Added a status check.',
+    });
+    render(<ChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: /edit script/i }));
+    await waitFor(() => expect(screen.getByText('https://api.example.com/checkout')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('https://api.example.com/checkout'));
+
+    const input = screen.getByPlaceholderText(/describe the change/i);
+    fireEvent.change(input, { target: { value: 'add a check on status 200' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => expect(mockEditScriptChat).toHaveBeenCalledWith(
+      's1',
+      [{ role: 'user', content: 'add a check on status 200' }],
+    ));
+    await waitFor(() => expect(screen.getByText('Added a status check.')).toBeInTheDocument());
+    expect(screen.getByText('export default function() { check(res, {}); }')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /keep chatting/i })).toBeInTheDocument();
+  });
+
+  it('calls saveScript when Save is clicked on the editReady card', async () => {
+    mockGetScripts.mockResolvedValue({ scripts: [makeScript()] });
+    mockEditScriptChat.mockResolvedValue({ status: 'editReady', editedScript: 'edited code', summary: 'did a thing' });
+    mockSaveScript.mockResolvedValue(undefined);
+    render(<ChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: /edit script/i }));
+    await waitFor(() => expect(screen.getByText('https://api.example.com/checkout')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('https://api.example.com/checkout'));
+
+    fireEvent.change(screen.getByPlaceholderText(/describe the change/i), { target: { value: 'make a change' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockSaveScript).toHaveBeenCalledWith('s1', 'edited code'));
+    await waitFor(() => expect(screen.getByText(/now the current script/)).toBeInTheDocument());
+  });
+
+  it('shows needsClarification as a normal assistant reply in edit mode', async () => {
+    mockGetScripts.mockResolvedValue({ scripts: [makeScript()] });
+    mockEditScriptChat.mockResolvedValue({ status: 'needsClarification', question: 'Which endpoint should the check apply to?' });
+    render(<ChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: /edit script/i }));
+    await waitFor(() => expect(screen.getByText('https://api.example.com/checkout')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('https://api.example.com/checkout'));
+
+    fireEvent.change(screen.getByPlaceholderText(/describe the change/i), { target: { value: 'add a check' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => expect(screen.getByText('Which endpoint should the check apply to?')).toBeInTheDocument());
+  });
+
+  it('pre-loads the target script and switches to edit mode from a sessionStorage scriptId (Edit via Chat from Saved Scripts)', async () => {
+    sessionStorage.clear();
+    sessionStorage.setItem('chatEditScriptId', 's1');
+    mockGetScript.mockResolvedValue({ script: makeScript() });
+
+    render(<ChatPage />);
+
+    await waitFor(() => expect(mockGetScript).toHaveBeenCalledWith('s1'));
+    await waitFor(() => expect(screen.getByText(/Editing:/)).toBeInTheDocument());
+    expect(sessionStorage.getItem('chatEditScriptId')).toBeNull();
   });
 });

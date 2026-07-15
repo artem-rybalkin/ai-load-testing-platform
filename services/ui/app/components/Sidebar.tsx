@@ -20,6 +20,9 @@ const NAV = [
   { href: '/presets', label: 'Presets', icon: (
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9"><rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1" /><rect x="11" y="3.5" width="5.5" height="5.5" rx="1" /><rect x="3.5" y="11" width="5.5" height="5.5" rx="1" /><rect x="11" y="11" width="5.5" height="5.5" rx="1" /></svg>
   ) },
+  { href: '/scripts', label: 'Saved Scripts', icon: (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4 3 10l4 6M13 4l4 6-4 6" /></svg>
+  ) },
   { href: '/library', label: 'Library', icon: (
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round"><rect x="4" y="3.5" width="9" height="13" rx="1" /><path d="M7 7h3M7 10h3" strokeLinecap="round" /><path d="M15 5.5l1.6.4-2 11-1.6-.4" /></svg>
   ) },

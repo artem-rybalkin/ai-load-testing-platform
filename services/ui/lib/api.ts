@@ -10,10 +10,13 @@ export type {
   BackendMetrics, ClientMetrics,
 } from './api/tests';
 export {
-  createTest, getResults, getResult, getScripts, getActiveTests, getLiveMetrics,
+  createTest, getResults, getResult, getActiveTests, getLiveMetrics,
   getExecutionLog, cancelTest, setBaseline, clearBaseline, compareResults, getTrend,
   previewThresholds,
 } from './api/tests';
+
+export type { SavedScript, SavedScriptVersion, ScriptEditResponse } from '@alt/shared';
+export { getScripts, getScript, getScriptVersions, saveScript, restoreScriptVersion, editScriptChat } from './api/scripts';
 
 export type { Webhook } from './api/webhooks';
 export { getWebhooks, createWebhook, deleteWebhook } from './api/webhooks';

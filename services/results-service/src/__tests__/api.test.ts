@@ -40,7 +40,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
+  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, test_script_versions, webhooks, schedules, test_presets, log_sources CASCADE');
   mockFetch.mockReset();
   // The vi.mock('../consumer', ...) factory above only runs once — with the
   // project's global mockReset: true, isConsumerConnected's .mockReturnValue()
@@ -102,7 +102,9 @@ describe('GET /scripts', () => {
     const res = await app.inject({ method: 'GET', url: '/scripts' });
     expect(res.statusCode).toBe(200);
     const scripts = res.json().scripts;
-    expect(scripts[0].used_count).toBeGreaterThanOrEqual(scripts[1].used_count);
+    expect(scripts[0].usedCount).toBeGreaterThanOrEqual(scripts[1].usedCount);
+    expect(scripts[0].targetUrl).toBeDefined();
+    expect(scripts[0].testType).toBeDefined();
   });
 });
 
@@ -117,10 +119,112 @@ describe('GET /scripts/:id', () => {
     const res = await app.inject({ method: 'GET', url: `/scripts/${id}` });
     expect(res.statusCode).toBe(200);
     expect(res.json().script.script).toBe('code here');
+    expect(res.json().script.targetUrl).toBe('http://x.com');
+    expect(res.json().script.testType).toBe('backend');
   });
 
   it('returns 404 for unknown script id', async () => {
     const res = await app.inject({ method: 'GET', url: '/scripts/00000000-0000-0000-0000-000000000099' });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─── PUT /scripts/:id, GET /scripts/:id/versions, restore ────────────────────
+
+describe('PUT /scripts/:id — save (archive + overwrite)', () => {
+  const insertScript = async (script = 'original code'): Promise<string> => {
+    const { rows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script) VALUES ('http://save.com', 'backend', $1) RETURNING id`,
+      [script],
+    );
+    return rows[0].id;
+  };
+
+  it('overwrites the current script and archives the previous one', async () => {
+    const id = await insertScript('original code');
+    const res = await app.inject({ method: 'PUT', url: `/scripts/${id}`, payload: { script: 'edited code' } });
+    expect(res.statusCode).toBe(200);
+
+    const { rows: scriptRows } = await pool.query('SELECT script FROM test_scripts WHERE id = $1', [id]);
+    expect(scriptRows[0].script).toBe('edited code');
+
+    const { rows: versionRows } = await pool.query('SELECT script FROM test_script_versions WHERE script_id = $1', [id]);
+    expect(versionRows).toHaveLength(1);
+    expect(versionRows[0].script).toBe('original code');
+  });
+
+  it('returns 400 when script is missing or empty', async () => {
+    const id = await insertScript();
+    const res = await app.inject({ method: 'PUT', url: `/scripts/${id}`, payload: { script: '' } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 404 for an unknown script id', async () => {
+    const res = await app.inject({ method: 'PUT', url: '/scripts/00000000-0000-0000-0000-000000000099', payload: { script: 'x' } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('archives every prior version across repeated saves', async () => {
+    const id = await insertScript('v1');
+    await app.inject({ method: 'PUT', url: `/scripts/${id}`, payload: { script: 'v2' } });
+    await app.inject({ method: 'PUT', url: `/scripts/${id}`, payload: { script: 'v3' } });
+
+    const { rows } = await pool.query('SELECT script FROM test_script_versions WHERE script_id = $1 ORDER BY created_at', [id]);
+    expect(rows.map((r: { script: string }) => r.script)).toEqual(['v1', 'v2']);
+  });
+});
+
+describe('GET /scripts/:id/versions', () => {
+  it('returns empty list for a script with no saved history', async () => {
+    const { rows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script) VALUES ('http://nohist.com', 'backend', 'x') RETURNING id`,
+    );
+    const res = await app.inject({ method: 'GET', url: `/scripts/${rows[0].id}/versions` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().versions).toEqual([]);
+  });
+
+  it('lists archived versions newest first', async () => {
+    const { rows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script) VALUES ('http://hist.com', 'backend', 'v1') RETURNING id`,
+    );
+    const id = rows[0].id;
+    await app.inject({ method: 'PUT', url: `/scripts/${id}`, payload: { script: 'v2' } });
+    await app.inject({ method: 'PUT', url: `/scripts/${id}`, payload: { script: 'v3' } });
+
+    const res = await app.inject({ method: 'GET', url: `/scripts/${id}/versions` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().versions).toHaveLength(2);
+    expect(res.json().versions[0].createdAt).toBeDefined();
+  });
+});
+
+describe('POST /scripts/:id/versions/:versionId/restore', () => {
+  it('restores an archived version as current and archives what it replaced', async () => {
+    const { rows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script) VALUES ('http://restore.com', 'backend', 'v1') RETURNING id`,
+    );
+    const id = rows[0].id;
+    await app.inject({ method: 'PUT', url: `/scripts/${id}`, payload: { script: 'v2' } }); // archives v1
+    const { rows: versionRows } = await pool.query('SELECT id FROM test_script_versions WHERE script_id = $1', [id]);
+    const v1VersionId = versionRows[0].id;
+
+    const res = await app.inject({ method: 'POST', url: `/scripts/${id}/versions/${v1VersionId}/restore` });
+    expect(res.statusCode).toBe(200);
+
+    const { rows: scriptRows } = await pool.query('SELECT script FROM test_scripts WHERE id = $1', [id]);
+    expect(scriptRows[0].script).toBe('v1');
+
+    // v2 (what restore just replaced) is now itself archived
+    const { rows: allVersions } = await pool.query('SELECT script FROM test_script_versions WHERE script_id = $1 ORDER BY created_at', [id]);
+    expect(allVersions.map((r: { script: string }) => r.script)).toEqual(['v1', 'v2']);
+  });
+
+  it('returns 404 for an unknown version id', async () => {
+    const { rows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script) VALUES ('http://restore2.com', 'backend', 'v1') RETURNING id`,
+    );
+    const res = await app.inject({ method: 'POST', url: `/scripts/${rows[0].id}/versions/00000000-0000-0000-0000-000000000099/restore` });
     expect(res.statusCode).toBe(404);
   });
 });

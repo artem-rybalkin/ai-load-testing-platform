@@ -314,6 +314,43 @@ one call against the team's daily Gemini quota (`checkGeminiQuota`/`incrementGem
 
 ---
 
+## 13a. Chat-Based Script Editing (edit mode)
+
+**Service:** `results-service` (`POST /chat/edit-script`)
+**Entry point:** "Edit Script" — the 4th mode button in Chat, or "Edit via Chat" on the Saved
+Scripts page (`/scripts`).
+
+Distinct from every other chat mode: it never builds a new `TestRequest` config — it edits the
+**raw source text** of an already-generated, cached script (`test_scripts.script`), scoped to
+scripts a test has actually produced (not ephemeral in-flight generations). Applies uniformly to
+backend/flow (k6) and client-side (Puppeteer) scripts, since both are just JavaScript text — this
+sidesteps parsing a script back into structured `FlowStep[]`, the same "black box" tradeoff the
+platform already accepts for the `customScript` bypass.
+
+Flow:
+1. Pick a target script — either pre-loaded via the Saved Scripts page's "Edit via Chat" button
+   (stores `{ scriptId }` in `sessionStorage`, read once on Chat's mount), or from an in-chat picker
+   (`GET /scripts`) shown when the mode is selected with nothing pre-chosen.
+2. Each turn sends the full conversation plus the target `scriptId` to `POST /chat/edit-script`,
+   which loads the *current* script fresh from `test_scripts` every call and builds a fresh prompt
+   (`buildScriptEditPrompt`) — fencing the existing script text (`fenceUserContent`) and instructing
+   the model to return either `{"status":"editReady","editedScript":"<complete script>","summary":"..."}`
+   or `{"status":"needsClarification","question":"..."}`. The model is told to return the **complete**
+   updated script, never a diff/patch, and to change only what was asked.
+3. An `editReady` response renders a preview card (proposed script + a 1-2 sentence summary) with
+   two actions: **Save** (`PUT /scripts/:id` — archives the pre-edit script into
+   `test_script_versions` before overwriting, so nothing is ever lost) and **Keep chatting**
+   (dismiss, refine further). Nothing is persisted until Save is clicked — sending several messages
+   while iterating on the wording never touches the stored script, so a half-finished multi-turn
+   edit can't leave `test_scripts` in an inconsistent state for the next test creation that hits its
+   cache key.
+
+The Saved Scripts page also surfaces each script's version history (every prior Save/restore) with
+a one-click **Restore**, which is itself just another archive-then-overwrite — restoring doesn't
+delete history, it adds to it.
+
+---
+
 ## 14. Output Validation & Prompt Injection Mitigation
 
 **Service:** `@alt/shared` (`packages/shared/src/aiValidation.ts`) — shared helpers used across

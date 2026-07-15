@@ -379,6 +379,41 @@ Return ONLY the JSON object, nothing else.`;
 };
 
 /**
+ * Mode: 'edit' — apply a natural-language change to an existing saved script's
+ * raw source text (not structured re-generation). Used uniformly for every
+ * script kind (backend/flow k6 JS, client-side Puppeteer JS) — treating this
+ * as source-text editing sidesteps parsing a script back into FlowStep[]; an
+ * edited flow script's text can drift from what FlowBuilder would regenerate,
+ * the same accepted tradeoff the platform already makes for the customScript
+ * bypass. Produces: editReady | needsClarification.
+ */
+export const buildScriptEditPrompt = (currentScript: string, testType: string, messages: ChatMessage[]): string => {
+  const transcript = makeTranscript(messages);
+  const flavor = testType === 'client-side' ? 'Puppeteer (browser automation)' : 'k6 (HTTP load testing)';
+  return `You are a performance testing expert helping a user edit an existing ${flavor} JavaScript test script. ${USER_DATA_INSTRUCTION}
+
+Existing script:
+${fenceUserContent('existing_script', currentScript)}
+
+Conversation so far (the user's requested changes):
+${transcript}
+
+Determine which ONE outcome applies and return ONLY valid JSON:
+
+1. If the requested change is clear enough to apply, return:
+{"status": "editReady", "editedScript": "<the COMPLETE updated script>", "summary": "<1-2 sentence summary of what changed>"}
+- Apply ONLY the change(s) the user described — do not rewrite, refactor, or "improve" unrelated parts of the script.
+- Preserve the existing script's overall structure, style, and any comments not affected by the change.
+- "editedScript" MUST be the full script text, not a diff or a patch snippet — it directly replaces the existing script.
+- Return valid, complete, runnable JavaScript — do not truncate or leave placeholders like "// ... rest unchanged".
+
+2. If the requested change is ambiguous or missing detail needed to apply it safely, return:
+{"status": "needsClarification", "question": "<one short, focused follow-up question>"}
+
+Return ONLY the JSON object, nothing else.`;
+};
+
+/**
  * Legacy single-entry-point wrapper — routes to the appropriate focused prompt.
  * Kept for backwards compatibility with existing unit tests.
  */
@@ -470,6 +505,18 @@ export const isValidChatParseResponse = (value: unknown): boolean => {
     if (!flow.options || typeof flow.options !== 'object') return false;
     if (flow.thresholds !== undefined && !normalizeThresholdsInPlace(flow)) return false;
     return true;
+  }
+  return false;
+};
+
+/** Validates the AI's /chat/edit-script response. */
+export const isValidScriptEditResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (v.status === 'needsClarification') return typeof v.question === 'string' && v.question.length > 0;
+  if (v.status === 'editReady') {
+    return typeof v.editedScript === 'string' && v.editedScript.trim().length > 0
+      && typeof v.summary === 'string' && v.summary.length > 0;
   }
   return false;
 };

@@ -54,6 +54,13 @@ interface TestScriptRow {
   workspace_id: string | null;
 }
 
+interface TestScriptVersionRow {
+  id: string;
+  script_id: string;
+  script: string;
+  created_at: Date;
+}
+
 export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool; rPool: Pool }): void {
 
   // ── POST /results/:testId/message (internal) ──────────────────────────────
@@ -319,7 +326,16 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
          ORDER BY used_count DESC`,
         [projectId, workspaceId],
       );
-      return { scripts: rows };
+      return {
+        scripts: rows.map(r => ({
+          id: r.id,
+          targetUrl: r.target_url,
+          testType: r.test_type,
+          usedCount: r.used_count,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        })),
+      };
     } catch {
       return reply.code(500).send({ error: 'Failed to fetch scripts' });
     }
@@ -338,7 +354,18 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
       if (rows.length === 0) {
         return reply.code(404).send({ error: 'Script not found' });
       }
-      return { script: rows[0] };
+      const r = rows[0]!;
+      return {
+        script: {
+          id: r.id,
+          targetUrl: r.target_url,
+          testType: r.test_type,
+          script: r.script,
+          usedCount: r.used_count,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        },
+      };
     },
   );
 
@@ -361,6 +388,134 @@ export function resultRoutes(app: FastifyInstance, { pool, rPool }: { pool: Pool
       }
       await recordAudit(pool, { teamId: projectId, userId: request.user?.id, action: 'delete', resourceType: 'script', resourceId: id });
       return reply.code(204).send();
+    },
+  );
+
+  // ── GET /scripts/:id/versions ─────────────────────────────────────────────
+  // Archived script text from before each save/restore (see PUT /scripts/:id
+  // below) — test_scripts itself only ever holds the current script, since it's
+  // keyed by UNIQUE(target_url, test_type).
+  app.get<{ Params: { id: string } }>(
+    '/scripts/:id/versions',
+    async (request, reply) => {
+      const { id } = request.params;
+      const projectId = request.projectId ?? null;
+      const { rows } = await rPool.query<Pick<TestScriptVersionRow, 'id' | 'created_at'>>(
+        `SELECT v.id, v.created_at FROM test_script_versions v
+         JOIN test_scripts s ON s.id = v.script_id
+         WHERE v.script_id = $1 AND ($2::uuid IS NULL OR s.project_id = $2::uuid)
+         ORDER BY v.created_at DESC`,
+        [id, projectId],
+      );
+      return { versions: rows.map(r => ({ id: r.id, createdAt: r.created_at })) };
+    },
+  );
+
+  // ── GET /scripts/:id/versions/:versionId ──────────────────────────────────
+  app.get<{ Params: { id: string; versionId: string } }>(
+    '/scripts/:id/versions/:versionId',
+    async (request, reply) => {
+      const { id, versionId } = request.params;
+      const projectId = request.projectId ?? null;
+      const { rows } = await pool.query<TestScriptVersionRow>(
+        `SELECT v.* FROM test_script_versions v
+         JOIN test_scripts s ON s.id = v.script_id
+         WHERE v.id = $1 AND v.script_id = $2 AND ($3::uuid IS NULL OR s.project_id = $3::uuid)`,
+        [versionId, id, projectId],
+      );
+      if (rows.length === 0) {
+        return reply.code(404).send({ error: 'Version not found' });
+      }
+      return { version: rows[0] };
+    },
+  );
+
+  // ── PUT /scripts/:id ───────────────────────────────────────────────────────
+  // Archives the current script into test_script_versions, then overwrites it.
+  // Used by chat's "Save" action after an AI-proposed edit; restore below is
+  // the same archive-then-overwrite, just sourcing the new text differently.
+  app.put<{ Params: { id: string }; Body: { script: string } }>(
+    '/scripts/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      const projectId = request.projectId ?? null;
+      const { script } = request.body ?? {};
+      if (typeof script !== 'string' || script.trim().length === 0) {
+        return reply.code(400).send({ error: 'script is required' });
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query<{ id: string }>(
+          `SELECT id FROM test_scripts WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid) FOR UPDATE`,
+          [id, projectId],
+        );
+        if (rows.length === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(404).send({ error: 'Script not found' });
+        }
+        await client.query(
+          `INSERT INTO test_script_versions (script_id, script) SELECT id, script FROM test_scripts WHERE id = $1`,
+          [id],
+        );
+        await client.query(
+          `UPDATE test_scripts SET script = $1, updated_at = NOW() WHERE id = $2`,
+          [script, id],
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+      return { success: true };
+    },
+  );
+
+  // ── POST /scripts/:id/versions/:versionId/restore ─────────────────────────
+  app.post<{ Params: { id: string; versionId: string } }>(
+    '/scripts/:id/versions/:versionId/restore',
+    async (request, reply) => {
+      const { id, versionId } = request.params;
+      const projectId = request.projectId ?? null;
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: scriptRows } = await client.query<{ id: string }>(
+          `SELECT id FROM test_scripts WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid) FOR UPDATE`,
+          [id, projectId],
+        );
+        if (scriptRows.length === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(404).send({ error: 'Script not found' });
+        }
+        const { rows: versionRows } = await client.query<{ script: string }>(
+          `SELECT script FROM test_script_versions WHERE id = $1 AND script_id = $2`,
+          [versionId, id],
+        );
+        if (versionRows.length === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(404).send({ error: 'Version not found' });
+        }
+        await client.query(
+          `INSERT INTO test_script_versions (script_id, script) SELECT id, script FROM test_scripts WHERE id = $1`,
+          [id],
+        );
+        await client.query(
+          `UPDATE test_scripts SET script = $1, updated_at = NOW() WHERE id = $2`,
+          [versionRows[0]!.script, id], // guarded by versionRows.length === 0 above
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+      return { success: true };
     },
   );
 

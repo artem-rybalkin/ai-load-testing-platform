@@ -441,6 +441,26 @@ const MIGRATIONS: Array<{ version: number; name: string; up: (p: Pool) => Promis
       await p.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
     },
   },
+  {
+    version: 18,
+    name: 'test_script_versions',
+    up: async (p): Promise<void> => {
+      // Backs chat-driven script editing: test_scripts has UNIQUE(target_url, test_type),
+      // so it can only ever hold the CURRENT script for a given key — this table archives
+      // the prior script text every time a save/restore overwrites test_scripts.script,
+      // so an edit is never destructive. test_scripts itself needs no changes; every
+      // existing cache-hit lookup (findExistingScript, etc.) keeps working unmodified.
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS test_script_versions (
+          id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          script_id  UUID NOT NULL REFERENCES test_scripts(id) ON DELETE CASCADE,
+          script     TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await p.query(`CREATE INDEX IF NOT EXISTS idx_test_script_versions_script_id ON test_script_versions(script_id, created_at DESC)`);
+    },
+  },
 ];
 
 // ── Migration engine ──────────────────────────────────────────────────────────

@@ -5,12 +5,17 @@ import {
   parseChatPrompt,
   createTest,
   getResult,
+  getScripts,
+  getScript,
+  saveScript,
+  editScriptChat,
   ChatMessage,
   ChatParseResponse,
   ParsedTestIntent,
   ChatAttachment,
   FlowTestConfig,
   FlowStep,
+  SavedScript,
 } from '@/lib/api';
 import type { ChatMode } from '@alt/shared';
 
@@ -30,6 +35,16 @@ interface FlowPreviewMsg {
   flow: FlowTestConfig;
   dismissed: boolean;
   started: boolean;
+}
+
+interface ScriptEditPreviewMsg {
+  role: 'assistant';
+  kind: 'scriptEditPreview';
+  scriptId: string;
+  editedScript: string;
+  summary: string;
+  dismissed: boolean;
+  saved: boolean;
 }
 
 interface RedirectMsg {
@@ -52,7 +67,7 @@ interface TextMsg {
   attachments?: ChatAttachment[];
 }
 
-type ChatEntry = TextMsg | PreviewMsg | FlowPreviewMsg | RedirectMsg | StatusMsg;
+type ChatEntry = TextMsg | PreviewMsg | FlowPreviewMsg | RedirectMsg | StatusMsg | ScriptEditPreviewMsg;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -163,6 +178,7 @@ const toThreadMessages = (entries: ChatEntry[]): ChatMessage[] =>
       if (e.kind === 'preview') return { role: 'assistant', content: `I proposed this test config: ${JSON.stringify(e.config)}` };
       if (e.kind === 'flowPreview') return { role: 'assistant', content: `I proposed this flow: ${JSON.stringify(e.flow)}` };
       if (e.kind === 'redirect') return { role: 'assistant', content: `I suggested using the Flow Builder instead: ${e.reason}` };
+      if (e.kind === 'scriptEditPreview') return { role: 'assistant', content: `I proposed this script edit: ${e.summary}` };
       return null; // 'status' entries are live test-run noise, not conversational context
     })
     .filter((m): m is ChatMessage => m !== null);
@@ -199,6 +215,7 @@ const SUGGESTIONS: Record<ChatMode, string[]> = {
   english:  ['Spike test my API at example.com', 'Load test homepage, 10 VUs 2 min', 'Browser test with web vitals'],
   swagger:  ['Test the auth flow', 'Test all CRUD endpoints', 'Test the checkout flow'],
   context:  ['Extract steps from this recording', 'Build a flow from these docs', 'Test the scenario in this code'],
+  edit:     [],
 };
 
 const MODE_META: Record<ChatMode, { label: string; hint: string; placeholder: string }> = {
@@ -217,6 +234,11 @@ const MODE_META: Record<ChatMode, { label: string; hint: string; placeholder: st
     hint: 'Upload a HAR recording, documentation file, or code snippet — I\'ll build the test steps.',
     placeholder: 'Describe what to test or ask me to extract steps from the uploaded context…',
   },
+  edit: {
+    label: 'Edit Script',
+    hint: 'Pick a saved script below, then describe the change you want — nothing is saved until you click Save.',
+    placeholder: 'Describe the change, e.g. "add a check that the response has an id field"…',
+  },
 };
 
 // ── Chat history (localStorage) ───────────────────────────────────────────────
@@ -232,6 +254,7 @@ interface SavedSession {
   mode: ChatMode;
   entries: ChatEntry[];
   sessionContext: ChatAttachment | null;
+  editScriptId?: string;
   savedAt: number;
 }
 
@@ -267,7 +290,7 @@ function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-const MODE_BADGE: Record<ChatMode, string> = { english: 'EN', swagger: 'SW', context: 'CTX' };
+const MODE_BADGE: Record<ChatMode, string> = { english: 'EN', swagger: 'SW', context: 'CTX', edit: 'EDIT' };
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
@@ -319,6 +342,11 @@ export default function ChatPage() {
   const [swaggerUrl, setSwaggerUrl] = useState('');
   const [showSwaggerInput, setShowSwaggerInput] = useState(false);
 
+  // Edit-script mode: which saved script is currently targeted, and the lazily
+  // fetched list shown by the in-chat picker when none is selected yet.
+  const [editScript, setEditScript] = useState<SavedScript | null>(null);
+  const [editScriptsList, setEditScriptsList] = useState<SavedScript[] | null>(null);
+
   // ── Chat history ──────────────────────────────────────────────────────────
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => crypto.randomUUID());
   const [history, setHistory] = useState<SavedSession[]>(() => loadHistory());
@@ -334,10 +362,30 @@ export default function ChatPage() {
         ? { ...e, attachments: e.attachments.map(a => ({ ...a, content: '' })) }
         : e
     ) as ChatEntry[];
-    const session: SavedSession = { id: currentSessionId, title: sessionTitle(entries), mode, entries: safeEntries, sessionContext: null, savedAt: Date.now() };
+    const session: SavedSession = { id: currentSessionId, title: sessionTitle(entries), mode, entries: safeEntries, sessionContext: null, editScriptId: editScript?.id, savedAt: Date.now() };
     saveToHistory(session);
     setHistory(loadHistory());
   }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "Edit via Chat" from the Saved Scripts page stores the target scriptId once,
+  // read-and-cleared here the same way page.tsx reads chatFlowConfig for the flow builder.
+  useEffect(() => {
+    let scriptId: string | null = null;
+    try {
+      scriptId = sessionStorage.getItem('chatEditScriptId');
+      if (scriptId) sessionStorage.removeItem('chatEditScriptId');
+    } catch { /* sessionStorage unavailable — falls back to the in-chat picker */ }
+    if (!scriptId) return;
+    setMode('edit');
+    getScript(scriptId).then(({ script }) => setEditScript(script)).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Edit mode with no script chosen yet shows an in-chat picker — fetch its list lazily.
+  useEffect(() => {
+    if (mode === 'edit' && !editScript && editScriptsList === null) {
+      getScripts().then(({ scripts }) => setEditScriptsList(scripts)).catch(() => setEditScriptsList([]));
+    }
+  }, [mode, editScript, editScriptsList]);
 
   const startNewChat = () => {
     setCurrentSessionId(crypto.randomUUID());
@@ -348,6 +396,8 @@ export default function ChatPage() {
     setSessionContext(null);
     setShowSwaggerInput(false);
     setShowHistory(false);
+    setEditScript(null);
+    setEditScriptsList(null);
   };
 
   const loadSession = (s: SavedSession) => {
@@ -360,6 +410,12 @@ export default function ChatPage() {
     setPendingAttachments([]);
     setShowSwaggerInput(false);
     setShowHistory(false);
+    setEditScriptsList(null);
+    if (s.editScriptId) {
+      getScript(s.editScriptId).then(({ script }) => setEditScript(script)).catch(() => setEditScript(null));
+    } else {
+      setEditScript(null);
+    }
 
     // Status entries saved as pending/running will never update on their own —
     // watchedTestIds starts empty on every mount, and no WS test:status event
@@ -395,6 +451,8 @@ export default function ChatPage() {
     setPendingAttachments([]);
     setSessionContext(null);
     setShowSwaggerInput(next === 'swagger');
+    setEditScript(null);
+    setEditScriptsList(null);
   };
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -508,10 +566,52 @@ export default function ChatPage() {
     }
   };
 
+  // Edit mode's send handler — distinct from handleSend above since it targets
+  // a specific saved script's raw source text rather than building a new
+  // TestRequest config, and needs none of handleSend's attachment/swagger logic.
+  const handleEditTurn = async (text?: string) => {
+    const content = (text ?? input).trim();
+    if (!content || thinking || !editScript) return;
+    setInput('');
+    setError(null);
+
+    const userEntry: TextMsg = { role: 'user', kind: 'text', content };
+    const nextEntries = [...entries, userEntry];
+    setEntries(nextEntries);
+    setThinking(true);
+
+    try {
+      const response = await editScriptChat(editScript.id, toThreadMessages(nextEntries));
+      if (response.status === 'needsClarification') {
+        appendEntry({ role: 'assistant', kind: 'text', content: response.question });
+      } else {
+        appendEntry({
+          role: 'assistant', kind: 'scriptEditPreview',
+          scriptId: editScript.id, editedScript: response.editedScript, summary: response.summary,
+          dismissed: false, saved: false,
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to process your edit request');
+    } finally {
+      setThinking(false);
+    }
+  };
+
   // ── Run actions ───────────────────────────────────────────────────────────
 
-  const handleKeepChatting = (entry: PreviewMsg | FlowPreviewMsg) => {
+  const handleKeepChatting = (entry: PreviewMsg | FlowPreviewMsg | ScriptEditPreviewMsg) => {
     setEntries(prev => prev.map(e => (e === entry ? { ...e, dismissed: true } : e)));
+  };
+
+  const handleSaveScriptEdit = async (entry: ScriptEditPreviewMsg, index: number) => {
+    setError(null);
+    try {
+      await saveScript(entry.scriptId, entry.editedScript);
+      setEntries(prev => prev.map((e, i) => (i === index ? { ...e, saved: true } : e)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save script');
+    }
   };
 
   const handleRunTest = async (entry: PreviewMsg, index: number) => {
@@ -661,7 +761,7 @@ export default function ChatPage() {
 
           {/* Mode selector */}
           <div className="flex gap-1.5 p-1 bg-bg border border-border rounded-[10px] w-fit">
-            {(['english', 'swagger', 'context'] as ChatMode[]).map(m => (
+            {(['english', 'swagger', 'context', 'edit'] as ChatMode[]).map(m => (
               <button
                 key={m}
                 type="button"
@@ -676,6 +776,19 @@ export default function ChatPage() {
               </button>
             ))}
           </div>
+
+          {/* Editing banner — edit mode, once a script is chosen */}
+          {mode === 'edit' && editScript && (
+            <div className="flex items-center justify-between gap-3 bg-orange-bg border border-orange-bd rounded-control px-3.5 py-2.5">
+              <span className="text-[12.5px] text-tx-2">
+                Editing: <span className="font-mono">{editScript.targetUrl.startsWith('flow:') ? `Flow script #${editScript.targetUrl.slice(5, 13)}` : editScript.targetUrl}</span>{' '}
+                <span className="font-mono text-[10.5px] text-tx-4">({editScript.testType})</span>
+              </span>
+              <button type="button" onClick={() => { setEditScript(null); setEditScriptsList(null); setEntries([]); }} className="text-[12px] text-accent font-semibold shrink-0">
+                Change script
+              </button>
+            </div>
+          )}
 
           {/* Welcome message — changes with mode */}
           <div className="flex gap-3 items-start">
@@ -845,6 +958,50 @@ export default function ChatPage() {
               );
             }
 
+            if (entry.kind === 'scriptEditPreview') {
+              if (entry.dismissed) {
+                return (
+                  <div key={i} className="flex gap-3 items-start">
+                    <BotIcon />
+                    <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-tx-4 italic">
+                      Okay — let me know what else to change.
+                    </div>
+                  </div>
+                );
+              }
+              if (entry.saved) {
+                return (
+                  <div key={i} className="flex gap-3 items-start">
+                    <BotIcon />
+                    <div className="bg-surface border border-border rounded-[4px_16px_16px_16px] px-4 py-3.5 text-[14px] text-tx-4 italic">
+                      ✓ Saved — this is now the current script for this target.
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <BotIcon />
+                  <div className="flex-1 bg-surface border border-border rounded-[4px_16px_16px_16px] px-4.5 py-4">
+                    <p className="text-[14px] text-tx-2 mb-2.5">{entry.summary}</p>
+                    <pre className="bg-bg border border-border rounded-control p-3 text-[11px] font-mono overflow-x-auto max-h-64 overflow-y-auto mb-3.5">
+                      <code>{entry.editedScript}</code>
+                    </pre>
+                    <div className="flex gap-2.5 flex-wrap">
+                      <button type="button" onClick={() => handleSaveScriptEdit(entry, i)}
+                        className="bg-accent hover:bg-accent-hover text-white rounded-control px-4 py-2.5 text-[13px] font-bold cursor-pointer transition-colors">
+                        Save
+                      </button>
+                      <button type="button" onClick={() => handleKeepChatting(entry)}
+                        className="bg-surface border border-border text-tx-2 rounded-control px-4 py-2.5 text-[13px] font-semibold cursor-pointer">
+                        Keep chatting
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
             // status bubble
             const isPending = entry.status === 'pending' || entry.status === 'running';
             const label = entry.status === 'pending' ? 'pending…'
@@ -899,107 +1056,144 @@ export default function ChatPage() {
             </div>
           )}
 
-          {/* Swagger URL input */}
-          {showSwaggerInput && (
-            <div className="bg-surface border border-border rounded-[12px] px-3.5 py-3 flex gap-2 items-center">
-              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="flex-shrink-0 text-tx-4"><rect x="2" y="2" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5"/><path d="M6 7h8M6 10h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              <input
-                type="url"
-                value={swaggerUrl}
-                onChange={e => setSwaggerUrl(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleAddSwaggerUrl(); if (e.key === 'Escape') setShowSwaggerInput(false); }}
-                placeholder="https://api.example.com/openapi.json"
-                autoFocus
-                className="flex-1 text-[13px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
-              />
-              <button type="button" onClick={handleAddSwaggerUrl}
-                disabled={!swaggerUrl.trim()}
-                className="text-[12px] font-semibold text-accent disabled:opacity-40 cursor-pointer">
-                Add
-              </button>
-              <button type="button" onClick={() => setShowSwaggerInput(false)}
-                className="text-tx-4 hover:text-tx-2 cursor-pointer">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 3l10 10M13 3L3 13"/></svg>
-              </button>
+          {/* Edit mode: in-chat script picker, shown until a target script is chosen */}
+          {mode === 'edit' && !editScript ? (
+            <div className="bg-surface border border-border rounded-[14px] p-4">
+              <p className="text-[13px] text-tx-3 mb-3">Which saved script do you want to edit?</p>
+              {editScriptsList === null ? (
+                <p className="text-[12px] text-tx-4">Loading…</p>
+              ) : editScriptsList.length === 0 ? (
+                <p className="text-[12px] text-tx-4">
+                  No saved scripts yet — run a test first, or browse <Link to="/scripts" className="text-accent underline">Saved Scripts</Link>.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1 max-h-[280px] overflow-y-auto">
+                  {editScriptsList.map(s => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setEditScript(s)}
+                      className="text-left flex items-center justify-between gap-3 px-3 py-2 rounded-control hover:bg-bg text-[13px] cursor-pointer"
+                    >
+                      <span className="font-mono truncate">{s.targetUrl.startsWith('flow:') ? `Flow script #${s.targetUrl.slice(5, 13)}` : s.targetUrl}</span>
+                      <span className="font-mono text-[10.5px] text-tx-4 shrink-0">{s.testType}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-
-          {/* Pending attachments */}
-          {pendingAttachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 pl-0">
-              {pendingAttachments.map((att, i) => (
-                <div key={i} className="flex items-center gap-1.5 bg-bg border border-border rounded-full px-2.5 py-1 text-[12px] text-tx-3">
-                  <AttachmentIcon type={att.type} />
-                  <span className="max-w-[160px] truncate">{att.filename ?? ATTACHMENT_TYPE_LABELS[att.type]}</span>
-                  <button type="button" onClick={() => removeAttachment(i)}
-                    className="text-tx-5 hover:text-tx-2 cursor-pointer flex-shrink-0">
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 2l8 8M10 2L2 10"/></svg>
+          ) : (
+            <>
+              {/* Swagger URL input */}
+              {showSwaggerInput && (
+                <div className="bg-surface border border-border rounded-[12px] px-3.5 py-3 flex gap-2 items-center">
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="flex-shrink-0 text-tx-4"><rect x="2" y="2" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5"/><path d="M6 7h8M6 10h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  <input
+                    type="url"
+                    value={swaggerUrl}
+                    onChange={e => setSwaggerUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleAddSwaggerUrl(); if (e.key === 'Escape') setShowSwaggerInput(false); }}
+                    placeholder="https://api.example.com/openapi.json"
+                    autoFocus
+                    className="flex-1 text-[13px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
+                  />
+                  <button type="button" onClick={handleAddSwaggerUrl}
+                    disabled={!swaggerUrl.trim()}
+                    className="text-[12px] font-semibold text-accent disabled:opacity-40 cursor-pointer">
+                    Add
+                  </button>
+                  <button type="button" onClick={() => setShowSwaggerInput(false)}
+                    className="text-tx-4 hover:text-tx-2 cursor-pointer">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 3l10 10M13 3L3 13"/></svg>
                   </button>
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          {/* Input bar */}
-          <div className="flex items-center gap-2.5 bg-surface border border-border rounded-[14px] px-2 py-2 pl-4 mt-1">
-            {/* Attachment button */}
-            <div className="relative flex-shrink-0 flex items-center gap-1">
-              <button
-                type="button"
-                title="Attach file (HAR, Swagger JSON, docs, codebase)"
-                onClick={() => fileInputRef.current?.click()}
-                className="w-8 h-8 rounded-[8px] flex items-center justify-center text-tx-4 hover:text-tx-2 hover:bg-bg transition-colors cursor-pointer"
-              >
-                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M16.5 11l-6 6a5 5 0 01-7.07-7.07l7.07-7.07a3 3 0 014.24 4.24L8.12 13.7a1 1 0 01-1.41-1.41l6.37-6.37"/>
-                </svg>
-              </button>
-              <button
-                type="button"
-                title="Add Swagger / OpenAPI URL"
-                onClick={() => setShowSwaggerInput(prev => !prev)}
-                className={`w-8 h-8 rounded-[8px] flex items-center justify-center transition-colors cursor-pointer ${showSwaggerInput ? 'bg-orange-bg text-accent' : 'text-tx-4 hover:text-tx-2 hover:bg-bg'}`}
-              >
-                <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-                  <rect x="2" y="3" width="16" height="14" rx="2.5"/>
-                  <path d="M6 8h8M6 11h5"/>
-                </svg>
-              </button>
-            </div>
+              {/* Pending attachments */}
+              {pendingAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pl-0">
+                  {pendingAttachments.map((att, i) => (
+                    <div key={i} className="flex items-center gap-1.5 bg-bg border border-border rounded-full px-2.5 py-1 text-[12px] text-tx-3">
+                      <AttachmentIcon type={att.type} />
+                      <span className="max-w-[160px] truncate">{att.filename ?? ATTACHMENT_TYPE_LABELS[att.type]}</span>
+                      <button type="button" onClick={() => removeAttachment(i)}
+                        className="text-tx-5 hover:text-tx-2 cursor-pointer flex-shrink-0">
+                        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 2l8 8M10 2L2 10"/></svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-            <input
-              type="text"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              placeholder={MODE_META[mode].placeholder}
-              className="flex-1 text-[14px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
-            />
-            <button
-              type="button"
-              onClick={() => handleSend()}
-              disabled={thinking || (!input.trim() && pendingAttachments.length === 0)}
-              aria-label="Send"
-              className="w-9.5 h-9.5 rounded-[10px] bg-accent flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer"
-            >
-              <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10h11M10 5l5 5-5 5" /></svg>
-            </button>
-          </div>
+              {/* Input bar */}
+              <div className="flex items-center gap-2.5 bg-surface border border-border rounded-[14px] px-2 py-2 pl-4 mt-1">
+                {mode !== 'edit' && (
+                  <div className="relative flex-shrink-0 flex items-center gap-1">
+                    {/* Attachment button */}
+                    <button
+                      type="button"
+                      title="Attach file (HAR, Swagger JSON, docs, codebase)"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-8 h-8 rounded-[8px] flex items-center justify-center text-tx-4 hover:text-tx-2 hover:bg-bg transition-colors cursor-pointer"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M16.5 11l-6 6a5 5 0 01-7.07-7.07l7.07-7.07a3 3 0 014.24 4.24L8.12 13.7a1 1 0 01-1.41-1.41l6.37-6.37"/>
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      title="Add Swagger / OpenAPI URL"
+                      onClick={() => setShowSwaggerInput(prev => !prev)}
+                      className={`w-8 h-8 rounded-[8px] flex items-center justify-center transition-colors cursor-pointer ${showSwaggerInput ? 'bg-orange-bg text-accent' : 'text-tx-4 hover:text-tx-2 hover:bg-bg'}`}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+                        <rect x="2" y="3" width="16" height="14" rx="2.5"/>
+                        <path d="M6 8h8M6 11h5"/>
+                      </svg>
+                    </button>
+                  </div>
+                )}
 
-          {mode === 'english' && (
-            <p className="text-[11.5px] text-tx-5 text-center -mt-1">
-              Switch to <strong>Swagger</strong> or <strong>HAR · Docs · Code</strong> mode to build multi-step flows from a spec or recording.
-            </p>
-          )}
-          {mode === 'swagger' && (
-            <p className="text-[11.5px] text-tx-5 text-center -mt-1">
-              Paste a Swagger URL above (including <code className="font-mono">localhost</code>) — it will be fetched automatically — or drop an <strong>openapi.json</strong> file.
-            </p>
-          )}
-          {mode === 'context' && (
-            <p className="text-[11.5px] text-tx-5 text-center -mt-1">
-              Drop a <strong>.json</strong> HAR file, a documentation <strong>.md/.txt</strong>, or a code file — I&apos;ll extract the test steps.
-            </p>
+                <input
+                  type="text"
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); mode === 'edit' ? handleEditTurn() : handleSend(); } }}
+                  placeholder={MODE_META[mode].placeholder}
+                  className="flex-1 text-[14px] bg-transparent border-none focus:outline-none placeholder:text-tx-5"
+                />
+                <button
+                  type="button"
+                  onClick={() => (mode === 'edit' ? handleEditTurn() : handleSend())}
+                  disabled={thinking || (!input.trim() && pendingAttachments.length === 0)}
+                  aria-label="Send"
+                  className="w-9.5 h-9.5 rounded-[10px] bg-accent flex items-center justify-center flex-shrink-0 disabled:opacity-50 cursor-pointer"
+                >
+                  <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10h11M10 5l5 5-5 5" /></svg>
+                </button>
+              </div>
+
+              {mode === 'english' && (
+                <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+                  Switch to <strong>Swagger</strong> or <strong>HAR · Docs · Code</strong> mode to build multi-step flows from a spec or recording.
+                </p>
+              )}
+              {mode === 'swagger' && (
+                <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+                  Paste a Swagger URL above (including <code className="font-mono">localhost</code>) — it will be fetched automatically — or drop an <strong>openapi.json</strong> file.
+                </p>
+              )}
+              {mode === 'context' && (
+                <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+                  Drop a <strong>.json</strong> HAR file, a documentation <strong>.md/.txt</strong>, or a code file — I&apos;ll extract the test steps.
+                </p>
+              )}
+              {mode === 'edit' && (
+                <p className="text-[11.5px] text-tx-5 text-center -mt-1">
+                  Describe the change and I&apos;ll propose an edit — nothing is saved until you click <strong>Save</strong>.
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>

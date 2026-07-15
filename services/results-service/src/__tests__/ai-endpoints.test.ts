@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import { Pool } from 'pg';
 import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
-import { buildApp, buildChatParsePrompt, fetchExternalMetrics } from '../app';
+import { buildApp, buildChatParsePrompt, fetchExternalMetrics, buildScriptEditPrompt, isValidScriptEditResponse } from '../app';
 import { createSchema } from '../db';
 import { fetchSsrfSafe, validateSsrfSafeUrl } from '@alt/shared';
 
@@ -84,7 +84,7 @@ beforeEach(async () => {
     if (err) throw new Error(`SSRF check failed: ${err}`);
     return (globalThis.fetch as typeof fetch)(url, { ...init, redirect: 'manual' });
   });
-  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, webhooks, schedules, test_presets, log_sources CASCADE');
+  await truncateAll(pool, 'TRUNCATE live_metrics, test_results, test_scripts, test_script_versions, webhooks, schedules, test_presets, log_sources CASCADE');
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1020,6 +1020,154 @@ describe('POST /chat/parse', () => {
     });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe('Internal error — please try again');
+  });
+});
+
+// ─── buildScriptEditPrompt / isValidScriptEditResponse ────────────────────────
+
+describe('buildScriptEditPrompt', () => {
+  it('fences the existing script and includes the requested-change transcript', () => {
+    const prompt = buildScriptEditPrompt('export default function() {}', 'backend', [
+      { role: 'user', content: 'add a check on status 200' },
+    ]);
+    expect(prompt).toContain('export default function() {}');
+    expect(prompt).toContain('add a check on status 200');
+  });
+
+  it('labels a backend/flow script as k6 and a client-side script as Puppeteer', () => {
+    const backendPrompt = buildScriptEditPrompt('x', 'backend', [{ role: 'user', content: 'x' }]);
+    const flowPrompt = buildScriptEditPrompt('x', 'flow', [{ role: 'user', content: 'x' }]);
+    const clientPrompt = buildScriptEditPrompt('x', 'client-side', [{ role: 'user', content: 'x' }]);
+    expect(backendPrompt).toMatch(/k6/);
+    expect(flowPrompt).toMatch(/k6/);
+    expect(clientPrompt).toMatch(/Puppeteer/);
+  });
+
+  it('instructs returning the complete script, not a diff/patch', () => {
+    const prompt = buildScriptEditPrompt('x', 'backend', [{ role: 'user', content: 'x' }]);
+    expect(prompt).toMatch(/COMPLETE updated script/);
+    expect(prompt).toMatch(/not a diff or a patch/);
+  });
+});
+
+describe('isValidScriptEditResponse', () => {
+  it('accepts a well-formed editReady response', () => {
+    expect(isValidScriptEditResponse({ status: 'editReady', editedScript: 'code', summary: 'did a thing' })).toBe(true);
+  });
+
+  it('accepts a well-formed needsClarification response', () => {
+    expect(isValidScriptEditResponse({ status: 'needsClarification', question: 'which endpoint?' })).toBe(true);
+  });
+
+  it('rejects editReady with an empty editedScript', () => {
+    expect(isValidScriptEditResponse({ status: 'editReady', editedScript: '   ', summary: 'x' })).toBe(false);
+  });
+
+  it('rejects editReady with a missing summary', () => {
+    expect(isValidScriptEditResponse({ status: 'editReady', editedScript: 'code' })).toBe(false);
+  });
+
+  it('rejects an unknown status', () => {
+    expect(isValidScriptEditResponse({ status: 'somethingElse' })).toBe(false);
+  });
+
+  it('rejects non-object input', () => {
+    expect(isValidScriptEditResponse(null)).toBe(false);
+    expect(isValidScriptEditResponse('a string')).toBe(false);
+  });
+});
+
+// ─── POST /chat/edit-script ─────────────────────────────────────────────────
+
+describe('POST /chat/edit-script', () => {
+  const insertScript = async (script = 'export default function() {}', testType = 'backend'): Promise<string> => {
+    const { rows } = await pool.query(
+      `INSERT INTO test_scripts (target_url, test_type, script) VALUES ('http://edit-script.example.com', $1, $2) RETURNING id`,
+      [testType, script],
+    );
+    return rows[0].id;
+  };
+
+  it('returns editReady with the AI-proposed script and summary', async () => {
+    const scriptId = await insertScript('export default function() { http.get("x"); }');
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({
+      status: 'editReady',
+      editedScript: 'export default function() { http.get("x"); check(res, {}); }',
+      summary: 'Added a check() assertion.',
+    }));
+    const res = await app.inject({
+      method: 'POST', url: '/chat/edit-script',
+      payload: { scriptId, messages: [{ role: 'user', content: 'add a check on the response status' }] },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe('editReady');
+    expect(body.editedScript).toContain('check(res');
+    expect(body.summary).toBeTruthy();
+  });
+
+  it('passes the existing script and test_type into the prompt', async () => {
+    const scriptId = await insertScript('const marker = "ORIGINAL_SCRIPT_MARKER";', 'client-side');
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ status: 'needsClarification', question: 'Which element?' }));
+    await app.inject({
+      method: 'POST', url: '/chat/edit-script',
+      payload: { scriptId, messages: [{ role: 'user', content: 'click a button' }] },
+    });
+    const promptArg = mockGenerateAIText.mock.calls[0]![0] as string;
+    expect(promptArg).toContain('ORIGINAL_SCRIPT_MARKER');
+    expect(promptArg).toMatch(/Puppeteer/);
+  });
+
+  it('returns needsClarification when the AI needs more detail', async () => {
+    const scriptId = await insertScript();
+    mockGenerateAIText.mockResolvedValueOnce(jsonResponse({ status: 'needsClarification', question: 'Which endpoint should the new check apply to?' }));
+    const res = await app.inject({
+      method: 'POST', url: '/chat/edit-script',
+      payload: { scriptId, messages: [{ role: 'user', content: 'add a check' }] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('needsClarification');
+  });
+
+  it('returns 404 when the script does not exist', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/chat/edit-script',
+      payload: { scriptId: '00000000-0000-0000-0000-000000000099', messages: [{ role: 'user', content: 'x' }] },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(mockGenerateAIText).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when scriptId is missing', async () => {
+    const res = await app.inject({ method: 'POST', url: '/chat/edit-script', payload: { messages: [{ role: 'user', content: 'x' }] } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when messages is missing or empty', async () => {
+    const scriptId = await insertScript();
+    const res = await app.inject({ method: 'POST', url: '/chat/edit-script', payload: { scriptId, messages: [] } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 500 when the AI response is malformed', async () => {
+    const scriptId = await insertScript();
+    mockGenerateAIText.mockResolvedValueOnce('not json at all');
+    const res = await app.inject({
+      method: 'POST', url: '/chat/edit-script',
+      payload: { scriptId, messages: [{ role: 'user', content: 'x' }] },
+    });
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('returns 503 when no AI provider is configured', async () => {
+    const scriptId = await insertScript();
+    delete process.env.GEMINI_API_KEY;
+    const res = await app.inject({
+      method: 'POST', url: '/chat/edit-script',
+      payload: { scriptId, messages: [{ role: 'user', content: 'x' }] },
+    });
+    expect(res.statusCode).toBe(503);
+    process.env.GEMINI_API_KEY = 'test-key';
   });
 });
 

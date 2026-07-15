@@ -132,12 +132,6 @@ export const getResult = async (testId: string): Promise<{ result: TestResult }>
   return res.json();
 };
 
-export const getScripts = async (workspaceId?: string | null) => {
-  const params = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
-  const res = await f(`${RESULTS_URL}/scripts${params}`, { cache: 'no-store' });
-  return res.json();
-};
-
 export const getActiveTests = async (): Promise<{ active: ActiveTest[] }> => {
   const res = await f(`${RESULTS_URL}/results/active`, { cache: 'no-store' });
   return res.json();

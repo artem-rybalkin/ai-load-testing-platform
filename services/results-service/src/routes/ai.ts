@@ -17,7 +17,9 @@ import {
   buildEnglishPrompt,
   buildSwaggerPrompt,
   buildContextPrompt,
+  buildScriptEditPrompt,
   isValidChatParseResponse,
+  isValidScriptEditResponse,
   processAttachments,
   CHAT_HISTORY_LIMIT,
   MULTI_STEP_INTENT_RE,
@@ -537,6 +539,57 @@ Return ONLY valid JSON array. Include only categories with count > 0:
         return parsed;
       } catch (err) {
         return sendInternalError(request, reply, err, 'POST /chat/parse');
+      }
+    },
+  );
+
+  // ── POST /chat/edit-script ────────────────────────────────────────────────
+  // Chat's "edit an existing saved script" mode — distinct from /chat/parse:
+  // takes a scriptId (not attachments) and edits raw script source text rather
+  // than building a new TestRequest config. Never persists on its own — the
+  // caller must separately call PUT /scripts/:id (chat's "Save" action) to
+  // keep the result; this endpoint only proposes an edit.
+  app.post<{ Body: { scriptId: string; messages: ChatMessage[] } }>(
+    '/chat/edit-script',
+    { config: { rateLimit: { max: aiRateLimitMax, timeWindow: 60_000 } } },
+    async (request, reply) => {
+      const { scriptId, messages } = request.body ?? {};
+      if (typeof scriptId !== 'string' || scriptId.length === 0) {
+        return reply.code(400).send({ error: 'scriptId is required' });
+      }
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return reply.code(400).send({ error: 'messages is required' });
+      }
+
+      const { rows } = await pool.query<{ script: string; test_type: string }>(
+        `SELECT script, test_type FROM test_scripts WHERE id = $1 AND ($2::uuid IS NULL OR project_id = $2::uuid)`,
+        [scriptId, request.projectId ?? null],
+      );
+      if (rows.length === 0) return reply.code(404).send({ error: 'Script not found' });
+
+      const setting = await getEffectiveAiProviderSetting(pool, request.projectId);
+      const configured = [setting.provider, ...setting.fallbacks].some(isProviderConfigured);
+      if (!configured) return reply.code(503).send({ error: 'No AI provider configured' });
+
+      const quotaError = await checkAndIncrementGeminiUsage(pool, request.projectId);
+      if (quotaError) return reply.code(429).send({ error: quotaError });
+
+      try {
+        const prompt = buildScriptEditPrompt(rows[0]!.script, rows[0]!.test_type, messages); // guarded by rows.length === 0 above
+        const text = (await generateAIText(prompt, setting)).trim();
+        const match = text.match(/\{[\s\S]*\}/);
+        if (!match) return reply.code(500).send({ error: 'AI returned unexpected response' });
+        let parsed: Record<string, unknown>;
+        try { parsed = JSON.parse(match[0]) as Record<string, unknown>; } catch {
+          return reply.code(500).send({ error: 'AI returned unexpected response' });
+        }
+
+        if (!isValidScriptEditResponse(parsed)) {
+          return reply.code(500).send({ error: 'AI returned unexpected response' });
+        }
+        return parsed;
+      } catch (err) {
+        return sendInternalError(request, reply, err, 'POST /chat/edit-script');
       }
     },
   );

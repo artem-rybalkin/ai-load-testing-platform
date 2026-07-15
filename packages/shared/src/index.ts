@@ -182,7 +182,7 @@ export interface ClientTestOptions {
 // ── Chat-based "one prompt" test creation ───────────────────────────────────
 
 /** Which input mode the user chose at the start of a chat session. */
-export type ChatMode = 'english' | 'swagger' | 'context';
+export type ChatMode = 'english' | 'swagger' | 'context' | 'edit';
 
 export type ChatAttachmentType = 'swagger_url' | 'documentation' | 'codebase' | 'har';
 
@@ -220,6 +220,29 @@ export type ChatParseResponse =
   | { status: 'ready'; config: ParsedTestIntent }
   | { status: 'flowReady'; flow: FlowTestConfig }
   | { status: 'redirectToFlowBuilder'; reason: string };
+
+// ── Chat-based script editing (edit mode) ───────────────────────────────────
+
+/** A persisted, reusable script from the test_scripts cache — surfaced to users via the Saved Scripts page. */
+export interface SavedScript {
+  id: string;
+  targetUrl: string; // real URL for backend/client-side; opaque `flow:<hash>` for flow scripts
+  testType: string;
+  script?: string;   // only present on the single-script GET, not the list GET
+  usedCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SavedScriptVersion {
+  id: string;
+  script: string;
+  createdAt: string;
+}
+
+export type ScriptEditResponse =
+  | { status: 'needsClarification'; question: string }
+  | { status: 'editReady'; editedScript: string; summary: string };
 
 export interface AiInsights {
   narrative: string;
