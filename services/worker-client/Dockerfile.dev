@@ -8,6 +8,6 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/tracing/package.json ./packages/tracing/
 COPY services/worker-client/package.json ./services/worker-client/
 COPY services/analyser-service/package.json ./services/analyser-service/
-RUN --mount=type=cache,target=/root/.npm npm install --ignore-scripts && npm rebuild esbuild
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm install --ignore-scripts && npm rebuild esbuild
 WORKDIR /app/services/worker-client
 CMD ["npx", "tsx", "watch", "src/index.ts"]

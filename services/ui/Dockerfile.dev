@@ -7,7 +7,7 @@ COPY tsconfig.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY services/ui/package.json ./services/ui/
 
-RUN --mount=type=cache,target=/root/.npm npm install
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm install
 
 COPY packages/shared ./packages/shared
 COPY services/ui ./services/ui

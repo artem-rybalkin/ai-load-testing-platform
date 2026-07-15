@@ -15,7 +15,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/tracing/package.json ./packages/tracing/
 COPY services/recorder-service/package.json ./services/recorder-service/
 COPY services/analyser-service/package.json ./services/analyser-service/
-RUN --mount=type=cache,target=/root/.npm npm install --ignore-scripts && npm rebuild esbuild
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm install --ignore-scripts && npm rebuild esbuild
 COPY services/recorder-service/docker-entrypoint-dev.sh /docker-entrypoint-dev.sh
 RUN sed -i 's/\r$//' /docker-entrypoint-dev.sh && chmod +x /docker-entrypoint-dev.sh
 WORKDIR /app/services/recorder-service
