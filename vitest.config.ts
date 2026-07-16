@@ -34,6 +34,10 @@ export default defineConfig({
       RABBITMQ_URL: 'amqp://placeholder:placeholder@localhost:5672',
       API_KEYS: '',
       INTERNAL_API_KEY: '',
+      // Production uses 12 rounds (auth.ts); every registerUser()-based integration
+      // test would otherwise pay the full ~750ms bcrypt cost per call for no security
+      // benefit — rounds=4 (~5ms) cuts the suite's slowest files dramatically.
+      AUTH_BCRYPT_ROUNDS: '4',
     },
     include: [
       'services/*/src/__tests__/**/*.test.ts',

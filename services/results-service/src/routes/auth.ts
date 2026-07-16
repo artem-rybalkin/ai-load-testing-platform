@@ -12,6 +12,12 @@ import { loadUserTeams, loadUserOrgs, DEV_USER, EMAIL_RE } from './helpers';
 export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: Pool }): void {
   const sessionSecret = process.env.SESSION_SECRET || '';
   const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX) || 10;
+  // 12 rounds in production — OWASP's stated minimum is 10; 12 gives a margin above
+  // the floor rather than sitting exactly on it, at an acceptable hashing-time cost
+  // on current hardware (bcryptjs is pure JS, already the slower path). Overridden
+  // to a low value in tests (vitest.config.ts) where every registerUser() call would
+  // otherwise pay the full ~750ms production cost for no security benefit.
+  const AUTH_BCRYPT_ROUNDS = Number(process.env.AUTH_BCRYPT_ROUNDS) || 12;
   const SESSION_COOKIE_NAME = getSessionCookieName();
   const cookieOpts = {
     httpOnly: true,
@@ -58,10 +64,7 @@ export function authRoutes(app: FastifyInstance, { pool }: { pool: Pool; rPool: 
           return reply.code(409).send({ error: 'Email already registered' });
         }
 
-        // 12 rounds — OWASP's stated minimum is 10; 12 gives a margin above the
-        // floor rather than sitting exactly on it, at an acceptable hashing-time
-        // cost on current hardware (bcryptjs is pure JS, already the slower path).
-        const passwordHash = await bcrypt.hash(password, 12);
+        const passwordHash = await bcrypt.hash(password, AUTH_BCRYPT_ROUNDS);
         const userResult = await client.query<{ id: string }>(
           'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id',
           [normalizedEmail, passwordHash, name?.trim() || null],
