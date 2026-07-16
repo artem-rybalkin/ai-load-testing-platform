@@ -424,6 +424,9 @@ function HomeContent() {
 
   const handleSavePreset = async () => {
     if (!form.description && !form.targetUrl) { setError('Add a description or URL before saving as preset'); return; }
+    // Presets can't represent flow tests — no steps/test_data columns on test_presets.
+    // The button is hidden for form.type === 'flow' below; this is a defense-in-depth guard.
+    if (form.type === 'flow') { setError('Presets don’t support flow tests yet — re-run a completed flow test instead.'); return; }
     setSavingPreset(true);
     setPresetNameSuggestion(null);
     try {
@@ -938,7 +941,7 @@ function HomeContent() {
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="#fff"><path d="M4 3l9 5-9 5z" /></svg> {loading ? 'Creating…' : 'Run test'}
               </button>
             )}
-            {!isViewer && (
+            {!isViewer && form.type !== 'flow' && (
               <button type="button" onClick={handleSavePreset} disabled={savingPreset} className="text-[12.5px] text-tx-3 hover:text-tx self-start disabled:opacity-50">
                 {savingPreset ? 'Saving…' : 'Save as preset'}
               </button>

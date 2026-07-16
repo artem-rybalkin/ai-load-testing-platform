@@ -901,6 +901,8 @@ curl -X POST http://localhost:3004/schedules/<id>/run
 
 Reusable test configurations that pre-fill the UI form.
 
+**Flow tests are not supported** — `test_presets` has no `steps`/`test_data` columns, so a flow test's steps can't be represented. The UI hides "Save as preset" when the form's test type is `flow`; use **Re-run** on a completed flow test instead (`test_results.steps`/`test_data` are restored from there).
+
 #### `GET /presets`
 
 List all presets, ordered by `used_count` descending.

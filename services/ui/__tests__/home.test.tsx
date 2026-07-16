@@ -211,6 +211,20 @@ describe('Home page — preset dropdown', () => {
     fireEvent.change(screen.getByDisplayValue('Load from preset…'), { target: { value: 'tmpl-1' } });
     expect((screen.getByPlaceholderText('api.acme.io/checkout') as HTMLInputElement).value).toBe('preset.com');
   });
+
+  it('shows the "Save as preset" button for a backend test', async () => {
+    renderHome();
+    await screen.findByRole('button', { name: /backend/i });
+    expect(screen.getByRole('button', { name: /save as preset/i })).toBeInTheDocument();
+  });
+
+  // Presets can't represent flow tests — test_presets has no steps/test_data columns.
+  // Saving a flow test used to silently downgrade it to a broken 'backend' preset.
+  it('hides the "Save as preset" button for a flow test', async () => {
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: /^flow$/i }));
+    expect(screen.queryByRole('button', { name: /save as preset/i })).not.toBeInTheDocument();
+  });
 });
 
 // Helper: fill the description textarea and blur it to trigger applyDescriptionParams
