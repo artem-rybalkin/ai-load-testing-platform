@@ -159,6 +159,19 @@ describe('POST /teams/:id/members', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  it('returns 403 when the team in the URL is not the caller\'s current team', async () => {
+    const regA = await registerUser('a-post@example.com', 'team-a-post');
+    const regB = await registerUser('b-post@example.com', 'team-b-post');
+    const teamIdB = regB.json().currentTeamId as string;
+
+    const res = await app.inject({
+      method: 'POST', url: `/teams/${teamIdB}/members`,
+      payload: { email: 'a-post@example.com' },
+      headers: { cookie: sessionCookie(regA) },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('returns 403 when a non-admin (member) tries to add a member', async () => {
     const admin = await registerUser('admin5@example.com', 'team-add5');
     const adminCookie = sessionCookie(admin);
@@ -563,5 +576,37 @@ describe('POST /schedules — quota enforcement', () => {
     const second = await app.inject({ method: 'POST', url: '/schedules', payload: schedulePayload, headers: { cookie: adminCookie } });
     expect(second.statusCode).toBe(429);
     expect(second.json().error).toMatch(/enabled-schedule limit/);
+  });
+});
+
+// ─── Team routes with no SESSION_SECRET configured (auth disabled) ────────────
+// teamOrgRoutes captures `process.env.SESSION_SECRET` once at registration time
+// into a closure, so a separate app instance built with it unset is needed —
+// the shared `app` above already has SESSION_SECRET baked in from its own build.
+
+describe('team routes with SESSION_SECRET unset', () => {
+  let noAuthApp: FastifyInstance;
+
+  beforeAll(async () => {
+    const saved = process.env.SESSION_SECRET;
+    delete process.env.SESSION_SECRET;
+    noAuthApp = await buildApp(pool);
+    process.env.SESSION_SECRET = saved;
+  });
+
+  afterAll(async () => {
+    await noAuthApp.close();
+  });
+
+  it('blocks POST /teams with 403 when auth is disabled', async () => {
+    const res = await noAuthApp.inject({ method: 'POST', url: '/teams', payload: { name: 'no-auth-team' } });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('Not available');
+  });
+
+  it('blocks GET /teams/:id/members with 403 when auth is disabled', async () => {
+    const res = await noAuthApp.inject({ method: 'GET', url: '/teams/some-team-id/members' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('Not available');
   });
 });

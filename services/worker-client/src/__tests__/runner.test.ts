@@ -5,8 +5,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Browser } from 'puppeteer';
-import type { TestRequest, ResourceBreakdown } from '@alt/shared';
-import { runClientTest } from '../runner';
+import type { TestRequest } from '@alt/shared';
+import { runClientTest, computeResourceBreakdown, type RawResourceEntry } from '../runner';
 import { createBrowserPool } from '../browserPool';
 import { log } from '../logger';
 
@@ -60,11 +60,6 @@ const BASE_TEST: TestRequest = {
   createdAt: new Date().toISOString(),
 };
 
-const EMPTY_BREAKDOWN: ResourceBreakdown = {
-  jsSize: 0, cssSize: 0, imageSize: 0, fontSize: 0,
-  xhrSize: 0, totalSize: 0, requestCount: 0,
-};
-
 function makeWebVitals(overrides: Partial<{ lcp: number; fid: number; cls: number; fcp: number; inp: number; longTaskCount: number }> = {}) {
   return { lcp: 1200, fid: 0, cls: 0.01, fcp: 800, inp: 0, longTaskCount: 0, ...overrides };
 }
@@ -72,16 +67,18 @@ function makeWebVitals(overrides: Partial<{ lcp: number; fid: number; cls: numbe
 function makeMockPage(overrides: {
   ttfb?: number;
   webVitals?: ReturnType<typeof makeWebVitals>;
-  breakdown?: ResourceBreakdown;
+  /** Raw resource entries the mocked third page.evaluate() call returns — runClientTest
+   *  computes the final ResourceBreakdown from these via computeResourceBreakdown(). */
+  rawResourceEntries?: RawResourceEntry[];
   gotoError?: Error;
 } = {}) {
-  const { ttfb = 120, webVitals = makeWebVitals(), breakdown = EMPTY_BREAKDOWN } = overrides;
+  const { ttfb = 120, webVitals = makeWebVitals(), rawResourceEntries = [] } = overrides;
   const evaluateMock = overrides.gotoError
     ? vi.fn()
     : vi.fn()
         .mockResolvedValueOnce(ttfb)
         .mockResolvedValueOnce(webVitals)
-        .mockResolvedValueOnce(breakdown);
+        .mockResolvedValueOnce(rawResourceEntries);
   return {
     on:                    vi.fn(),
     close:                 vi.fn().mockResolvedValue(undefined),
@@ -640,4 +637,69 @@ describe('runClientTest — max-duration kill during Lighthouse (bug #3 regressi
       await expect(runClientTest(BASE_TEST, ctx)).rejects.toThrow();
     },
   );
+});
+
+// ─── computeResourceBreakdown ─────────────────────────────────────────────────
+// Extracted out of the page.evaluate() callback specifically so it's directly
+// unit-testable — code inside page.evaluate() runs in the browser's own V8
+// instance and can never be covered by Node-process coverage instrumentation,
+// no matter what kind of test calls it (see runner.realBrowser.test.ts).
+
+const entry = (overrides: Partial<RawResourceEntry> = {}): RawResourceEntry =>
+  ({ initiatorType: 'other', transferSize: 0, name: 'https://example.com/x', ...overrides });
+
+describe('computeResourceBreakdown', () => {
+  it('returns all-zero breakdown for no entries', () => {
+    expect(computeResourceBreakdown([])).toEqual({
+      jsSize: 0, cssSize: 0, imageSize: 0, fontSize: 0, xhrSize: 0, totalSize: 0, requestCount: 0,
+    });
+  });
+
+  it('classifies a script entry as jsSize', () => {
+    const bd = computeResourceBreakdown([entry({ initiatorType: 'script', transferSize: 10 * 1024 })]);
+    expect(bd.jsSize).toBe(10);
+    expect(bd.totalSize).toBe(10);
+    expect(bd.cssSize).toBe(0);
+  });
+
+  it('classifies link and css initiatorTypes as cssSize', () => {
+    const bd = computeResourceBreakdown([
+      entry({ initiatorType: 'link', transferSize: 2 * 1024 }),
+      entry({ initiatorType: 'css', transferSize: 3 * 1024 }),
+    ]);
+    expect(bd.cssSize).toBe(5);
+  });
+
+  it('classifies an img entry as imageSize', () => {
+    const bd = computeResourceBreakdown([entry({ initiatorType: 'img', transferSize: 4 * 1024 })]);
+    expect(bd.imageSize).toBe(4);
+  });
+
+  it('classifies a font initiatorType, or a font-extension URL regardless of initiatorType, as fontSize', () => {
+    const bd = computeResourceBreakdown([
+      entry({ initiatorType: 'font', transferSize: 1024 }),
+      entry({ initiatorType: 'other', name: 'https://example.com/f.woff2', transferSize: 1024 }),
+    ]);
+    expect(bd.fontSize).toBe(2);
+  });
+
+  it('classifies xmlhttprequest and fetch initiatorTypes as xhrSize', () => {
+    const bd = computeResourceBreakdown([
+      entry({ initiatorType: 'xmlhttprequest', transferSize: 2 * 1024 }),
+      entry({ initiatorType: 'fetch', transferSize: 1 * 1024 }),
+    ]);
+    expect(bd.xhrSize).toBe(3);
+  });
+
+  it('counts an unmatched initiatorType toward totalSize/requestCount but no specific bucket', () => {
+    const bd = computeResourceBreakdown([entry({ initiatorType: 'beacon', transferSize: 5 * 1024 })]);
+    expect(bd.totalSize).toBe(5);
+    expect(bd.requestCount).toBe(1);
+    expect(bd.jsSize + bd.cssSize + bd.imageSize + bd.fontSize + bd.xhrSize).toBe(0);
+  });
+
+  it('treats a missing/zero transferSize as 0 bytes rather than throwing', () => {
+    const bd = computeResourceBreakdown([entry({ initiatorType: 'script', transferSize: 0 })]);
+    expect(bd.jsSize).toBe(0);
+  });
 });

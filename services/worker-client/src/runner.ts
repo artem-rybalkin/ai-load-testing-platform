@@ -32,6 +32,42 @@ export const avgNum = (
   return Math.round((sum / snapshots.length) * 100) / 100;
 };
 
+// Raw resource-timing fields as returned by page.evaluate() below — pulled
+// out of PerformanceResourceTiming into a plain, JSON-serializable shape
+// since that's all that survives the CDP round-trip from the browser anyway.
+export interface RawResourceEntry {
+  initiatorType: string;
+  transferSize: number;
+  name: string;
+}
+
+// Pure classification/summing logic, deliberately kept OUTSIDE page.evaluate()
+// so it runs in this (Node) process and is directly unit-testable — code
+// inside a page.evaluate() callback executes in the browser's own V8
+// instance via a serialized-string round-trip over CDP, which per-process
+// coverage instrumentation can never see, no matter how it's tested.
+export const computeResourceBreakdown = (entries: RawResourceEntry[]): ResourceBreakdown => {
+  const bd = { jsSize: 0, cssSize: 0, imageSize: 0, fontSize: 0, xhrSize: 0, totalSize: 0, requestCount: entries.length };
+  for (const e of entries) {
+    const kb = (e.transferSize || 0) / 1024;
+    bd.totalSize += kb;
+    if (e.initiatorType === 'script') bd.jsSize += kb;
+    else if (e.initiatorType === 'link' || e.initiatorType === 'css') bd.cssSize += kb;
+    else if (e.initiatorType === 'img') bd.imageSize += kb;
+    else if (e.initiatorType === 'font' || /\.(woff2?|ttf|otf|eot)/i.test(e.name)) bd.fontSize += kb;
+    else if (e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch') bd.xhrSize += kb;
+  }
+  return {
+    jsSize: Math.round(bd.jsSize * 10) / 10,
+    cssSize: Math.round(bd.cssSize * 10) / 10,
+    imageSize: Math.round(bd.imageSize * 10) / 10,
+    fontSize: Math.round(bd.fontSize * 10) / 10,
+    xhrSize: Math.round(bd.xhrSize * 10) / 10,
+    totalSize: Math.round(bd.totalSize * 10) / 10,
+    requestCount: bd.requestCount,
+  };
+};
+
 export const avgResourceBreakdown = (snapshots: WebVitalsSnapshot[]): ResourceBreakdown | undefined => {
   const valid = snapshots.filter(s => s.resourceBreakdown);
   if (!valid.length) return undefined;
@@ -242,28 +278,11 @@ export const runClientTest = async (
           });
         });
 
-        const resourceBreakdown = await page.evaluate((): ResourceBreakdown => {
+        const rawResourceEntries = await page.evaluate((): RawResourceEntry[] => {
           const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
-          const bd = { jsSize: 0, cssSize: 0, imageSize: 0, fontSize: 0, xhrSize: 0, totalSize: 0, requestCount: entries.length };
-          for (const e of entries) {
-            const kb = (e.transferSize || 0) / 1024;
-            bd.totalSize += kb;
-            if (e.initiatorType === 'script') bd.jsSize += kb;
-            else if (e.initiatorType === 'link' || e.initiatorType === 'css') bd.cssSize += kb;
-            else if (e.initiatorType === 'img') bd.imageSize += kb;
-            else if (e.initiatorType === 'font' || /\.(woff2?|ttf|otf|eot)/i.test(e.name)) bd.fontSize += kb;
-            else if (e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch') bd.xhrSize += kb;
-          }
-          return {
-            jsSize: Math.round(bd.jsSize * 10) / 10,
-            cssSize: Math.round(bd.cssSize * 10) / 10,
-            imageSize: Math.round(bd.imageSize * 10) / 10,
-            fontSize: Math.round(bd.fontSize * 10) / 10,
-            xhrSize: Math.round(bd.xhrSize * 10) / 10,
-            totalSize: Math.round(bd.totalSize * 10) / 10,
-            requestCount: bd.requestCount,
-          };
+          return entries.map(e => ({ initiatorType: e.initiatorType, transferSize: e.transferSize || 0, name: e.name }));
         });
+        const resourceBreakdown = computeResourceBreakdown(rawResourceEntries);
 
         totalJsErrors += sessionJsErrors;
         snapshots.push({ lcp: webVitals.lcp, fid: webVitals.fid, cls: webVitals.cls, ttfb, fcp: webVitals.fcp, inp: webVitals.inp, longTaskCount: webVitals.longTaskCount, resourceBreakdown });

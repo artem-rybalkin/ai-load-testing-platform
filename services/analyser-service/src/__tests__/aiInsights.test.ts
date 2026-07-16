@@ -18,7 +18,7 @@ const getMockFn = async (): Promise<ReturnType<typeof vi.fn>> => {
 
 // Import after mock is registered
 import { generateAiInsights } from '../aiInsights';
-import type { BackendMetrics } from '@alt/shared';
+import type { BackendMetrics, ClientMetrics } from '@alt/shared';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -260,6 +260,81 @@ describe('generateAiInsights — prompt includes key context', () => {
 
     const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
     expect(prompt).not.toContain('Check assertions failed');
+  });
+});
+
+// ─── Client-side (Web Vitals) prompt formatting ────────────────────────────────
+// buildPayload/formatMetrics's client-metrics branch (aiInsights.ts:142-160,
+// 193-211) is unexercised by every test above, which all use type: 'backend'.
+
+const baseClientMetrics: ClientMetrics = {
+  type: 'client',
+  lcp: 2100,
+  fid: 12,
+  cls: 0.08,
+  ttfb: 450,
+  fcp: 1200,
+  inp: 180,
+  tbt: 150,
+  lighthouseScore: { performance: 88, accessibility: 95, bestPractices: 92, seo: 100 },
+};
+
+describe('generateAiInsights — client-side (Web Vitals) prompt formatting', () => {
+  it('formats every present Web Vital and the Lighthouse score into the prompt', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    await generateAiInsights(makeCtx({ type: 'client-side', metrics: baseClientMetrics }));
+
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
+    expect(prompt).toContain('LCP: 2100ms');
+    expect(prompt).toContain('FCP: 1200ms');
+    expect(prompt).toContain('TTFB: 450ms');
+    expect(prompt).toContain('CLS: 0.08');
+    expect(prompt).toContain('INP: 180ms');
+    expect(prompt).toContain('TBT: 150ms');
+    expect(prompt).toContain('Lighthouse performance: 88/100');
+    expect(prompt).toContain('accessibility: 95/100');
+  });
+
+  it('omits lcp/fcp/ttfb/cls lines when their PerformanceObserver never fired (undefined, not 0)', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    const sparse: ClientMetrics = { type: 'client', fid: 5 }; // everything else undefined
+    await generateAiInsights(makeCtx({ type: 'client-side', metrics: sparse }));
+
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
+    expect(prompt).not.toContain('LCP:');
+    expect(prompt).not.toContain('FCP:');
+    expect(prompt).not.toContain('TTFB:');
+    expect(prompt).not.toContain('CLS:');
+    expect(prompt).not.toContain('INP:');
+    expect(prompt).not.toContain('TBT:');
+    expect(prompt).not.toContain('Lighthouse performance');
+  });
+
+  it('rounds a fractional CLS score to 3 decimal places', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    await generateAiInsights(makeCtx({
+      type: 'client-side',
+      metrics: { ...baseClientMetrics, cls: 0.123456 },
+    }));
+
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
+    expect(prompt).toContain('CLS: 0.123');
+  });
+
+  it('uses the browser-test root-cause hint (not the HTTP/flow one) for client-side results', async () => {
+    const mock = await getMockFn();
+    mock.mockResolvedValue(JSON.stringify(validInsightsPayload));
+
+    await generateAiInsights(makeCtx({ type: 'client-side', metrics: baseClientMetrics }));
+
+    const prompt = mock.mock.calls[0]![0] as string; // called exactly once above
+    expect(prompt).toContain('Root cause focus for browser tests');
   });
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase, truncateAll } from '../../../../test-support/sharedPostgres';
 import { FastifyInstance } from 'fastify';
@@ -18,6 +18,15 @@ const mockIsConsumerConnected = vi.hoisted(() => vi.fn());
 vi.mock('../consumer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../consumer')>();
   return { ...actual, isConsumerConnected: mockIsConsumerConnected };
+});
+
+// generateAIText is mocked here (not just left real) so the report.pdf AI-executive-summary
+// tests can control it — existing tests never set GEMINI_API_KEY, so ai.configured stays
+// false for all of them regardless of this mock, meaning this is a no-op for the rest of the file.
+const mockGenerateAIText = vi.hoisted(() => vi.fn());
+vi.mock('@alt/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@alt/shared')>();
+  return { ...actual, generateAIText: mockGenerateAIText };
 });
 
 let pool: Pool;
@@ -875,6 +884,58 @@ describe('GET /results/:testId/report.pdf', () => {
   it('returns 404 for unknown test', async () => {
     const res = await app.inject({ method: 'GET', url: '/results/00000000-0000-0000-0000-000000000099/report.pdf' });
     expect(res.statusCode).toBe(404);
+  });
+
+  describe('AI executive summary (AI-8)', () => {
+    afterEach(() => { delete process.env.GEMINI_API_KEY; });
+
+    it('calls the AI with the result metrics and still returns a valid PDF when AI is configured', async () => {
+      process.env.GEMINI_API_KEY = 'test-key';
+      mockGenerateAIText.mockResolvedValue('Performance was solid overall. Recommend proceeding.');
+      const testId = await insertResult({ status: 'completed', targetUrl: 'http://summary-test.com' });
+      await pool.query(`UPDATE test_results SET perf_status = 'passed' WHERE test_id = $1`, [testId]);
+
+      const res = await app.inject({ method: 'GET', url: `/results/${testId}/report.pdf` });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.rawPayload.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+      expect(mockGenerateAIText).toHaveBeenCalledOnce();
+      const [prompt] = mockGenerateAIText.mock.calls[0] as [string];
+      expect(prompt).toContain('executive summary');
+      expect(prompt).toContain('http://summary-test.com');
+      expect(prompt).toContain('"perfStatus":"passed"');
+    });
+
+    it('still returns a valid PDF when the AI call fails (non-fatal)', async () => {
+      process.env.GEMINI_API_KEY = 'test-key';
+      mockGenerateAIText.mockRejectedValue(new Error('AI provider unavailable'));
+      const testId = await insertResult({ status: 'completed' });
+      await pool.query(`UPDATE test_results SET perf_status = 'passed' WHERE test_id = $1`, [testId]);
+
+      const res = await app.inject({ method: 'GET', url: `/results/${testId}/report.pdf` });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.rawPayload.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+      expect(mockGenerateAIText).toHaveBeenCalledOnce();
+    });
+
+    it('does not call the AI when the result has no perf_status yet', async () => {
+      const testId = await insertResult({ status: 'completed' }); // perf_status left NULL — not yet analyzed
+      const res = await app.inject({ method: 'GET', url: `/results/${testId}/report.pdf` });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockGenerateAIText).not.toHaveBeenCalled();
+    });
+
+    it('does not call the AI when no provider is configured', async () => {
+      const testId = await insertResult({ status: 'completed' });
+      await pool.query(`UPDATE test_results SET perf_status = 'passed' WHERE test_id = $1`, [testId]);
+
+      const res = await app.inject({ method: 'GET', url: `/results/${testId}/report.pdf` });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockGenerateAIText).not.toHaveBeenCalled();
+    });
   });
 });
 
