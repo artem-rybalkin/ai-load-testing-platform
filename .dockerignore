@@ -4,3 +4,10 @@ node_modules
 **/.env
 *.log
 .git
+# TypeScript incremental-build cache — composite projects (packages/shared,
+# packages/tracing) read this to decide what needs recompiling. A stale one
+# copied in from the host's local build state makes tsc believe declaration
+# files are already current even after **/dist above wiped them, silently
+# skipping .d.ts emission and breaking every downstream service's build with
+# "Cannot find module '@alt/shared'/'@alt/tracing'".
+**/*.tsbuildinfo
